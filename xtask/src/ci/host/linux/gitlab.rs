@@ -7,7 +7,7 @@ use serde_json::json;
 use super::{
     container::{Container, container},
     profile::{LinuxHost, RunnerTarget},
-    registration::write_secret,
+    registration::{write_kache, write_secret},
 };
 use crate::{
     ci::{cache::client_environment, config::CiPins, process::Process},
@@ -89,6 +89,42 @@ pub(super) fn prepare(
         out.is_absolute() && out != manager.config_file,
         "stage GitLab configuration at an absolute path outside its active path"
     );
+    match fs::symlink_metadata(&manager.config_file) {
+        Ok(metadata) => ensure!(
+            !metadata.file_type().is_symlink() || manager.config_file.try_exists()?,
+            "active GitLab configuration is a dangling symbolic link"
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("read active configuration metadata"),
+    }
+    let parent = out.parent().context("staged configuration has no parent")?;
+    fs::create_dir_all(parent).context("create staged configuration directory")?;
+    let destination = fs::canonicalize(parent)?.join(
+        out.file_name()
+            .context("staged configuration has no file name")?,
+    );
+    let active_parent = manager
+        .config_file
+        .parent()
+        .context("active configuration has no parent")?;
+    if active_parent.try_exists()? {
+        ensure!(
+            destination
+                != fs::canonicalize(active_parent)?.join(
+                    manager
+                        .config_file
+                        .file_name()
+                        .context("active configuration has no file name")?
+                ),
+            "staged configuration aliases the active directory entry"
+        );
+    }
+    if out.try_exists()? && manager.config_file.try_exists()? {
+        ensure!(
+            fs::canonicalize(out)? != fs::canonicalize(&manager.config_file)?,
+            "staged configuration aliases the active file"
+        );
+    }
     let binary = manager
         .binary
         .to_str()
@@ -178,6 +214,25 @@ pub(super) fn install(
             Err(error) => return Err(error).context("read native rollback metadata"),
         }
     }
+    for runner in host
+        .runners
+        .iter()
+        .filter(|runner| matches!(runner.target, RunnerTarget::Gitlab { .. }))
+    {
+        write_kache(host, runner)?;
+    }
+    if state == "not-found" {
+        fs::create_dir_all(host.cache_root.join("gitlab-manager"))?;
+        fs::write(
+            Path::new(consts::SERVICE_SYSTEMD_ROOT).join(&manager.service),
+            unit(host)?,
+        )?;
+    }
+    process.run(
+        "systemctl",
+        &["daemon-reload"],
+        "load native manager resource prerequisites",
+    )?;
     ensure!(
         read_config(&manager.config_file)? == before,
         "native configuration changed during preparation; candidate was not applied"
@@ -188,13 +243,6 @@ pub(super) fn install(
         write_secret(&backup, &previous)?;
     }
     fs::rename(&candidate, &manager.config_file).context("publish native manager configuration")?;
-    if state == "not-found" {
-        fs::create_dir_all(host.cache_root.join("gitlab-manager"))?;
-        fs::write(
-            Path::new(consts::SERVICE_SYSTEMD_ROOT).join(&manager.service),
-            unit(host)?,
-        )?;
-    }
     Ok(keep)
 }
 
@@ -386,6 +434,262 @@ mod tests {
         host
     }
 
+    fn manager_process(directory: &Path, host: &LinuxHost, pins: &CiPins) -> Process {
+        let manager = host.gitlab.as_ref().unwrap();
+        let binary = manager.binary.to_str().unwrap();
+        let command = format!(
+            "{{ path={binary} ; argv[]={binary} run --config {} ; ignore_errors=no }}",
+            manager.config_file.display()
+        );
+        Process::recording(
+            directory,
+            Recording::default()
+                .with_reply(
+                    &[binary, "--version"],
+                    &format!("Version: {}", pins.gitlab_runner_version),
+                )
+                .with_reply(
+                    &[
+                        "systemctl",
+                        "show",
+                        &manager.service,
+                        "--property=LoadState",
+                    ],
+                    "loaded",
+                )
+                .with_reply(
+                    &[
+                        "systemctl",
+                        "show",
+                        &manager.service,
+                        "--property=ExecStart",
+                    ],
+                    &command,
+                ),
+        )
+    }
+
+    #[test]
+    fn staging_rejects_physical_active_aliases_and_preserves_installed_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = setup(directory.path());
+        let pins = fixture().pins;
+        let cpusets = ["0,1".into(), "2,3".into()];
+        let installed = host.gitlab.as_ref().unwrap().config_file.clone();
+        let before = configuration(&host, &pins, &cpusets).unwrap();
+        write_secret(&installed, &before).unwrap();
+        let metadata = fs::metadata(&installed).unwrap();
+        host.runners[0].memory = "8g".to_owned();
+        fs::create_dir(directory.path().join("subdir")).unwrap();
+        let mut aliases = vec![directory.path().join("subdir/../installed.toml")];
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(directory.path(), directory.path().join("alias")).unwrap();
+            aliases.push(directory.path().join("alias/installed.toml"));
+            std::os::unix::fs::symlink(&installed, directory.path().join("linked.toml")).unwrap();
+            aliases.push(directory.path().join("linked.toml"));
+        }
+        for alias in aliases {
+            let process = manager_process(directory.path(), &host, &pins);
+            let result = prepare(&process, &host, &pins, &cpusets, &alias);
+            assert_eq!(fs::read_to_string(&installed).unwrap(), before);
+            assert!(
+                result.is_err(),
+                "active alias was accepted: {}",
+                alias.display()
+            );
+            let after = fs::metadata(&installed).unwrap();
+            assert_eq!(metadata.modified().unwrap(), after.modified().unwrap());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                assert_eq!(
+                    (
+                        metadata.ino(),
+                        metadata.mode(),
+                        metadata.ctime(),
+                        metadata.ctime_nsec()
+                    ),
+                    (after.ino(), after.mode(), after.ctime(), after.ctime_nsec())
+                );
+            }
+        }
+        let candidate = directory.path().join("new/candidate.toml");
+        let process = manager_process(directory.path(), &host, &pins);
+        prepare(&process, &host, &pins, &cpusets, &candidate).unwrap();
+        assert_ne!(fs::read_to_string(candidate).unwrap(), before);
+        assert_eq!(fs::read_to_string(installed).unwrap(), before);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_rejects_a_dangling_active_link_without_materializing_its_target() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let host = setup(directory.path());
+        let pins = fixture().pins;
+        let installed = &host.gitlab.as_ref().unwrap().config_file;
+        let target = directory.path().join("future/active.toml");
+        std::os::unix::fs::symlink(&target, installed).unwrap();
+        assert!(!target.exists());
+        let before = fs::symlink_metadata(installed).unwrap();
+        let process = manager_process(directory.path(), &host, &pins);
+        let result = prepare(
+            &process,
+            &host,
+            &pins,
+            &["0,1".into(), "2,3".into()],
+            &target,
+        );
+        assert!(
+            !target.exists(),
+            "staging materialized the active link's target"
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read_link(installed).unwrap(), target);
+        let after = fs::symlink_metadata(installed).unwrap();
+        assert_eq!(
+            (
+                before.ino(),
+                before.mode(),
+                before.mtime(),
+                before.mtime_nsec(),
+                before.ctime(),
+                before.ctime_nsec()
+            ),
+            (
+                after.ino(),
+                after.mode(),
+                after.mtime(),
+                after.mtime_nsec(),
+                after.ctime(),
+                after.ctime_nsec()
+            )
+        );
+    }
+
+    #[test]
+    fn cache_preparation_failure_preserves_active_configuration_and_backup() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = setup(directory.path());
+        let pins = fixture().pins;
+        let cpusets = ["0,1".into(), "2,3".into()];
+        let installed = host.gitlab.as_ref().unwrap().config_file.clone();
+        let backup = installed.with_extension("toml.previous");
+        let before = configuration(&host, &pins, &cpusets).unwrap();
+        write_secret(&installed, &before).unwrap();
+        write_secret(&backup, &before).unwrap();
+        host.runners[0].memory = "8g".to_owned();
+        let blocked = Container::kache(&host, &host.runners[0]);
+        fs::create_dir_all(blocked.parent().unwrap()).unwrap();
+        fs::write(&blocked, "not a directory").unwrap();
+        let process = manager_process(directory.path(), &host, &pins);
+        let result = install(&process, &host, &pins, &cpusets);
+        assert_eq!(fs::read_to_string(installed).unwrap(), before);
+        assert_eq!(fs::read_to_string(backup).unwrap(), before);
+        assert!(result.is_err());
+        assert!(
+            !process
+                .recorded()
+                .unwrap()
+                .steps()
+                .iter()
+                .any(|step| step.args == ["daemon-reload"])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_reload_observes_ready_cache_before_configuration_publication() {
+        use std::ffi::OsString;
+
+        use crate::testing::{install_script, install_scripted_double};
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = setup(directory.path());
+        let pins = fixture().pins;
+        let cpusets = ["0,1".into(), "2,3".into()];
+        let bin = directory.path().join("bin");
+        let binary = install_scripted_double(
+            &bin,
+            "gitlab-runner",
+            &format!(
+                "case \"$1\" in --version) printf 'Version: {}\\n';; list) exit 0;; *) exit 21;; esac\n",
+                pins.gitlab_runner_version
+            ),
+        );
+        host.gitlab.as_mut().unwrap().binary = binary;
+        install_script(
+            &bin.join("systemctl"),
+            r#"#!/bin/sh
+case "$1 $2" in
+  'show gitlab-runner.service')
+    case "$3" in
+      --property=LoadState) printf 'loaded\n';;
+      --property=ExecStart) printf '{ argv[]=%s run --config %s ; }\n' "$RUNNER_BINARY" "$ACTIVE_CONFIG";;
+      *) exit 22;;
+    esac;;
+  'daemon-reload ')
+    test -f "$CACHE_CONFIG" || exit 23
+    cmp "$ACTIVE_CONFIG" "$BEFORE_CONFIG" || exit 24
+    printf 'ready\n' > "$RELOAD_PROOF";;
+  *) exit 25;;
+esac
+"#,
+        );
+        let manager = host.gitlab.as_ref().unwrap();
+        assert!(
+            !Container::kache(&host, &host.runners[0])
+                .join(consts::KACHE_HOST_FILE)
+                .exists()
+        );
+        let before = configuration(&host, &pins, &cpusets).unwrap();
+        let snapshot = directory.path().join("before.toml");
+        let proof = directory.path().join("reload-proof");
+        write_secret(&snapshot, &before).unwrap();
+        write_secret(&manager.config_file, &before).unwrap();
+        let vars = std::collections::BTreeMap::from([
+            (
+                OsString::from("PATH"),
+                std::env::join_paths([bin.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+                    .unwrap(),
+            ),
+            (
+                OsString::from("RUNNER_BINARY"),
+                manager.binary.as_os_str().to_owned(),
+            ),
+            (
+                OsString::from("ACTIVE_CONFIG"),
+                manager.config_file.as_os_str().to_owned(),
+            ),
+            (OsString::from("BEFORE_CONFIG"), snapshot.into_os_string()),
+            (
+                OsString::from("CACHE_CONFIG"),
+                Container::kache(&host, &host.runners[0])
+                    .join(consts::KACHE_HOST_FILE)
+                    .into_os_string(),
+            ),
+            (
+                OsString::from("RELOAD_PROOF"),
+                proof.clone().into_os_string(),
+            ),
+        ]);
+        host.runners[0].memory = "8g".to_owned();
+        install(
+            &Process::new(directory.path(), vars),
+            &host,
+            &pins,
+            &cpusets,
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(proof).unwrap(), "ready\n");
+        assert_ne!(
+            fs::read_to_string(&host.gitlab.as_ref().unwrap().config_file).unwrap(),
+            before
+        );
+    }
+
     #[test]
     fn native_config_preserves_resources_scopes_and_correct_nice_serialization() {
         let directory = tempfile::tempdir().unwrap();
@@ -524,43 +828,27 @@ mod tests {
             .unwrap()
             .insert("shutdown_timeout".to_owned(), 7.into());
         write_secret(&manager.config_file, &toml::to_string(&initial).unwrap()).unwrap();
-        let binary = manager.binary.to_str().unwrap();
-        let command = format!(
-            "{{ path={binary} ; argv[]={binary} run --config {} ; ignore_errors=no }}",
-            manager.config_file.display()
-        );
-        let process = Process::recording(
-            directory.path(),
-            Recording::default()
-                .with_reply(
-                    &[binary, "--version"],
-                    &format!("Version: {}", pins.gitlab_runner_version),
-                )
-                .with_reply(
-                    &[
-                        "systemctl",
-                        "show",
-                        &manager.service,
-                        "--property=LoadState",
-                    ],
-                    "loaded",
-                )
-                .with_reply(
-                    &[
-                        "systemctl",
-                        "show",
-                        &manager.service,
-                        "--property=ExecStart",
-                    ],
-                    &command,
-                ),
-        );
+        let process = manager_process(directory.path(), &host, &pins);
         install(&process, &host, &pins, &cpusets).unwrap();
         let result: toml::Value =
             toml::from_str(&fs::read_to_string(&manager.config_file).unwrap()).unwrap();
         assert_eq!(result["runners"][0]["token"].as_str(), Some("glrt-rotated"));
         assert_eq!(result["shutdown_timeout"].as_integer(), Some(7));
-        assert!(process.recorded().unwrap().steps().iter().all(|step| {
+        for runner in &host.runners {
+            assert!(
+                Container::kache(&host, runner)
+                    .join(consts::KACHE_HOST_FILE)
+                    .is_file()
+            );
+        }
+        let steps = process.recorded().unwrap();
+        assert!(
+            steps
+                .steps()
+                .iter()
+                .any(|step| step.program == "systemctl" && step.args == ["daemon-reload"])
+        );
+        assert!(steps.steps().iter().all(|step| {
             step.args
                 .iter()
                 .all(|arg| !matches!(arg.as_str(), "restart" | "stop" | "kill"))

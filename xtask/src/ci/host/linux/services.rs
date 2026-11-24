@@ -41,15 +41,10 @@ pub(super) fn install(
     let cpusets = cpu::assignments(host, cores)?;
     let deployment = deployment::stage(host, pins, Path::new(executable))?;
     let mut keep = installed_images(host, pins)?;
+    install_slice()?;
     if host.gitlab.is_some() {
+        super::firewall::apply(process, host)?;
         keep.extend(gitlab::install(process, host, pins, &cpusets)?);
-        for runner in host
-            .runners
-            .iter()
-            .filter(|runner| matches!(runner.target, RunnerTarget::Gitlab { .. }))
-        {
-            super::registration::write_kache(host, runner)?;
-        }
     }
 
     for (runner, cpuset) in host.runners.iter().zip(&cpusets) {
@@ -70,7 +65,6 @@ pub(super) fn install(
             cpuset, "runner service installed"
         );
     }
-    install_slice()?;
     install_cleanup_timer(host, &keep, &deployment)?;
     if host.windows.is_some() {
         install_renewal_timer(root, &deployment)?;

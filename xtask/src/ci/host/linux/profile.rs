@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    net::Ipv4Addr,
+    net::{Ipv4Addr, SocketAddrV4},
     path::{Path, PathBuf},
 };
 
@@ -48,6 +48,9 @@ pub(crate) struct LinuxHost {
     pub(crate) network: String,
     /// Address block of that network, fenced off from the rest of the machine.
     pub(crate) subnet: String,
+    /// Exact private TCP destinations required by the native control/cache boundary.
+    #[serde(default)]
+    pub(super) private_egress: Vec<SocketAddrV4>,
     /// Bytes a job needs free on `cache_root`'s volume before it starts:
     /// the room one cold lane build takes. Required: the room depends on the
     /// machine's builds, and no number fits every machine.
@@ -240,6 +243,13 @@ impl LinuxHost {
             bail!("Linux CI profile network contains unsupported characters");
         }
         parse_subnet(&self.subnet)?;
+        if self
+            .private_egress
+            .iter()
+            .any(|destination| !destination.ip().is_private() || destination.port() == 0)
+        {
+            bail!("private CI egress must name private IPv4 addresses and nonzero TCP ports");
+        }
         // A job needing no room would be admitted onto a full volume.
         if self.free_bytes_for_a_job == 0 {
             bail!("Linux CI profile free_bytes_for_a_job must be positive");
@@ -492,7 +502,7 @@ impl LinuxRunner {
 
 /// Docker accepts any CIDR here, so the parse doubles as the check that the
 /// firewall rules built from it cannot be widened by a malformed profile.
-fn parse_subnet(value: &str) -> Result<(Ipv4Addr, u32)> {
+pub(super) fn parse_subnet(value: &str) -> Result<(Ipv4Addr, u32)> {
     let (address, prefix) = value
         .split_once('/')
         .with_context(|| format!("Linux CI profile subnet {value} is not a CIDR block"))?;

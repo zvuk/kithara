@@ -20,6 +20,17 @@ profile, pins and executable together under a content-addressed directory in
 `cache_root/services`; future systemd starts name that immutable deployment.
 Current jobs keep their executable, configuration and output ownership.
 
+Declare private control/cache destinations as exact TCP socket addresses in
+`private_egress`, for example `["10.20.30.40:443", "172.18.0.2:9000"]`.
+These are protected deployment bindings, not additional coverage switches.
+Only the runner subnet enters its two owned filter chains; unlisted private
+networks and other host services remain blocked. Applying replaces those
+chains and their scoped jumps in one `iptables-restore --noflush` transaction;
+it never flushes unrelated rules. Established connections and declared endpoints return to the enclosing host policy;
+foreign denies still apply. Endpoint or network changes require the safe
+admission boundary and a new reviewed deployment snapshot. Resolve/verify the
+actual addresses before application; no entire private CIDR is opened.
+
 Corporate Linux profiles declare GitLab targets only, omit `repositories`, and
 hold no GitHub credentials. `[gitlab]` names the installed native runner binary,
 owned systemd service, active configuration file and helper image by immutable
@@ -64,7 +75,8 @@ just ci host linux --config /etc/kithara-ci/linux-host.toml gitlab-config --out 
 just ci host linux --config /etc/kithara-ci/linux-host.toml install-services
 ```
 
-Stage the candidate separately from the active file. Native parsing runs without
+Stage the candidate separately from the active file; physical path aliases are rejected.
+Cache configuration and the loaded resource slice precede native admission. Native parsing runs without
 printing tokens. Applying validates the declared manager binding and rejects
 installed workers outside the profile; it retains native global settings and a
 protected rollback copy. Existing managers reload configuration without restart;
