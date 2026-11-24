@@ -442,8 +442,8 @@ async fn dropping_the_worker_reports_cancelled() {
     ));
 }
 
-#[kithara::test(tokio)]
-async fn a_shared_base_shutdown_reports_stopped() {
+#[kithara::test]
+fn a_shared_base_shutdown_reports_stopped() {
     let base = Worker::new(WorkerConfig::new());
     let worker = AnalysisWorker::new(
         AnalysisWorkerConfig::for_builder(waveform_only(pools()))
@@ -462,8 +462,12 @@ async fn a_shared_base_shutdown_reports_stopped() {
     let completion = worker.start(pass, Box::new(FakeReader::stalled(10_000)));
     base.shutdown();
     assert!(!cancel.is_cancelled());
+    let outcome = kithara_platform::tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(completion.outcome());
     assert!(matches!(
-        completion.outcome().await,
+        outcome,
         crate::AnalysisOutcome::Failed {
             error: crate::AnalysisError::Stopped,
             last: None,

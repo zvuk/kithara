@@ -1248,7 +1248,7 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
-async fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) {
+fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) {
     let (started, started_rx) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
     let release_rx = Arc::new(Mutex::new(release_rx));
@@ -1323,7 +1323,11 @@ async fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [
         "cancellation during trailing detection never settles the pass"
     );
     assert!(progress.is_resumable(), "the cancelled pass can resume");
-    let crate::AnalysisOutcome::Cancelled { last: Some(last) } = completion.outcome().await else {
+    let outcome = kithara_platform::tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime")
+        .block_on(completion.outcome());
+    let crate::AnalysisOutcome::Cancelled { last: Some(last) } = outcome else {
         panic!("trailing cancellation reports the resumable publication");
     };
     assert!(last.is_resumable());
