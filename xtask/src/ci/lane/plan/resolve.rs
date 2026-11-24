@@ -54,9 +54,10 @@ pub(super) fn resolve(
     policy.validate()?;
     let request = request.normalized()?;
     let fingerprint = validate_inputs(catalog, &request, policy)?;
+    validate_acyclic(catalog.checks.iter().map(|(id, check)| (id, &check.needs)))?;
     let selected = select_checks(catalog, config, &request)?;
     let checks = instantiate_checks(catalog, config, &request, policy, &selected)?;
-    validate_acyclic(&checks)?;
+    validate_acyclic(checks.iter().map(|(id, check)| (id, &check.needs)))?;
     ensure!(
         policy
             .qualification
@@ -365,17 +366,17 @@ fn check_id(id: &str, purpose: Purpose, platform: &Platform) -> String {
     format!("{id}@{purpose}/{}", platform.key())
 }
 
-fn validate_acyclic(checks: &BTreeMap<String, Check>) -> Result<()> {
+fn validate_acyclic<'a>(
+    dependencies: impl Iterator<Item = (&'a String, &'a BTreeSet<String>)>,
+) -> Result<()> {
+    let checks: BTreeMap<_, _> = dependencies
+        .map(|(id, needs)| (id.clone(), needs))
+        .collect();
     let mut remaining: BTreeSet<_> = checks.keys().cloned().collect();
     while !remaining.is_empty() {
         let ready: Vec<_> = remaining
             .iter()
-            .filter(|id| {
-                checks[*id]
-                    .needs
-                    .iter()
-                    .all(|need| !remaining.contains(need))
-            })
+            .filter(|id| checks[*id].iter().all(|need| !remaining.contains(need)))
             .cloned()
             .collect();
         ensure!(!ready.is_empty(), "plan contains a dependency cycle");

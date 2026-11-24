@@ -435,6 +435,26 @@ fn draft_scope_uses_the_existing_harness_union_and_manual_lanes_stay_manual() {
 }
 
 #[test]
+fn manual_full_rejects_disconnected_dependency_cycles() {
+    let mut ext = KitharaExt::load(&root()).unwrap();
+    let mut request = plan_request(&[]);
+    request.full = true;
+    let catalog = Catalog::load(&root(), &ext.ci).unwrap();
+    let baseline_policy = policy(&catalog, &request);
+    assert!(resolve(&catalog, &ext.ci, request.clone(), &baseline_policy).is_ok());
+
+    for (id, predecessor) in [("linux-lint", "linux-arch"), ("linux-arch", "linux-lint")] {
+        ext.ci.lanes.get_mut(id).unwrap().needs = vec![predecessor.to_owned()];
+    }
+    let catalog = Catalog::load(&root(), &ext.ci).unwrap();
+    for full in [true, false] {
+        request.full = full;
+        let policy = policy(&catalog, &request);
+        assert!(resolve(&catalog, &ext.ci, request.clone(), &policy).is_err());
+    }
+}
+
+#[test]
 fn missing_external_timeout_and_dependency_cycles_fail_before_admission() {
     let ext = KitharaExt::load(&root()).unwrap();
     let mut catalog = Catalog::load(&root(), &ext.ci).unwrap();
