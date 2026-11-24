@@ -559,11 +559,11 @@ pub(crate) const API_VERSION: &str = "X-GitHub-Api-Version";
 /// machine's, so it is written beside the code that mounts into that image.
 pub(crate) const JOB_USER: u32 = 1000;
 
-pub(crate) const HOST_PACKAGES: [&str; 10] = [
-    "iptables",
+pub(crate) const HOST_PACKAGES: [&str; 1] = ["iptables"];
+
+pub(crate) const HOST_VM_PACKAGES: [&str; 8] = [
     "dnsmasq-base",
     "qemu-utils",
-    "nvidia-container-toolkit",
     "qemu-system-x86",
     "libvirt-daemon-system",
     "ovmf",
@@ -1074,11 +1074,6 @@ pub(crate) const GUEST_CARGO_TOOLS: [&str; 3] = ["cargo-nextest", "just", "sccac
 
 /// Where the Linux host's services live.
 pub(crate) const SERVICE_SYSTEMD_ROOT: &str = "/etc/systemd/system";
-
-/// What the services call. The executable is copied out of the build tree:
-/// run from there it expects to find the repository around it, and a service
-/// starting from no particular directory would not.
-pub(crate) const SERVICE_EXECUTABLE: &str = "/usr/local/bin/kithara-ci";
 
 /// The slice every runner container is started under, which caps the fleet.
 pub(crate) const SERVICE_SLICE: &str = "kithara-ci.slice";
