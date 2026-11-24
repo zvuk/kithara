@@ -12,6 +12,59 @@ use serde::{Deserialize, Serialize};
 
 use crate::consts;
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum CiCheckKind {
+    Validation,
+    PackageValidation,
+    EvidenceControl,
+    Publication,
+    Signing,
+    Provisioning,
+    Diagnostic,
+}
+
+impl CiCheckKind {
+    pub(crate) const fn validates(self) -> bool {
+        matches!(self, Self::Validation | Self::PackageValidation)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CiCheckSemantics {
+    pub(crate) kind: CiCheckKind,
+    pub(crate) acceptance: String,
+    pub(crate) automatic_kinds: Option<BTreeSet<String>>,
+    #[serde(default)]
+    pub(crate) capabilities: BTreeSet<String>,
+    #[serde(default)]
+    pub(crate) reports: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CiExtraCheck {
+    pub(crate) semantics: CiCheckSemantics,
+    pub(crate) platforms: BTreeSet<String>,
+    pub(crate) kinds: BTreeSet<String>,
+    pub(crate) owner: String,
+    pub(crate) sources: BTreeSet<String>,
+    #[serde(default)]
+    pub(crate) needs: BTreeSet<String>,
+    #[serde(default)]
+    pub(crate) parameters: BTreeSet<String>,
+    pub(crate) timeout_minutes: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CiPlanningConfig {
+    pub(crate) residuals: BTreeMap<String, CiExtraCheck>,
+    pub(crate) dedicated: BTreeMap<String, CiExtraCheck>,
+    pub(crate) bindings: BTreeMap<String, BTreeSet<String>>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct KitharaExt {
@@ -29,6 +82,7 @@ pub(crate) struct CiProjectConfig {
     pub(crate) pins: PathBuf,
     pub(crate) pr_review_line_limit: Option<NonZeroU64>,
     pub(crate) lanes: BTreeMap<String, CiLaneConfig>,
+    pub(crate) planning: CiPlanningConfig,
     pub(crate) verdict: CiVerdictConfig,
     /// How long a lane slot keeps a build unit its builds stopped using,
     /// counted back from the slot's latest use.
@@ -41,6 +95,7 @@ impl Default for CiProjectConfig {
             pins: PathBuf::new(),
             pr_review_line_limit: None,
             lanes: BTreeMap::new(),
+            planning: CiPlanningConfig::default(),
             verdict: CiVerdictConfig::default(),
             lane_unit_window_hours: consts::LANE_UNIT_WINDOW_HOURS,
         }
@@ -58,9 +113,10 @@ pub(crate) struct CiVerdictConfig {
 
 /// A CI lane that is nothing but the work it asks the executor for. Lanes that
 /// need more than parameters keep a function; this is what the rest are.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct CiLaneConfig {
+    pub(crate) semantics: Option<CiCheckSemantics>,
     /// The shared cache the lane leases, named the way the runner tags are.
     pub(crate) cache_group: String,
     /// How the lane names itself when it refuses a platform.
@@ -148,7 +204,7 @@ where
     })
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct CiLaneStep {
     pub(crate) args: Vec<String>,
@@ -263,7 +319,7 @@ pub(crate) enum ArtifactWhen {
 }
 
 /// A tool command that must succeed before the lane can build.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct CiLaneCheck {
     pub(crate) args: Vec<String>,
