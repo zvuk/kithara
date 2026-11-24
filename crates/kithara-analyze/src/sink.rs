@@ -33,7 +33,7 @@ impl<W: Write> Sink<W> {
                 let mut temp = NamedTempFile::new_in(directory)?;
                 temp.write_all(&bytes)?;
                 temp.flush()?;
-                temp.persist(directory.join(format!("{}.{extension}", track.id)))
+                temp.persist_noclobber(directory.join(format!("{}.{extension}", track.id)))
                     .map_err(|error| Error::other(error.to_string()))?;
             } else {
                 self.writer.write_all(&bytes)?;

@@ -44,6 +44,27 @@ fn input() -> String {
     .join("\n")
 }
 
+fn output_names_alias(directory: &TestTempDir, first: &str, second: &str) -> bool {
+    let first_path = directory.path().join(format!("{first}.json"));
+    let second_path = directory.path().join(format!("{second}.json"));
+    std::fs::write(&first_path, b"marker").expect("first marker");
+    let aliases = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&second_path)
+    {
+        Ok(file) => {
+            drop(file);
+            std::fs::remove_file(&second_path).expect("second marker cleanup");
+            false
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => true,
+        Err(error) => panic!("output alias probe failed: {error}"),
+    };
+    std::fs::remove_file(&first_path).expect("first marker cleanup");
+    aliases
+}
+
 #[kithara::test(native, flash(false))]
 fn stdout_is_exactly_one_complete_json_line_per_track() {
     let output = invoke(&["--jobs", "2", "-"], &input());
@@ -96,6 +117,95 @@ fn directory_contains_only_complete_named_records() {
         assert_eq!(record["id"], id);
         assert_eq!(record["status"], "complete");
     }
+}
+
+#[kithara::test(native, flash(false))]
+fn output_aliases_never_silently_replace_records() {
+    let path = assets::sine_wav_a440_2s().path().expect("fixture");
+    for (first, second) in [("Track", "track"), ("caf\u{00e9}", "cafe\u{0301}")] {
+        let directory = TestTempDir::new();
+        let aliases = output_names_alias(&directory, first, second);
+        let input = [
+            json!({"id":first,"src":path}),
+            json!({"id":second,"src":path}),
+        ]
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let output = invoke(
+            &[
+                "--jobs",
+                "1",
+                "--artifacts",
+                "waveform",
+                "--out",
+                directory.path().to_str().expect("path"),
+                "-",
+            ],
+            &input,
+        );
+        assert!(output.stdout.is_empty());
+        let files: Vec<_> = std::fs::read_dir(directory.path())
+            .expect("directory")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        if aliases {
+            let first_bytes = std::fs::read(directory.path().join(format!("{first}.json")))
+                .expect("first output record");
+            let second_bytes = std::fs::read(directory.path().join(format!("{second}.json")))
+                .expect("second output record");
+            let record: Value = serde_json::from_slice(&first_bytes).expect("complete JSON");
+            assert_eq!(files.len(), 1);
+            assert_eq!(first_bytes, second_bytes);
+            let surviving_id = record["id"].as_str().expect("record ID");
+            assert!([first, second].contains(&surviving_id));
+            assert_eq!(record["status"], "complete");
+            assert_eq!(output.status.code(), Some(1));
+        } else {
+            assert_eq!(output.status.code(), Some(0));
+            assert_eq!(files.len(), 2);
+            for id in [first, second] {
+                let bytes = std::fs::read(directory.path().join(format!("{id}.json")))
+                    .expect("output record");
+                let record: Value = serde_json::from_slice(&bytes).expect("complete JSON");
+                assert_eq!(record["id"], id);
+                assert_eq!(record["status"], "complete");
+            }
+        }
+    }
+}
+
+#[kithara::test(native, flash(false))]
+fn existing_output_is_not_replaced() {
+    let directory = TestTempDir::new();
+    let output_path = directory.path().join("one.json");
+    std::fs::write(&output_path, b"original").expect("existing record");
+    let path = assets::sine_wav_a440_2s().path().expect("fixture");
+    let input = json!({"id":"one","src":path}).to_string();
+    let output = invoke(
+        &[
+            "--jobs",
+            "1",
+            "--artifacts",
+            "waveform",
+            "--out",
+            directory.path().to_str().expect("path"),
+            "-",
+        ],
+        &input,
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        std::fs::read(&output_path).expect("existing record"),
+        b"original".to_vec()
+    );
+    let files: Vec<_> = std::fs::read_dir(directory.path())
+        .expect("directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(files, ["one.json"]);
 }
 
 #[kithara::test(native, flash(false))]
@@ -228,9 +338,11 @@ async fn sigint_writes_the_inflight_cancellation_and_exits_one() {
 }
 
 #[kithara::test(native, flash(false))]
-fn a_failed_rename_leaves_no_partial_or_temporary_record() {
+fn a_failed_publication_leaves_no_partial_or_temporary_record() {
     let directory = TestTempDir::new();
     std::fs::create_dir(directory.path().join("one.json")).expect("conflicting directory");
+    let path = assets::sine_wav_a440_2s().path().expect("fixture");
+    let input = json!({"id":"one","src":path}).to_string();
     let output = invoke(
         &[
             "--jobs",
@@ -241,7 +353,7 @@ fn a_failed_rename_leaves_no_partial_or_temporary_record() {
             directory.path().to_str().expect("path"),
             "-",
         ],
-        &input(),
+        &input,
     );
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());

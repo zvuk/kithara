@@ -40,8 +40,13 @@ is a positive integer, 1 by default: factor 10 folds ten native waveform windows
 into each bucket. `--format json` selects the only current output format.
 
 Without `--out`, stdout contains one JSON line per record and diagnostics go to
-stderr. `--out DIR` writes `<id>.json` through a temporary file in that directory
-and an atomic rename. Analysis records contain `id`, `src`, `status`,
+stderr. `--out DIR` writes each record to a same-directory temporary file,
+flushes it, and publishes the completed file as `<id>.json` without replacing an
+occupied destination. A conflict preserves the occupied destination and exits 1.
+On Unix paths that cannot use no-replace rename, publication uses a hard link
+followed by temporary-name cleanup; cleanup failure or interruption can leave an
+additional temporary hard link to the same completed file. Analysis records contain `id`,
+`src`, `status`,
 `tool_version`, artifact `fingerprint` tags, the `source` frame axis, `coverage`,
 `missing`, `beat`, `grid`, `grid_unavailable`, `key` and `waveform`. Markers use
 source frames; the grid uses media seconds. Waveform records include the bucket
