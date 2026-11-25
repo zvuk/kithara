@@ -146,8 +146,13 @@ fn a_handle_clone_sees_the_replacement_band_array(#[by_ref] worker_owner: &Worke
     let handle = eq.clone();
     mixer_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
         control.set_eq_layout(
-            [0.0; 3]
-                .map(|gain| EqBandConfig::builder().gain_db(gain.into()).build())
+            [(250.0, 0.0), (1_000.0, 0.0), (4_000.0, 0.0)]
+                .map(|(frequency, gain)| {
+                    EqBandConfig::builder()
+                        .frequency(frequency)
+                        .gain_db(gain.into())
+                        .build()
+                })
                 .to_vec(),
         )
     });
@@ -169,8 +174,13 @@ fn a_handle_clone_sees_the_replacement_band_array(#[by_ref] worker_owner: &Worke
     );
     mixer_call(&mut queue, &mut mixer, &mut loads, eq.clone(), |control| {
         control.set_eq_layout(
-            [-6.0, -2.0, 2.0, 5.0]
-                .map(|gain| EqBandConfig::builder().gain_db(gain.into()).build())
+            [(100.0, -6.0), (500.0, -2.0), (2_000.0, 2.0), (8_000.0, 5.0)]
+                .map(|(frequency, gain)| {
+                    EqBandConfig::builder()
+                        .frequency(frequency)
+                        .gain_db(gain.into())
+                        .build()
+                })
                 .to_vec(),
         )
     });
