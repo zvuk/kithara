@@ -1342,42 +1342,78 @@
   <require os> linux
   <require tools> cargo just
   just test ui
+# deps-advisories / bench
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / branch
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / platforms
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / merge-request
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / quarantine
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / main
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / nightly
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / weekly
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
+# deps-advisories / release
+  <require os> macos linux
+  <require tools> cargo just
+  just deps deny advisories
 # deps-deny / bench
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / branch
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / platforms
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / merge-request
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / quarantine
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / main
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / nightly
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / weekly
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-deny / release
   <require os> macos linux
   <require tools> cargo just
-  just deps deny
+  just deps deny bans licenses sources
 # deps-features-full / bench
   <require os> macos linux
   <require tools> cargo just

@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     abr::AbrMode,
@@ -15,7 +15,9 @@ use kithara_integration_tests::auto;
 use kithara_integration_tests::{
     CreatedHls, HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
-    fixture_protocol::PackagedSignal,
+    fixture_protocol::{
+        GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
+    },
     hls_fixture::create_test_downloader,
     hls_server::aes128_encryption,
     phase_continuity::{CHANNELS, FREQ_HZ, SAMPLE_RATE, SinePhaseSpec, scripted_phase_scan},
@@ -48,6 +50,10 @@ enum Fixture {
     /// 440 Hz sine encoded into every variant. Mirrors production masters where
     /// "switch to highest quality" is a cross-codec AAC→FLAC variant change.
     AacWithFlacTop,
+    /// HE-AAC v2 on the lower variants + FLAC on the top variant, every
+    /// variant padded by the same encoder delay and declaring its whole
+    /// leading delay in an MP4 edit list.
+    EditListedHeV2WithFlacTop,
 }
 
 fn e2e(mode: AbrMode) -> Vec<(AbrMode, f64)> {
@@ -116,6 +122,21 @@ fn build_fixture(fixture: Fixture, bit_rate: Option<u64>, drm: bool) -> HlsFixtu
         Fixture::Single(Codec::Flac) => b.packaged_audio_sine_flac(SAMPLE_RATE, CHANNELS, FREQ_HZ),
         Fixture::AacWithFlacTop => b
             .packaged_audio_sine_aac_lc(SAMPLE_RATE, CHANNELS, FREQ_HZ)
+            .override_variant_codec(TOP_VARIANT, AudioCodec::Flac),
+        Fixture::EditListedHeV2WithFlacTop => b
+            .packaged_audio(PackagedAudioRequest {
+                codec: AudioCodec::AacHeV2,
+                gapless_encoding: GaplessEncoding::Edts,
+                bit_rate: Some(32_000),
+                encoder_delay: NonZeroU32::new(2_112),
+                start_frame: None,
+                timescale: Some(SAMPLE_RATE),
+                trailing_delay: None,
+                source: PackagedAudioSource::Signal(PackagedSignal::Sine { freq_hz: FREQ_HZ }),
+                variant_overrides: Vec::new(),
+                channels: CHANNELS,
+                sample_rate: SAMPLE_RATE,
+            })
             .override_variant_codec(TOP_VARIANT, AudioCodec::Flac),
     };
     let b = b.packaged_audio_bit_rate(bit_rate);
@@ -628,6 +649,12 @@ async fn phase_continuity_hls_diag_paced(
 ///   is `AacLc == 1024`, `Flac == 0`; AAC output is offset by 1024 vs FLAC, so
 ///   the seam jumps `≈ 21.878 samples = 1024 mod (44100/440)`. Both backends,
 ///   with and without DRM.
+/// - **Cross-codec switch with edit lists** (`edit_listed_he_v2_to_flac_*`):
+///   HE-AAC v2 → FLAC where every variant declares its whole leading delay
+///   in `elst`. The source clock still steps back by the outgoing codec delay
+///   at the seam (6144 frames on Symphonia, 7106 with the SBR delay on Apple),
+///   whether or not the edit list declares it, so the seam ignores the
+///   declared content zero.
 /// - **In-variant seek** (`he_v2_in_variant_seek_apple`): a plain seek with no
 ///   variant change in HE-AAC v2 (Apple) drifts ~40 samples post-seek — the
 ///   SBR/PS warmup applied on the variant-switch recreate path is missing on
@@ -647,7 +674,7 @@ async fn phase_continuity_hls_diag_paced(
 /// underruns — so the symptom needs true real-time cpal pressure or the live
 /// production stream, not a paced offline pull.
 #[kithara::test(tokio, native, serial, timeout(Long), hang_timeout_secs(1))]
-#[ignore = "pins real regression — uncompensated decoder warmup at HLS seek/switch seams (cross-codec AAC→FLAC ~1024 samples; he_v2 in-variant seek ~40 samples); unignore when HLS decoder-warmup / per-codec algo-delay fix lands"]
+#[ignore = "pins real regression — uncompensated decoder warmup at HLS seek/switch seams (cross-codec AAC→FLAC ~1024 samples, HE-AAC v2→FLAC by the codec delay; he_v2 in-variant seek ~40 samples); unignore when HLS decoder-warmup / per-codec algo-delay fix lands"]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::cross_codec_switch_apple_drm(
@@ -698,6 +725,23 @@ async fn phase_continuity_hls_diag_paced(
     ))]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
+    case::edit_listed_he_v2_to_flac_switch_apple(
+        Fixture::EditListedHeV2WithFlacTop,
+        DecoderBackend::Apple,
+        false,
+        switch_to_top_mid(),
+        edit_listed_source().await,
+    )
+)]
+#[cfg_attr(not(target_os = "android"), case::edit_listed_he_v2_to_flac_switch_symphonia(
+    Fixture::EditListedHeV2WithFlacTop,
+    DecoderBackend::Symphonia,
+    false,
+    switch_to_top_mid(),
+        edit_listed_source().await,
+    ))]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
     case::he_v2_in_variant_seek_apple(
         Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
@@ -745,6 +789,11 @@ async fn aac_high_source() -> (TestServerHelper, CreatedHls) {
 #[kithara::fixture]
 async fn flac_source() -> (TestServerHelper, CreatedHls) {
     phase_server(Fixture::Single(Codec::Flac), None, false).await
+}
+
+#[kithara::fixture]
+async fn edit_listed_source() -> (TestServerHelper, CreatedHls) {
+    phase_server(Fixture::EditListedHeV2WithFlacTop, None, false).await
 }
 
 #[kithara::fixture]

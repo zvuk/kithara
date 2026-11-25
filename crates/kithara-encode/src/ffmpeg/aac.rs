@@ -3,7 +3,7 @@ use kithara_stream::AudioCodec;
 
 use super::pcm::pump_pcm_samples;
 use crate::{
-    EncodeResult,
+    EncodeError, EncodeResult,
     stream::{StreamBackend, StreamEncoder},
     types::{EncodedAccessUnit, EncodedTrack, PackagedEncodeRequest},
 };
@@ -30,6 +30,9 @@ impl AacFFmpegEncoder {
             .timescale(request.timescale)
             .build()?;
 
+        let codec_delay = encoder.encoder_delay_frames().ok_or_else(|| {
+            EncodeError::backend_message("FFmpeg AAC does not report its delay".to_owned())
+        })?;
         let mut access_units: Vec<EncodedAccessUnit> = Vec::new();
         pump_pcm_samples(pcm, pools, Self::frame_samples(), |samples| {
             access_units.extend(encoder.push(samples)?);
@@ -50,6 +53,7 @@ impl AacFFmpegEncoder {
             codec_config: Vec::new(),
             packets_per_segment: request.packets_per_segment,
             encoder_delay: request.encoder_delay,
+            codec_delay,
             trailing_delay: request.trailing_delay,
         })
     }

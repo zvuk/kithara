@@ -47,6 +47,7 @@ fn encode_stream(samples: &[f32]) -> EncodedTrack {
         access_units,
         codec_config: Vec::new(),
         encoder_delay: 0,
+        codec_delay: 0,
         timescale: SAMPLE_RATE,
         trailing_delay: 0,
         bit_rate: BIT_RATE,

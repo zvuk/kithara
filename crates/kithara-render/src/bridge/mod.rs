@@ -18,9 +18,11 @@ pub use metrics::{RtMetrics, RtMetricsSnapshot};
 pub use mix::{CrossfaderGain, DeckMixSettings, DeckMixSettingsChange, DeckMixSettingsPatch, Trim};
 pub use offline::OfflineDeckError;
 pub(crate) use program::{CurveCursor, ParameterCurve};
-pub use program::{DeckParameter, DeckProgram, LayoutRevision, ParameterCurveError, ParameterKnot};
+pub use program::{
+    DeckParameter, DeckProgram, FxTarget, LayoutRevision, ParameterCurveError, ParameterKnot,
+};
 pub use protocol::{
     DeckEqChange, DeckEvent, DeckFxChange, DeckPart, DeckProtocol, DeckRefusal, Fade, FadeDir,
     FxMix, PlaybackFault, Returned, Slot, SlotState, TrackClock,
 };
-pub use snapshot::{DeckSnapshot, EqSnapshot, ParameterSnapshot, SlotSnapshot};
+pub use snapshot::{DeckSnapshot, EqSnapshot, FxSnapshot, ParameterSnapshot, SlotSnapshot};

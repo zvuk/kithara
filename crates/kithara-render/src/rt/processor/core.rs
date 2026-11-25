@@ -4,10 +4,10 @@ use firewheel::{
     StreamInfo,
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
-use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::{LevelInbox, ScopeId, Target};
 use kithara_dsp::param::SmootherConfig;
-use kithara_effects::eq::GainShapeError;
+use kithara_effects::eq::{EqError, GainShapeError};
 use kithara_signal::{FrameCount, OutputContext, SegmentId, SessionEpoch, SessionFrame};
 use kithara_test_utils::kithara;
 use ringbuf::HeapProd;
@@ -77,12 +77,12 @@ impl<E: SessionInbox> DeckMixer<E> {
     /// The scope snapshot is published by the first actual render.
     ///
     /// # Errors
-    /// Returns a pool error if either scratch or any required tail cannot be allocated.
+    /// Returns an EQ error for an invalid crossover design or an allocation failure.
     pub fn new<S>(
         inputs: MixerInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
@@ -94,7 +94,7 @@ impl<E: SessionInbox> DeckMixer<E> {
         inputs: &MixerInputs,
         shape: StreamShape,
         pools: &PoolRegion<S>,
-    ) -> Result<PreparedDeck, PoolError>
+    ) -> Result<PreparedDeck, EqError>
     where
         S: HasPool<f32>,
     {
@@ -119,8 +119,7 @@ impl<E: SessionInbox> DeckMixer<E> {
             render: RenderPass::new(pools, shape, config)?,
             programs: DeckPrograms::new(
                 inputs.scope,
-                config.eq_bands(),
-                config.fx_units(),
+                [config.eq_bands(), config.fx_units(), config.fx_parameters()],
                 capacity,
             ),
             tracks: TrackSlots::new(slots),
@@ -329,6 +328,8 @@ impl<E: SessionInbox> DeckMixer<E> {
             if self.retired { None } else { self.deck.epoch },
             self.deck.render.control_values(),
             self.deck.render.filter_knob(),
+            self.deck.render.fx_mixes(),
+            self.deck.render.fx_delivered(),
         );
         self.snapshot.publish();
     }
@@ -449,6 +450,10 @@ impl Deck {
             }
             return Ok(false);
         }
+        let at = SessionFrame::new(
+            i64::from(start).saturating_add(i64::try_from(range.start).unwrap_or(i64::MAX)),
+        );
+        self.programs.write(level, at, range.len());
         if self.render.take_priming() {
             for (_, track) in self.tracks.iter_mut() {
                 track.snap_gate();
@@ -498,7 +503,7 @@ impl Deck {
                 sounded = true;
             }
         }
-        sounded |= self.render.ringing();
+        sounded |= self.render.ringing(Some(&self.programs), range.len());
         self.finish_range(
             level,
             start,

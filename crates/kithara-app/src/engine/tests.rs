@@ -25,9 +25,14 @@ use ::kithara::{
     ui::render::ControlAction,
     warp::{Beat, BeatGrid, BeatGridQuery, BeatGridSnapshot, MapPoint, MapPosition},
 };
-use kithara_test_fixtures::signal::rms;
+use kithara_app_library::{Playable, PlaybackChoice};
+use kithara_integration_tests::{
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, PrivateTestServer, TestServerHelper,
+};
+use kithara_test_fixtures::{assets, signal::rms};
 use kithara_test_utils::{kithara, off_thread::OffThread};
 use num_traits::cast::AsPrimitive;
+use url::Url;
 
 use super::owner::mock;
 use crate::{
@@ -956,6 +961,133 @@ async fn a_late_grid_keeps_the_incoming_track_playing_until_a_seek_aligns_it(
         rig.pump();
         let _ = capture(rig, consts::SETTLE);
         assert_on_host_beats(rig, 124.0, consts::INCOMING_BEATS);
+    })
+    .await;
+    rig.close().await;
+    served.abort();
+}
+
+/// The rhythm track as an HLS ladder of two identical FLAC rungs.
+async fn rhythm_ladder(helper: &TestServerHelper) -> Url {
+    let init = Arc::new(
+        assets::rhythm_fmp4_init_deck_a_120bpm_48k()
+            .bytes()
+            .to_vec(),
+    );
+    let media = Arc::new(
+        assets::rhythm_fmp4_media_deck_a_120bpm_48k()
+            .bytes()
+            .to_vec(),
+    );
+    helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(2)
+                .segments_per_variant(1)
+                .segment_duration_secs(consts::TRACK_SECONDS)
+                .segment_size(media.len())
+                .codecs("fLaC".to_owned())
+                .init_data_per_variant(vec![init; 2])
+                .custom_data(media),
+        )
+        .await
+        .expect("register the rhythmic HLS ladder")
+        .master_url()
+}
+
+/// A synced HLS deck takes the catalogue quality its popover selects and
+/// keeps the rhythm on the host beats.
+#[kithara::test(native, tokio)]
+async fn a_synced_hls_deck_switches_quality_on_the_host_beat() {
+    let server = PrivateTestServer::start().await;
+    let helper = server.helper();
+    let adaptive = rhythm_ladder(&helper).await;
+    let lossless = helper
+        .register_behavior(FixtureBehavior {
+            content: Content::StaticBytes {
+                bytes: Arc::new(assets::rhythm_wav_deck_a_120bpm_48k().bytes().to_vec()),
+                content_type: Some("audio/wav"),
+            },
+            delivery: Delivery::Range,
+        })
+        .child_url("lossless.wav");
+    let mut playable = Playable::new(adaptive.to_string());
+    playable.identity = Some("test:synced-quality".to_owned());
+    playable.choices = [(adaptive, "Auto", true), (lossless.clone(), "WAV", false)]
+        .into_iter()
+        .map(|(source, label, adaptive)| PlaybackChoice {
+            source,
+            label: label.to_owned(),
+            adaptive,
+        })
+        .collect();
+    let (analysis, requests) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
+    let rig = OffThread::spawn("engine", move || {
+        Ok::<_, Infallible>(Rig::playback_with(analysis).on_device())
+    })
+    .await
+    .expect("rig fixture is infallible");
+    let track = rig
+        .call(move |rig| {
+            rig.pump();
+            rig.frame();
+            rig.send("deck-a/drop", ControlAction::Record(playable.into()));
+            assert_eq!(rig.pump().len(), 1, "the drop queues one load");
+            rig.until("deck A holds the drop", Rig::DEADLINE, Rig::frame, |rig| {
+                rig.queues[0].current().is_some()
+            });
+            rig.queues[0].current().expect("deck A holds the drop").id
+        })
+        .await;
+    let served = task::spawn(fixtures::serve_grid(requests, track, rhythm_grid()));
+    rig.call(move |rig| {
+        rig.until(
+            "deck A plays the HLS ladder with its grid",
+            Rig::DEADLINE,
+            Rig::frame,
+            |rig| {
+                rig.queues[0].is_playing()
+                    && rig.text("deck.playback.bpm@deck=a").as_deref() == Some("120.0")
+            },
+        );
+        let tempo = Tempo::new(consts::SYNC_BPM).expect("fixture tempo is in range");
+        mock::host(rig)
+            .set_tempo(tempo)
+            .expect("the host takes the tempo");
+        rig.until(
+            "the host confirms the tempo",
+            Rig::DEADLINE,
+            Rig::frame,
+            |rig| mock::host(rig).tempo() == tempo,
+        );
+        rig.send("deck-a/sync", ControlAction::Activate);
+        rig.pump();
+        let _ = capture(rig, consts::SETTLE);
+        assert_on_host_beats(rig, consts::SYNC_BPM, consts::CHANGE_BEATS);
+
+        rig.send("deck-a/stream/cell", ControlAction::Activate);
+        rig.send("deck-a/stream/variant-0/pick", ControlAction::Activate);
+        assert_eq!(rig.apply().len(), 1, "the row queues one quality command");
+        rig.until(
+            "the synced deck takes the selected quality",
+            Rig::DEADLINE,
+            Rig::frame,
+            |rig| {
+                let current = rig.queues[0].current().expect("the track stays current");
+                assert!(
+                    !current.source_failed,
+                    "the deck refused the selected quality"
+                );
+                current.id == track
+                    && !current.source_changing
+                    && current.url.as_deref() == Some(lossless.as_str())
+            },
+        );
+        assert!(
+            rig.flag("deck.playback.synced@deck=a"),
+            "the deck stays synced"
+        );
+        assert_on_host_beats(rig, consts::SYNC_BPM, consts::INCOMING_BEATS);
     })
     .await;
     rig.close().await;

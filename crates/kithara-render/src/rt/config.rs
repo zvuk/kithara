@@ -25,6 +25,10 @@ pub struct DeckMixerConfig {
     /// Default: 2.
     #[config(builder(default = 2))]
     fx_units: usize,
+    /// Effect parameters each FX unit has program room for; an effect declaring
+    /// more is refused on install. Default: 4.
+    #[config(builder(default = 4))]
+    fx_parameters: usize,
     /// How many tracks the deck holds at once; its owner assigns them. Default: 4.
     #[config(builder(default = DEFAULT_DECK_SLOTS))]
     slots: NonZeroUsize,

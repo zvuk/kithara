@@ -257,7 +257,11 @@ impl AppleCodec {
             );
             let probed_gapless = prime_info.and_then(gapless_info_from_prime_info);
             log_gapless_prime_info("init", prime_info, probed_gapless);
-            (prime_info, track.gapless.or(probed_gapless))
+            let declared = track
+                .gapless
+                .map(|declaration| declaration.at(spec.sample_rate))
+                .transpose()?;
+            (prime_info, declared.or(probed_gapless))
         } else {
             (None, None)
         };

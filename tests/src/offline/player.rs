@@ -65,6 +65,8 @@ pub struct OfflinePlayerOptions {
     mix: DeckMixSettings,
     /// FX units the deck is built with; the mixer default when unset.
     fx_units: Option<usize>,
+    /// Effect parameters each FX unit has program room for; the mixer default when unset.
+    fx_parameters: Option<usize>,
     /// Await producer PCM during offline preparation, before graph processing.
     /// PCM suites opt in so decoder underruns cannot appear as rendered silence.
     /// Decoder stalls still fail the existing no-progress watchdog.
@@ -172,6 +174,11 @@ where
                             options
                                 .fx_units
                                 .unwrap_or_else(|| DeckMixerConfig::default().fx_units()),
+                        )
+                        .fx_parameters(
+                            options
+                                .fx_parameters
+                                .unwrap_or_else(|| DeckMixerConfig::default().fx_parameters()),
                         )
                         .build(),
                 )

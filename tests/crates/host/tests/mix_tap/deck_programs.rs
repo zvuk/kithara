@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
-    play::{CurveShape, DeckParameter, DeckProgram, ParameterKnot, PlayError},
+    play::{CurveShape, DeckParameter, DeckProgram, EqBandConfig, ParameterKnot, PlayError},
     queue::QueueError,
     signal::SessionFrame,
     warp::WarpConfig,
@@ -17,12 +17,27 @@ const SEGMENT: usize = 128;
 const CAPTURE: usize = 1024;
 const CHANNELS: usize = 2;
 
-async fn prepared(callback: usize) -> OfflinePlayer {
+/// A deck control a partitioned take programs.
+#[derive(Clone, Copy, Debug)]
+enum Control {
+    Trim,
+    Volume,
+    Crossfader,
+    /// The one band of a one-band EQ layout, in dB.
+    Band,
+}
+
+/// A neutral deck playing the constant input, called back `callback` frames at
+/// a time. Opts into offline blocking, so its zero-underrun assertions are
+/// offline references; the false-mode proof that a deck-program callback
+/// returns while its segment gate is closed lives in `fx_programs::nonblocking`
+/// and `mix_tap::starvation`.
+async fn prepared(callback: usize, bands: usize) -> OfflinePlayer {
     let block = NonZeroU32::new(u32::try_from(callback).expect("callback fits u32"))
         .expect("nonzero callback");
     let options = OfflinePlayerOptions::builder()
         .block_on_underrun(true)
-        .eq_layout(Vec::new())
+        .eq_layout(vec![EqBandConfig::builder().build(); bands])
         .output_block_frames(block)
         .warp(
             WarpConfig::builder()
@@ -46,8 +61,26 @@ async fn prepared(callback: usize) -> OfflinePlayer {
     harness
 }
 
-async fn programmed_take(parameter: DeckParameter, callback: usize) -> Vec<f32> {
-    let harness = prepared(callback).await;
+async fn programmed_take(control: Control, callback: usize) -> Vec<f32> {
+    let harness = prepared(callback, usize::from(matches!(control, Control::Band))).await;
+    let parameter = match control {
+        Control::Trim => DeckParameter::Trim,
+        Control::Volume => DeckParameter::Volume,
+        Control::Crossfader => DeckParameter::Crossfader,
+        Control::Band => DeckParameter::EqBand {
+            band: 0,
+            layout: harness
+                .deck_snapshot()
+                .eq
+                .layout()
+                .expect("observed EQ layout"),
+        },
+    };
+    // Each program starts from the control's manual value: unity, or 0 dB.
+    let [open, closed] = match control {
+        Control::Band => [0.0, -12.0],
+        Control::Trim | Control::Volume | Control::Crossfader => [1.0, 0.25],
+    };
     let start = harness.host().position();
     let first = start + u64::try_from(FIRST).expect("first offset fits u64");
     let last = first + u64::try_from(SEGMENT).expect("segment fits u64");
@@ -56,13 +89,13 @@ async fn programmed_take(parameter: DeckParameter, callback: usize) -> Vec<f32> 
         vec![
             ParameterKnot::new(
                 SessionFrame::new(i64::try_from(first).expect("first knot fits the clock")),
-                1.0,
+                open,
                 CurveShape::cubic(0.0, 1.0).expect("bounded S curve"),
             )
             .expect("first knot"),
             ParameterKnot::new(
                 SessionFrame::new(i64::try_from(last).expect("last knot fits the clock")),
-                0.25,
+                closed,
                 CurveShape::HOLD,
             )
             .expect("last knot"),
@@ -81,19 +114,19 @@ async fn programmed_take(parameter: DeckParameter, callback: usize) -> Vec<f32> 
     assert_eq!(take.len(), CAPTURE * CHANNELS);
     for (offset, channels) in take.as_chunks::<CHANNELS>().0.iter().enumerate() {
         let value = if offset < FIRST {
-            1.0
+            open
         } else if offset >= FIRST + SEGMENT {
-            0.25
+            closed
         } else {
             let t = f64::from(u32::try_from(offset - FIRST).expect("local frame fits u32")) / 128.0;
-            1.0 - 0.75 * (3.0 * t * t - 2.0 * t * t * t)
+            open + (closed - open) * (3.0 * t * t - 2.0 * t * t * t)
         }
         .to_f32()
         .expect("control value fits f32");
-        let gain = if matches!(parameter, DeckParameter::Volume) {
-            value * value
-        } else {
-            value
+        let gain = match control {
+            Control::Volume => value * value,
+            Control::Band => 10.0_f32.powf(value / 20.0),
+            Control::Trim | Control::Crossfader => value,
         };
         assert_eq!(
             channels.map(f32::to_bits),
@@ -107,26 +140,25 @@ async fn programmed_take(parameter: DeckParameter, callback: usize) -> Vec<f32> 
 }
 
 #[kithara::test(tokio)]
-#[case::trim(DeckParameter::Trim)]
-#[case::volume(DeckParameter::Volume)]
-#[case::crossfader(DeckParameter::Crossfader)]
-async fn public_deck_programs_apply_every_frame_and_hold_the_last_value(
-    #[case] parameter: DeckParameter,
-) {
-    let regular = programmed_take(parameter, 64).await;
-    let prime = programmed_take(parameter, 13).await;
+#[case::trim(Control::Trim)]
+#[case::volume(Control::Volume)]
+#[case::crossfader(Control::Crossfader)]
+#[case::eq_band(Control::Band)]
+async fn public_deck_programs_apply_every_frame_and_hold_the_last_value(#[case] control: Control) {
+    let regular = programmed_take(control, 64).await;
+    let prime = programmed_take(control, 13).await;
     assert!(
         regular
             .iter()
             .map(|sample| sample.to_bits())
             .eq(prime.iter().map(|sample| sample.to_bits())),
-        "the callback partition changes no output bit for {parameter:?}"
+        "the callback partition changes no output bit for {control:?}"
     );
 }
 
 #[kithara::test(tokio)]
 async fn public_deck_programs_admit_the_next_unrendered_frame_and_refuse_the_previous_one() {
-    let harness = prepared(64).await;
+    let harness = prepared(64, 0).await;
     let frontier = harness.deck_snapshot().at;
     assert_eq!(
         i64::from(frontier),
@@ -154,11 +186,96 @@ async fn public_deck_programs_admit_the_next_unrendered_frame_and_refuse_the_pre
     assert_eq!(harness.render(1).await, [0.25; 2]);
     let snapshot = harness.deck_snapshot();
     let applied = snapshot.parameter(DeckParameter::Trim).expect("trim");
-    assert_eq!(applied.value(), 0.5);
+    assert_eq!(applied.value(), Some(0.5));
     assert!(applied.program().is_some());
     assert_eq!(
         snapshot.at,
         SessionFrame::new(i64::from(frontier).saturating_add(1))
+    );
+    assert_eq!(harness.metrics().underruns(), 0);
+    harness.close().await;
+}
+
+/// The frame `frames` after `frame`.
+fn after(frame: SessionFrame, frames: i64) -> SessionFrame {
+    SessionFrame::new(i64::from(frame).saturating_add(frames))
+}
+
+/// A one-knot program holding `value` on `parameter` from `at`.
+fn held(parameter: DeckParameter, at: SessionFrame, value: f64) -> DeckProgram {
+    DeckProgram::new(
+        parameter,
+        vec![ParameterKnot::new(at, value, CurveShape::HOLD).expect("native value")],
+    )
+    .expect("program")
+}
+
+#[kithara::test(tokio)]
+async fn public_deck_programs_refuse_an_unknown_band_and_a_stale_layout_as_one_batch() {
+    let harness = prepared(64, 1).await;
+    let snapshot = harness.deck_snapshot();
+    let layout = snapshot.eq.layout().expect("observed EQ layout");
+    let next = after(snapshot.at, 64);
+    let unknown = held(DeckParameter::EqBand { band: 1, layout }, next, -6.0);
+    assert!(matches!(
+        harness
+            .with_queue(move |queue| queue.deck_programs(vec![unknown]))
+            .await,
+        Err(QueueError::Play(PlayError::EqBandOutOfRange {
+            band: 1,
+            bands: 1
+        }))
+    ));
+    let band = DeckParameter::EqBand { band: 0, layout };
+    let running = DeckProgram::new(
+        band,
+        [(next, 0.0), (after(next, 4096), -12.0)]
+            .into_iter()
+            .map(|(at, db)| ParameterKnot::new(at, db, CurveShape::LINEAR).expect("finite dB knot"))
+            .collect(),
+    )
+    .expect("band program");
+    harness
+        .with_queue(move |queue| queue.deck_programs(vec![running]))
+        .await
+        .expect("current layout");
+    let _ = render_effect_window(&harness, 1024).await;
+    let moving = harness.deck_snapshot();
+    assert!(moving.eq.program(0).is_some(), "the band program runs");
+    let replaced = after(moving.at, 64);
+    let trim = held(DeckParameter::Trim, replaced, 0.5);
+    let stale = held(band, replaced, -6.0);
+    harness
+        .with_queue(move |queue| {
+            queue.set_eq_layout(vec![EqBandConfig::builder().build()])?;
+            queue.deck_programs(vec![trim, stale])
+        })
+        .await
+        .expect("both batches reach the deck");
+    let _ = render_effect_window(&harness, 1024).await;
+    let snapshot = harness.deck_snapshot();
+    assert_ne!(snapshot.eq.layout(), Some(layout), "the layout advanced");
+    assert_eq!(
+        snapshot.eq.program(0),
+        None,
+        "the stale band program stopped"
+    );
+    let trim = snapshot.parameter(DeckParameter::Trim).expect("trim");
+    assert_eq!(trim.program(), None, "the refused batch started no part");
+    assert_eq!(trim.value(), Some(1.0));
+    let take = render_effect_window(&harness, 256).await;
+    assert!(
+        take.iter()
+            .all(|sample| sample.to_bits() == 0.5_f32.to_bits()),
+        "the deck sounds its neutral new layout and untouched trim"
+    );
+    let old = held(band, after(snapshot.at, 64), -6.0);
+    assert!(
+        harness
+            .with_queue(move |queue| queue.deck_programs(vec![old]))
+            .await
+            .is_err(),
+        "a program naming the replaced layout is refused"
     );
     assert_eq!(harness.metrics().underruns(), 0);
     harness.close().await;

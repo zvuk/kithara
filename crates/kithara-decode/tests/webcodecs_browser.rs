@@ -330,6 +330,79 @@ async fn he_aac_v2_decode() {
     .expect("WebCodecs scenario worker failed");
 }
 
+#[kithara::test(wasm, timeout(Long))]
+async fn implicit_sbr_trim_follows_configured_output_across_seek() {
+    let declared = fetch_signal("he_aac_implicit_declared.mp4").await;
+    let undeclared = fetch_signal("he_aac_implicit_undeclared.mp4").await;
+    prepare_webcodecs("mp4a.40.2", declared).await;
+    thread::spawn_named("webcodecs-implicit-sbr", move || {
+        let mut reference = None;
+        for (bytes, declared) in [(declared, true), (undeclared, false)] {
+            let info = MediaInfo::builder()
+                .codec(AudioCodec::AacLc)
+                .container(ContainerFormat::Fmp4)
+                .sample_rate(22_050)
+                .channels(2)
+                .build();
+            let mut decoder = DecoderFactory::create_from_media_info(
+                Cursor::new(bytes),
+                &info,
+                decoder_config(DecoderBackend::WebCodecs),
+            )
+            .expect("implicit HE WebCodecs decoder");
+            assert_eq!(decoder.spec().sample_rate.get(), 22_050);
+            let original = decoder.track_info().gapless;
+            assert_eq!(original.is_some(), declared);
+            let expected = original.map(|trim| {
+                trim.rescaled(
+                    decoder.spec().sample_rate,
+                    std::num::NonZeroU32::new(44_100).unwrap(),
+                )
+                .unwrap()
+            });
+            for pass in 0..2 {
+                if pass != 0 {
+                    assert!(matches!(
+                        decoder.seek(Duration::ZERO).expect("seek implicit HE"),
+                        DecoderSeekOutcome::Landed { .. }
+                    ));
+                }
+                let mut frames = 0;
+                let mut first_pts = None;
+                let mut eof = false;
+                for _ in 0..MAX_DECODE_OUTCOMES {
+                    match decoder.next_chunk().expect("decode implicit HE WebCodecs") {
+                        DecoderChunkOutcome::Chunk(chunk) => {
+                            assert_eq!(chunk.spec().sample_rate.get(), 44_100);
+                            assert_eq!(decoder.track_info().gapless, expected, "pass {pass}");
+                            assert!(chunk.samples.iter().all(|s| s.is_finite()));
+                            first_pts.get_or_insert(chunk.meta.timestamp);
+                            frames += chunk.frames();
+                        }
+                        DecoderChunkOutcome::Pending(_) => {}
+                        DecoderChunkOutcome::Eof => {
+                            eof = true;
+                            break;
+                        }
+                    }
+                }
+                assert!(eof && frames > 0, "actual browser PCM and EOS");
+                let summary = (frames, first_pts.expect("first native PCM"));
+                if let Some(reference) = reference {
+                    assert_eq!(
+                        summary, reference,
+                        "declaration and seek preserve native PCM extent"
+                    );
+                }
+                reference = Some(summary);
+            }
+        }
+    })
+    .join_async()
+    .await
+    .expect("WebCodecs scenario worker failed");
+}
+
 async fn prepare_webcodecs(codec: &str, bytes: &'static [u8]) {
     PROBE_STARTED.call_once(|| spawn_webcodecs_probe(default_pools()));
     assert_browser_support(codec).await;

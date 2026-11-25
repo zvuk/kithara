@@ -348,6 +348,10 @@ fn assert_hosted_authorization(job: &Mapping) {
         .as_mapping()
         .expect("authorization environment is a mapping");
     assert_eq!(
+        mapping_field(env, "EVENT_NAME").as_str(),
+        Some("${{ github.event_name }}")
+    );
+    assert_eq!(
         mapping_field(env, "ACTOR").as_str(),
         Some("${{ github.actor }}")
     );
@@ -571,6 +575,14 @@ fn a_ready_pull_request_is_a_merge_request_pipeline() {
         mapping_field(outputs, "kind").as_str(),
         Some("${{ steps.kind.outputs.kind }}")
     );
+    assert_eq!(
+        mapping_field(outputs, "base-sha").as_str(),
+        Some("${{ steps.kind.outputs.base-sha }}")
+    );
+    assert_eq!(
+        mapping_field(outputs, "base-repository").as_str(),
+        Some("${{ steps.kind.outputs.base-repository }}")
+    );
     let step = named_step(authorize, "Name the pipeline kind");
     assert_eq!(mapping_field(step, "id").as_str(), Some("kind"));
     let env = mapping_field(step, "env")
@@ -600,6 +612,21 @@ fn a_ready_pull_request_is_a_merge_request_pipeline() {
             "role `{name}` decides the pipeline kind again"
         );
     }
+
+    let gate = mapping_field(workflow_job(jobs, "lanes"), "with")
+        .as_mapping()
+        .expect("the gate passes its comparison base");
+    assert_eq!(
+        mapping_field(gate, "base-repository").as_str(),
+        Some("${{ needs.authorize.outputs.base-repository }}")
+    );
+    let base = mapping_field(gate, "base-sha")
+        .as_str()
+        .expect("the gate has a fallback comparison base");
+    assert!(base.contains("needs.authorize.outputs.base-sha"));
+    assert!(base.contains("github.event.before"));
+    assert!(base.contains("0000000000000000000000000000000000000000"));
+    assert!(base.contains("github.event.repository.default_branch"));
 }
 
 // One entry reacts to every push. Optional suites belong inside that run so a
@@ -3226,6 +3253,19 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         ])
     );
     let select = workflow_job(jobs, "select");
+    assert_eq!(
+        first_step(select)["with"]["fetch-depth"].as_u64(),
+        Some(2147483647),
+        "merge-base needs the checked-out branch's ancestry as well as the base"
+    );
+    let fetch = named_step(select, "Fetch the comparison base");
+    assert_eq!(
+        mapping_field(fetch, "if").as_str(),
+        Some(
+            "${{ inputs.base-sha != '' && (inputs.kind == 'branch' || inputs.kind == 'merge-request' || inputs.kind == 'quarantine') }}"
+        ),
+        "main must not fetch a comparison base it never reads"
+    );
     let outputs = mapping_field(select, "outputs")
         .as_mapping()
         .expect("the selector publishes its matrices");
@@ -3258,12 +3298,23 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         mapping_field(env, "ONLY").as_str(),
         Some("${{ inputs.only }}")
     );
+    let render_script = mapping_field(render, "run").as_str().unwrap_or_default();
     assert!(
-        mapping_field(render, "run")
-            .as_str()
-            .unwrap_or_default()
-            .contains(r#"just ci lanes --role "$ROLE" --kind "$KIND""#),
+        render_script.contains(r#"just ci lanes --role "$ROLE" --kind "$KIND""#),
         "the selection comes from the catalog"
+    );
+    assert!(render_script.starts_with("set -euo pipefail\n"));
+    assert!(
+        render_script.contains("set -- --base FETCH_HEAD") && !render_script.contains("${base[@]}"),
+        "empty optional arguments must not use an array, which older Bash rejects under `set -u`"
+    );
+    assert!(
+        render_script.contains("--base FETCH_HEAD"),
+        "a fetched branch name must be read through the named FETCH_HEAD ref"
+    );
+    assert!(
+        !render_script.contains("git diff"),
+        "the Rust selector owns comparison failure semantics"
     );
 
     let text = github_workflow_text("run.yml");

@@ -63,10 +63,17 @@ pub(super) fn build_track_info(
         extra_data,
         channels,
         sample_rate,
-        gapless: (codec == AudioCodec::Opus).then_some(crate::GaplessInfo {
-            leading_frames: u64::from(track.delay.unwrap_or(0)),
-            trailing_frames: u64::from(track.padding.unwrap_or(0)),
-        }),
+        gapless: (codec == AudioCodec::Opus)
+            .then(|| {
+                Some(crate::gapless::DeclaredGapless {
+                    info: crate::GaplessInfo {
+                        leading_frames: u64::from(track.delay.unwrap_or(0)),
+                        trailing_frames: u64::from(track.padding.unwrap_or(0)),
+                    },
+                    rate: std::num::NonZeroU32::new(sample_rate)?,
+                })
+            })
+            .flatten(),
     })
 }
 

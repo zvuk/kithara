@@ -1237,11 +1237,16 @@ mod tests {
     }
 
     #[kithara::test]
-    #[case::inside_the_source(30_001, 3)]
-    #[case::at_a_fresh_segment(0, 1)]
+    #[case::inside_the_source(30_001, 3, 1.0, 1.0333333333333334, 240.0)]
+    #[case::at_a_fresh_segment(0, 1, 1.0, 1.0333333333333334, 240.0)]
+    #[case::holding_one_rate(30_001, 3, 1.05, 1.05, 240.0)]
+    #[case::reaching_the_rate_at_once(30_001, 3, 1.0, 1.05, 0.0)]
     fn a_resumed_approach_continues_its_course_frame_for_frame(
         #[case] numerator: u128,
         #[case] denominator: u128,
+        #[case] initial: f64,
+        #[case] target: f64,
+        #[case] time_constant: f64,
     ) {
         let rate = NonZeroU32::new(48_000).expect("rate");
         let origin = Ratio::new(
@@ -1249,7 +1254,7 @@ mod tests {
             NonZeroU128::new(denominator).expect("denominator"),
         )
         .expect("origin");
-        let curve = ExponentialApproach::new(1.0, 1.0333333333333334, 240.0).expect("curve");
+        let curve = ExponentialApproach::new(initial, target, time_constant).expect("curve");
         let (entered, tail) = (383, 512);
         let course = SourceSpan::approaching(
             origin.numerator,

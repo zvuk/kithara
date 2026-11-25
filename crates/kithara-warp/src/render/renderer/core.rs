@@ -331,6 +331,19 @@ impl<S: HasPool<f32>> WarpRenderer<S> {
         self.pending_unity_meta = None;
     }
 
+    /// Returns the current trajectory entry in the input's published source clock.
+    #[must_use]
+    pub fn published_source_entry(&self, meta: AudioChunkInfo) -> Option<(u128, NonZeroU128)> {
+        let basis = meta.source_geometry()?;
+        let span = self
+            .trajectory
+            .unity_span(meta.frame_offset, meta.spec.sample_rate, 1)
+            .ok()?;
+        basis
+            .map_output_span(meta.frame_offset, span)?
+            .source_ratio_at(0)
+    }
+
     /// Reanchors physical render phase after applying any source discontinuity.
     ///
     /// # Errors
