@@ -3,7 +3,7 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{GainDb, consts};
 
-/// The type of biquad filter used for an EQ band.
+/// The filter character configured for an EQ band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 #[non_exhaustive]

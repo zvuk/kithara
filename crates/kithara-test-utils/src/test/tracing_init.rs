@@ -10,13 +10,13 @@ pub fn setup_tracing() {
     setup_tracing_with_filter("warn");
 }
 
-/// Under the sanitizer the filter is never built. `init_tracing` installs no
-/// subscriber there, but constructing an `EnvFilter` parses the directives and
-/// allocates, and the test body it is called from sits inside the checked
-/// region — the sanitizer reported it as an unsafe `malloc` in a real-time
-/// context, attributed to whichever test happened to run first.
+/// Under the sanitizer the filter is never built: constructing an `EnvFilter`
+/// parses the directives and allocates in the test body's checked region. Only
+/// the probe recorder is installed; formatted and flight logging stay disabled.
 #[cfg(rtsan)]
-pub fn setup_tracing_with_filter(_directives: &str) {}
+pub fn setup_tracing_with_filter(_directives: &str) {
+    init_rtsan_tracing();
+}
 
 #[cfg(not(rtsan))]
 pub fn setup_tracing_with_filter(directives: &str) {
@@ -96,18 +96,26 @@ fn read_directive(part: &str) -> Option<(Option<&str>, usize)> {
     }
 }
 
+#[cfg(rtsan)]
+fn init_rtsan_tracing() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+        let _ = tracing_subscriber::registry()
+            .with(crate::test::usdt::layer())
+            .try_init();
+    }
+}
+
 pub fn init_tracing(filter: EnvFilter) {
-    // RealtimeSanitizer lane (`--cfg rtsan`, the native sanitizer build only):
-    // a capturing/formatting subscriber allocates on the audio worker thread —
-    // the forbid-blocking produce core — whenever it captures, or merely
-    // *constructs* (recording `?`/`%` Debug fields keeps the callsite live via
-    // the probe layer), a decode/seek diagnostic event. Production RT threads
-    // are never synchronously logged, so install no subscriber here: callsites
-    // stay disabled and the lane verifies kithara's own RT-safety, not the test
-    // logger. Normal `just test` keeps the formatting subscriber.
+    // The sanitizer lane installs only the filtered probe recorder. Its layer
+    // disables non-probe callsites, and probe emission already carries the RTSan
+    // permit around recorder entry. Formatting and flight layers stay absent.
     #[cfg(rtsan)]
     {
         let _ = filter;
+        init_rtsan_tracing();
     }
 
     #[cfg(all(not(target_arch = "wasm32"), not(rtsan)))]

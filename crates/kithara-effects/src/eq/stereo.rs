@@ -1,14 +1,14 @@
 use core::{fmt, num::NonZeroU32};
 
-use kithara_bufpool::{HasPool, PoolError};
+use kithara_bufpool::HasPool;
 use kithara_dsp::{
     fade::FadeCurve,
     param::{Mix, MixDSP},
 };
 use num_traits::AsPrimitive;
 
-use super::{EqBandConfig, EqConfig, IsolatorEq};
-use crate::GainDb;
+use super::{EqBandConfig, EqConfig, EqError, IsolatorEq};
+use crate::{GainDb, consts::EQ_BLOCK_FRAMES};
 
 /// An active gain row must cover every frame of the stereo call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -31,13 +31,13 @@ impl EqLayout {
     ///
     /// # Errors
     ///
-    /// Returns [`PoolError`] when the region cannot hand out the crossover filter states and
-    /// the gain banks the two isolators run on.
+    /// Returns [`EqError`] when the crossover design is invalid or the region
+    /// cannot hand out the filter states and gain banks the two isolators run on.
     pub fn new<S>(
         config: &EqConfig<S>,
         bands: &[EqBandConfig],
         sample_rate: NonZeroU32,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
@@ -345,30 +345,77 @@ fn render_stereo(
     right: &mut [f32],
     gains: &[impl AsRef<[f64]>],
 ) {
-    for (frame, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
-        active.apply_gains(gains, frame);
-        let (dry_left, dry_right) = (*left, *right);
-        let mut wet_left = [active.left.process_sample(dry_left)];
-        let mut wet_right = [active.right.process_sample(dry_right)];
-        if !crossover.has_settled() {
-            let (from_left, from_right) = match retiring.as_deref_mut() {
-                Some(retiring) => (
-                    retiring.left.process_sample(dry_left),
-                    retiring.right.process_sample(dry_right),
-                ),
-                None => (dry_left, dry_right),
-            };
-            crossover.mix_dry_into_wet_stereo(
-                &[from_left],
-                &[from_right],
-                &mut wet_left,
-                &mut wet_right,
-                1,
-            );
+    let frames = left.len().min(right.len());
+    let left = left.split_at_mut(frames).0;
+    let right = right.split_at_mut(frames).0;
+    if !gains.is_empty() {
+        for (frame, (left, right)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+            active.apply_gains(gains, frame);
+            render_frame(active, &mut retiring, crossover, left, right);
         }
-        *left = wet_left[0];
-        *right = wet_right[0];
+        return;
     }
+    for (left, right) in left
+        .chunks_mut(EQ_BLOCK_FRAMES)
+        .zip(right.chunks_mut(EQ_BLOCK_FRAMES))
+    {
+        let wet_left = active.left.process_block(left);
+        let wet_right = active.right.process_block(right);
+        for ((left, right), (wet_left, wet_right)) in left
+            .iter_mut()
+            .zip(right.iter_mut())
+            .zip(wet_left.iter_mut().zip(wet_right.iter_mut()))
+        {
+            if !crossover.has_settled() {
+                let (from_left, from_right) = match retiring.as_deref_mut() {
+                    Some(retiring) => (
+                        retiring.left.process_sample(*left),
+                        retiring.right.process_sample(*right),
+                    ),
+                    None => (*left, *right),
+                };
+                crossover.mix_dry_into_wet_stereo(
+                    &[from_left],
+                    &[from_right],
+                    std::slice::from_mut(wet_left),
+                    std::slice::from_mut(wet_right),
+                    1,
+                );
+            }
+            *left = *wet_left;
+            *right = *wet_right;
+        }
+    }
+}
+
+fn render_frame(
+    active: &mut EqLayout,
+    retiring: &mut Option<&mut EqLayout>,
+    crossover: &mut MixDSP,
+    left: &mut f32,
+    right: &mut f32,
+) {
+    let (dry_left, dry_right) = (*left, *right);
+    let mut wet_left = [active.left.process_sample(dry_left)];
+    let mut wet_right = [active.right.process_sample(dry_right)];
+    if !crossover.has_settled() {
+        let (from_left, from_right) = match retiring.as_deref_mut() {
+            Some(retiring) => (
+                retiring.left.process_sample(dry_left),
+                retiring.right.process_sample(dry_right),
+            ),
+            None => (dry_left, dry_right),
+        };
+        crossover.mix_dry_into_wet_stereo(
+            &[from_left],
+            &[from_right],
+            &mut wet_left,
+            &mut wet_right,
+            1,
+        );
+    }
+    *left = wet_left[0];
+    *right = wet_right[0];
 }
 
 #[cfg(test)]

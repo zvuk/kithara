@@ -15,10 +15,6 @@ impl Deck {
         range: Range<usize>,
         input: Option<[&mut [f32]; 2]>,
     ) -> Result<(), GainShapeError> {
-        let at = SessionFrame::new(
-            i64::from(start).saturating_add(i64::try_from(range.start).unwrap_or(i64::MAX)),
-        );
-        self.programs.write(level, at, range.len());
         if let Some([left, right]) = input {
             if self.programs.any_applied() {
                 self.render.finish_curves(left, right, &self.programs)?;

@@ -195,7 +195,7 @@ async fn run_analysis(
     let Some(reader) = open_reader(config, &cancel, rate, worker.wake_handle(), pools).await else {
         return;
     };
-    worker.start(pass, reader);
+    let _completion = worker.start(pass, reader);
 }
 
 async fn open_reader(

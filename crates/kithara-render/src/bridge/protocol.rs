@@ -87,6 +87,11 @@ pub enum DeckRefusal {
         unit: usize,
     },
     EqLayoutCapacity,
+    /// An installed effect declares more parameters than the deck has program
+    /// room for in each unit.
+    FxParamCapacity {
+        unit: usize,
+    },
     ParameterOutdated {
         parameter: DeckParameter,
     },

@@ -133,6 +133,7 @@ fn apply_queue(
         mixer_config.slots(),
         mixer_config.eq_bands(),
         mixer_config.fx_units(),
+        mixer_config.fx_parameters(),
     );
     let pass = DeckPass {
         mix: DeckMixSettings::default(),

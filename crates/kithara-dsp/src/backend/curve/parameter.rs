@@ -66,22 +66,29 @@ pub(in crate::backend) fn kernel<S: Simd>(
     let origin = S::f64s::splat(simd, left);
     let end = S::f64s::splat(simd, right);
     let one = S::f64s::splat(simd, 1.0);
+    let blend = |progress: S::f64s| {
+        if left.is_sign_negative() != right.is_sign_negative()
+            && left.abs() > f64::MAX - right.abs()
+        {
+            origin.mul(one.sub(progress)).add(end.mul(progress))
+        } else {
+            origin.add(S::f64s::splat(simd, right - left).mul(progress))
+        }
+    };
     match shape {
         Progression::Hold => write_with(simd, positions, |time| {
             time.simd_ge(one).select(end, origin)
         }),
         Progression::Linear => {
             let zero = S::f64s::splat(simd, 0.0);
-            let delta = S::f64s::splat(simd, right - left);
             write_with(simd, positions, |time| {
-                let value = origin.add(delta.mul(time));
+                let value = blend(time);
                 let value = time.simd_le(zero).select(origin, value);
                 time.simd_ge(one).select(end, value)
             });
         }
         Progression::Cubic { first, second } => {
             let zero = S::f64s::splat(simd, 0.0);
-            let delta = S::f64s::splat(simd, right - left);
             let three = S::f64s::splat(simd, 3.0);
             let first = S::f64s::splat(simd, first);
             let second = S::f64s::splat(simd, second);
@@ -90,7 +97,7 @@ pub(in crate::backend) fn kernel<S: Simd>(
                 let a = three.mul(remaining).mul(remaining).mul(time).mul(first);
                 let b = three.mul(remaining).mul(time).mul(time).mul(second);
                 let progress = a.add(b).add(time.mul(time).mul(time)).max(zero).min(one);
-                let value = origin.add(delta.mul(progress));
+                let value = blend(progress);
                 let value = progress.simd_eq(one).select(end, value);
                 let value = (time.simd_le(zero) | progress.simd_eq(zero)).select(origin, value);
                 time.simd_ge(one).select(end, value)
