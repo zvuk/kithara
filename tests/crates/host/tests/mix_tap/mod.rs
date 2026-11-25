@@ -11,3 +11,4 @@ mod starvation;
 pub(super) use cases::{
     ROOMY_CAPACITY, load_source, play_resource, play_source, playing_harness, render_blocks,
 };
+pub(super) use starvation::{ProgramPlan, run_withheld_windows};

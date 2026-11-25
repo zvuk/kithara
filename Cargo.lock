@@ -4681,6 +4681,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-analyze"
+version = "0.0.1-alpha5"
+dependencies = [
+ "axum",
+ "clap",
+ "kithara",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kithara-android"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -5298,7 +5316,6 @@ version = "0.0.1-alpha5"
 dependencies = [
  "arrayvec",
  "assert_no_alloc",
- "biquad",
  "bon",
  "criterion",
  "delegate",
@@ -5736,6 +5753,7 @@ version = "0.0.1-alpha5"
 dependencies = [
  "cochlea-features",
  "delegate",
+ "futures",
  "kithara",
  "kithara-command",
  "kithara-config",

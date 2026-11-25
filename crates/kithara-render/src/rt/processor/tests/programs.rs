@@ -73,11 +73,11 @@ fn every_channel_snapshot_reports_the_value_and_owner_of_its_audio_frame() {
             let field = snapshot.parameter(target).expect("prepared parameter");
             assert_eq!(
                 field.value(),
-                if target == DeckParameter::Filter {
+                Some(if target == DeckParameter::Filter {
                     0.0
                 } else {
                     f64::from(native)
-                }
+                })
             );
             assert_eq!(field.program(), Some(seq));
             assert_eq!(field.authority(), None);
@@ -162,15 +162,15 @@ fn layout_and_unit_revisions_leave_other_program_scopes_running_and_refuse_stale
         .parameter(DeckParameter::Crossfader)
         .expect("crossfader");
     assert_eq!(cross.program(), Some(cross_seq));
-    assert_eq!(cross.value(), 1.0 - 0.5 * 20.0 / 64.0);
+    assert_eq!(cross.value(), Some(1.0 - 0.5 * 20.0 / 64.0));
     let volume = snapshot.parameter(DeckParameter::Volume).expect("volume");
-    assert_eq!(volume.value(), 1.0);
+    assert_eq!(volume.value(), Some(1.0));
     assert_eq!(volume.program(), None);
     assert_eq!(
-        snapshot.fx_layouts[0].expect("unit 0").instance(),
+        snapshot.fx[0].layout.expect("unit 0").instance(),
         Some(cleared)
     );
-    assert_eq!(snapshot.fx_layouts[1].expect("unit 1").instance(), None);
+    assert_eq!(snapshot.fx[1].layout.expect("unit 1").instance(), None);
     let new_layout: LayoutRevision = snapshot.eq.layout().expect("new layout");
     let bad = part(
         &mut ends,
@@ -204,7 +204,7 @@ fn layout_and_unit_revisions_leave_other_program_scopes_running_and_refuse_stale
             .parameter(DeckParameter::Trim)
             .expect("trim")
             .value(),
-        1.0
+        Some(1.0)
     );
     assert_eq!(
         snapshot

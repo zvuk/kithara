@@ -10,8 +10,8 @@ use kithara::{
     },
     platform::time::{self, Duration},
     play::{
-        CrossfaderGain, DeckMixSettingsChange, PlayError, PlayWorker, PlayWorkerConfig,
-        ResourcePrep, SessionDuckingMode,
+        CrossfaderGain, CurveShape, DeckMixSettingsChange, DeckParameter, DeckProgram,
+        ParameterKnot, PlayError, PlayWorker, PlayWorkerConfig, ResourcePrep, SessionDuckingMode,
     },
     queue::{Queue, QueueConfig, QueueControl, QueueError, QueueSettings, TrackSource, Transition},
     signal::SessionFrame,
@@ -134,6 +134,67 @@ async fn deck_fx_other_deck_is_unaffected() {
     );
 }
 
+/// Frames after the steady state a bass swap starts on, inside a block.
+const SWAP_OFFSET: u64 = 100;
+/// Frames a bass swap moves its low bands over.
+const SWAP_FRAMES: u64 = 4096;
+/// Blocks a bass swap take captures: the swap and its held end.
+const SWAP_BLOCKS: usize = 12;
+
+#[kithara::test(tokio)]
+async fn a_bass_swap_moves_each_deck_low_band_on_its_own_program() {
+    let decks = [
+        assets::fixed_constant_wav_cd_fifth_1323000(),
+        assets::fixed_constant_wav_cd_three_tenths_1323000(),
+    ];
+    let out = bass_swap(&decks, &[true, false]).await;
+    let into = bass_swap(&decks, &[false, true]).await;
+    let both = bass_swap(&decks, &[true, true]).await;
+    let ends = |take: &[f32]| (take[0], take[take.len() - 1]);
+    let (out_start, out_end) = ends(&out);
+    let (into_start, into_end) = ends(&into);
+    assert_near(out_start, 0.2, "deck A's low band starts open");
+    assert_near(out_end, 0.0, "deck A's low band ends cut");
+    assert_near(into_start, 0.0, "deck B's low band starts cut");
+    assert_near(into_end, 0.3, "deck B's low band ends open");
+    let first = both
+        .iter()
+        .zip(out.iter().zip(&into))
+        .position(|(both, (out, into))| both.to_bits() != (out + into).to_bits());
+    assert_eq!(
+        first, None,
+        "each deck follows its own program beside the other's"
+    );
+}
+
+/// The master output of a bass swap on two decks, the first deck's low band
+/// cut from 0 dB to its minimum and the second's restored the other way over
+/// the same frames. Only the decks `playing` names sound and take their program.
+async fn bass_swap(decks: &[Asset], playing: &[bool]) -> Vec<f32> {
+    let harness = MixHarness::new(decks.len()).await;
+    let sources: Vec<_> = decks
+        .iter()
+        .zip(playing)
+        .map(|(asset, playing)| playing.then_some(asset))
+        .collect();
+    harness.play_decks(&sources).await;
+    let _ = harness.steady().await;
+    let start = harness.host.position() + SWAP_OFFSET;
+    let low = f64::from(f32::from(kithara::effects::GainDb::MIN));
+    for (deck, ends) in [[0.0, low], [low, 0.0]].into_iter().enumerate() {
+        if playing[deck] {
+            harness.swap_band(deck, start, ends).await;
+        }
+    }
+    let mut take = Vec::new();
+    for _ in 0..SWAP_BLOCKS {
+        take.extend_from_slice(&harness.render_block().await);
+    }
+    harness.close().await;
+    let offset = usize::try_from(SWAP_OFFSET).expect("offset fits usize") * CHANNELS;
+    take.split_off(offset)
+}
+
 /// The settled sample of `values` played on their own decks, the first deck's
 /// lowest EQ band cut when `cut` is set.
 async fn steady_level(values: &[Asset], cut: bool) -> f32 {
@@ -216,6 +277,35 @@ impl MixHarness {
             .expect("the deck takes the band cut");
     }
 
+    /// Moves `deck`'s lowest EQ band linearly `from` one dB value `to` another
+    /// over [`SWAP_FRAMES`] frames from session frame `start`.
+    async fn swap_band(&self, deck: usize, start: u64, [from, to]: [f64; 2]) {
+        let player = self.players[deck].control().clone();
+        self.host
+            .run(move || {
+                let layout = player.eq_layout().expect("the deck reports its EQ layout");
+                let knot = |at: u64, db, shape| {
+                    ParameterKnot::new(
+                        SessionFrame::new(i64::try_from(at).expect("a test frame")),
+                        db,
+                        shape,
+                    )
+                    .expect("a finite dB knot")
+                };
+                let program = DeckProgram::new(
+                    DeckParameter::EqBand { band: 0, layout },
+                    vec![
+                        knot(start, from, CurveShape::LINEAR),
+                        knot(start + SWAP_FRAMES, to, CurveShape::HOLD),
+                    ],
+                )
+                .expect("a low band program");
+                player.deck_programs(vec![program])
+            })
+            .await
+            .expect("the deck takes the low band program");
+    }
+
     async fn fx(&self, deck: usize, changes: Vec<kithara::play::DeckFxChange>) {
         let player = self.players[deck].control().clone();
         self.host
@@ -232,15 +322,25 @@ impl MixHarness {
     }
 
     async fn play(&self, values: &[Asset]) {
-        let players: Vec<_> = self
+        self.play_decks(&values.iter().map(Some).collect::<Vec<_>>())
+            .await;
+    }
+
+    /// Plays each deck given a value; a deck given none stays empty.
+    async fn play_decks(&self, values: &[Option<&Asset>]) {
+        let (players, sources): (Vec<_>, Vec<_>) = self
             .players
             .iter()
-            .map(|player| player.control().clone())
-            .collect();
-        let sources: Vec<_> = values
-            .iter()
-            .map(|asset| TrackSource::Uri(asset_source(asset)))
-            .collect();
+            .zip(values)
+            .filter_map(|(player, asset)| {
+                asset.map(|asset| {
+                    (
+                        player.control().clone(),
+                        TrackSource::Uri(asset_source(asset)),
+                    )
+                })
+            })
+            .unzip();
         let selected = self
             .host
             .run(move || {

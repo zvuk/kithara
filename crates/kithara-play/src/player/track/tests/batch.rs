@@ -1151,6 +1151,7 @@ fn a_ready_paused_segment_keeps_its_cue_over_an_old_slot_snapshot() {
         mixer_config.slots(),
         mixer_config.eq_bands(),
         mixer_config.fx_units(),
+        mixer_config.fx_parameters(),
     );
     let pass = crate::DeckPass {
         mix: DeckMixSettings::default(),

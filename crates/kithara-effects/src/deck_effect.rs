@@ -104,7 +104,7 @@ pub trait DeckEffect: Send {
     /// from the next frame processed, without allocating or freeing.
     fn set(&mut self, change: FxParamChange);
 
-    /// Returns the effect to the state it was prepared in.
+    /// Clears DSP history and tail, retaining current native parameter values and configuration.
     fn reset(&mut self);
 
     /// Whether the wet signal stays silent while the input does.
