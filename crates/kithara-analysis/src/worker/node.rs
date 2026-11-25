@@ -9,8 +9,8 @@ use kithara_resampler::ResamplerBackend;
 use kithara_worker::{ComputeSubmitError, Task, TaskContext, TickResult};
 use tracing::{debug, warn};
 
-use super::AnalysisTask;
 pub(crate) use super::task::Job;
+use super::{AnalysisError, AnalysisTask};
 use crate::{
     analyzer::{AnalyzerBuilder, Detector},
     slots::beat::{DetectOutput, DetectRequest, detect},
@@ -94,8 +94,9 @@ where
 
     fn accept_job(&mut self) -> TickResult {
         match self.jobs.try_recv() {
-            Ok(job) => {
-                let task = match AnalysisTask::new(
+            Ok(mut job) => {
+                let report = job.report.take();
+                let mut task = match AnalysisTask::new(
                     job,
                     &self.builder,
                     self.chunk_seconds,
@@ -105,9 +106,13 @@ where
                     Ok(task) => task,
                     Err(error) => {
                         warn!(?error, "analysis: resume checkpoint rejected");
+                        if let Some(report) = report {
+                            report.send(Err(AnalysisError::Resume(error))).ok();
+                        }
                         return TickResult::Progress;
                     }
                 };
+                task.report = report;
                 self.current = Some(task);
                 self.tick_current()
             }
