@@ -191,6 +191,7 @@ pub(super) fn install(
     let candidate = manager.config_file.with_extension("candidate.toml");
     prepare(process, host, pins, cpusets, &candidate)?;
     let backup = manager.config_file.with_extension("toml.previous");
+    super::services::install_worker_slices(process, host)?;
     let mut keep = Vec::new();
     for path in [&manager.config_file, &backup] {
         match fs::read_to_string(path) {
@@ -233,6 +234,22 @@ pub(super) fn install(
         &["daemon-reload"],
         "load native manager resource prerequisites",
     )?;
+    for runner in host
+        .runners
+        .iter()
+        .filter(|r| matches!(r.target, RunnerTarget::Gitlab { .. }))
+    {
+        let parent = Container::cgroup_parent(runner);
+        let max = process.capture(
+            "systemctl",
+            &["show", &parent, "--property=TasksMax", "--value"],
+            "verify native worker PID budget",
+        )?;
+        ensure!(
+            max == Container::PIDS_LIMIT.to_string(),
+            "native worker aggregate PID budget is not installed"
+        );
+    }
     ensure!(
         read_config(&manager.config_file)? == before,
         "native configuration changed during preparation; candidate was not applied"
@@ -306,7 +323,7 @@ fn configuration(host: &LinuxHost, pins: &CiPins, cpusets: &[String]) -> Result<
             .context("invalid canonical tmpfs declaration")?;
         let mut config = json!({
             "id":credential.id,"name":runner.name,"url":url,"token":credential.token,
-            "executor":"docker","limit":1,"request_concurrency":1,
+            "executor":"docker","limit":1,"request_concurrency":1,"use_slot_cgroups":false,
             "builds_dir":Container::WORKSPACE,"cache_dir":Container::CACHE,
             "environment":environment,
             "feature_flags":{"FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR":true},
@@ -314,7 +331,7 @@ fn configuration(host: &LinuxHost, pins: &CiPins, cpusets: &[String]) -> Result<
                 "image":job.image,"helper_image":manager.helper_image,
                 "user":format!("{id}:{id}",id=consts::JOB_USER),
                 "cpuset_cpus":job.cpuset,"memory":job.memory,"memory_swap":job.memory,
-                "cgroup_parent":job.cgroup_parent,"pids_limit":Container::PIDS_LIMIT,
+                "cgroup_parent":job.cgroup_parent,"service_cgroup_parent":job.cgroup_parent,
                 "network_mode":job.network,"privileged":false,
                 "security_opt":["no-new-privileges"],
                 "pull_policy":["never"],"allowed_pull_policies":["never"],
@@ -444,6 +461,7 @@ mod tests {
         Process::recording(
             directory,
             Recording::default()
+                .with_reply(&["systemctl", "show"], "8192")
                 .with_reply(
                     &[binary, "--version"],
                     &format!("Version: {}", pins.gitlab_runner_version),
@@ -519,6 +537,45 @@ mod tests {
         prepare(&process, &host, &pins, &cpusets, &candidate).unwrap();
         assert_ne!(fs::read_to_string(candidate).unwrap(), before);
         assert_eq!(fs::read_to_string(installed).unwrap(), before);
+    }
+
+    #[test]
+    fn missing_worker_pid_budget_cannot_publish_native_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = setup(directory.path());
+        let pins = fixture().pins;
+        let active = &host.gitlab.as_ref().unwrap().config_file;
+        fs::write(
+            active,
+            configuration(&host, &pins, &["0,1".into(), "2,3".into()]).unwrap(),
+        )
+        .unwrap();
+        let before = fs::read(active).unwrap();
+        let parent = Container::cgroup_parent(&host.runners[0]);
+        let recording = manager_process(directory.path(), &host, &pins)
+            .recorded()
+            .unwrap()
+            .with_reply(
+                &[
+                    "systemctl",
+                    "show",
+                    &parent,
+                    "--property=TasksMax",
+                    "--value",
+                ],
+                "0",
+            );
+        assert!(
+            install(
+                &Process::recording(directory.path(), recording),
+                &host,
+                &pins,
+                &["0,1".into(), "2,3".into()]
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(active).unwrap(), before);
+        assert!(!active.with_extension("toml.previous").exists());
     }
 
     #[cfg(unix)]
@@ -623,6 +680,7 @@ mod tests {
         install_script(
             &bin.join("systemctl"),
             r#"#!/bin/sh
+test "$3" != --property=TasksMax || { printf '8192\n'; exit 0; }
 case "$1 $2" in
   'show gitlab-runner.service')
     case "$3" in
@@ -638,6 +696,7 @@ case "$1 $2" in
 esac
 "#,
         );
+        install_script(&bin.join("install"), "#!/bin/sh\nexit 0\n");
         let manager = host.gitlab.as_ref().unwrap();
         assert!(
             !Container::kache(&host, &host.runners[0])
@@ -701,6 +760,16 @@ esac
         assert_eq!(config["concurrent"].as_integer(), Some(2));
         for (index, runner) in config["runners"].as_array().unwrap().iter().enumerate() {
             let docker = &runner["docker"];
+            assert!(
+                docker.get("pids_limit").is_none(),
+                "native Runner has no pids_limit mapping"
+            );
+            assert_eq!(docker["cgroup_parent"], docker["service_cgroup_parent"]);
+            assert_eq!(
+                docker["cgroup_parent"].as_str(),
+                Some(Container::cgroup_parent(&host.runners[index]).as_str())
+            );
+            assert_eq!(runner["use_slot_cgroups"].as_bool(), Some(false));
             assert_eq!(docker["ulimit"]["nice"].as_str(), Some("40:40"));
             assert!(docker["ulimit"].get("nice=40").is_none());
             assert_eq!(docker["memory"].as_str(), Some("4g"));

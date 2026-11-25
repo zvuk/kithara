@@ -1,4 +1,4 @@
-use std::io::Write as _;
+use std::{io::Write as _, path::Path};
 
 use anyhow::{Context, Result, bail};
 use tracing::info;
@@ -35,9 +35,9 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
         )?;
     }
 
-    let pins = CiPins::load(std::path::Path::new(consts::PINS_PATH))?;
+    let pins = CiPins::load(Path::new(consts::PINS_PATH))?;
     for (volume, image) in &job_mounts(host, &pins)? {
-        if std::path::Path::new(volume).is_absolute() {
+        if Path::new(volume).is_absolute() {
             std::fs::create_dir_all(volume)
                 .with_context(|| format!("creating runner cache directory {volume}"))?;
         } else {
@@ -61,23 +61,7 @@ fn prepare_bridge_filtering(process: &Process) -> Result<()> {
         ("/etc/modules-load.d/kithara-ci.conf", format!("{module}\n")),
         (sysctl, format!("{}=1\n", consts::HOST_BRIDGE_IPV4_FILTER)),
     ] {
-        let mut input =
-            tempfile::NamedTempFile::new().context("stage bridge filter configuration")?;
-        input.write_all(contents.as_bytes())?;
-        process.run(
-            "install",
-            &[
-                "-D",
-                "-m",
-                "0644",
-                input
-                    .path()
-                    .to_str()
-                    .context("bridge configuration path is not UTF-8")?,
-                path,
-            ],
-            "persist bridge filtering",
-        )?;
+        install_configuration(process, Path::new(path), &contents)?;
     }
     process.run("modprobe", &[module], "load bridge netfilter")?;
     process.run(
@@ -86,6 +70,17 @@ fn prepare_bridge_filtering(process: &Process) -> Result<()> {
         "enable IPv4 bridge filtering",
     )?;
     super::firewall::require_bridge_filtering(process)
+}
+
+pub(super) fn install_configuration(process: &Process, path: &Path, contents: &str) -> Result<()> {
+    let mut input = tempfile::NamedTempFile::new().context("stage native configuration")?;
+    input.write_all(contents.as_bytes())?;
+    let mut install = process.command("install");
+    install
+        .args(["-D", "-m", "0644"])
+        .arg(input.path())
+        .arg(path);
+    process.run_command(&mut install, "install native configuration")
 }
 
 pub(super) fn require_devices(host: &LinuxHost) -> Result<()> {
@@ -247,7 +242,7 @@ mod tests {
         use crate::ci::process::Recording;
 
         let process = Process::recording(
-            std::path::Path::new("."),
+            Path::new("."),
             Recording::default()
                 .with_reply(&["sysctl", "-n", "net.bridge.bridge-nf-call-iptables"], "1"),
         );

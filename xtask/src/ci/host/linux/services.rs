@@ -354,6 +354,23 @@ pub(super) fn install_slice() -> Result<()> {
     Ok(())
 }
 
+fn worker_slice() -> String {
+    format!("[Slice]\nTasksMax={}\n", Container::PIDS_LIMIT)
+}
+
+pub(super) fn install_worker_slices(process: &Process, host: &LinuxHost) -> Result<()> {
+    for runner in host
+        .runners
+        .iter()
+        .filter(|r| matches!(r.target, RunnerTarget::Gitlab { .. }))
+    {
+        let path =
+            PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(Container::cgroup_parent(runner));
+        super::system::install_configuration(process, &path, &worker_slice())?;
+    }
+    Ok(())
+}
+
 fn install_cleanup_timer(host: &LinuxHost, keep: &[String], deployment: &Deployment) -> Result<()> {
     let service = cleanup_unit(host, keep, deployment);
     for (name, body) in [
@@ -558,6 +575,20 @@ mod tests {
     use clap::Parser;
 
     use super::*;
+
+    #[test]
+    fn native_workers_have_independent_aggregate_pid_slices() {
+        let mut host = super::super::profile::tests::gitlab_fixture();
+        host.runners[0].name = "worker".into();
+        host.runners[1].name = "worker-child".into();
+        let parents: Vec<_> = host.runners.iter().map(Container::cgroup_parent).collect();
+        assert_ne!(parents[0], parents[1]);
+        for parent in &parents {
+            assert!(parent.starts_with("kithara-ci-"));
+            assert_eq!(parent.matches('-').count(), 2);
+        }
+        assert_eq!(worker_slice(), "[Slice]\nTasksMax=8192\n");
+    }
     use crate::{
         Cli,
         ci::{config::fixture, host::linux::profile::tests::host_fixture, process::Recording},

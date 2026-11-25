@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use sha2::{Digest as _, Sha256};
 
 use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor, RunnerTarget};
 use crate::{
@@ -25,10 +26,9 @@ pub(super) struct Container<'a> {
     /// [`super::cpu::assignments`].
     pub(super) cpuset: String,
     pub(super) memory: &'a str,
-    /// The slice that caps the fleet as a whole. A runner's own `memory` never
-    /// fired: the host livelocked on the sum of ceilings several times its
-    /// memory, so every container draws on one budget instead.
-    pub(super) cgroup_parent: &'static str,
+    /// The resource slice below the fleet budget. Native workers each have
+    /// an aggregate PID limit shared by their build, helper and services.
+    pub(super) cgroup_parent: String,
     pub(super) devices: &'a [PathBuf],
     pub(super) groups: &'a [u32],
     /// Where the just-in-time registration is left for it. Minted per start and
@@ -40,6 +40,17 @@ pub(super) struct Container<'a> {
 }
 
 impl Container<'_> {
+    pub(super) fn cgroup_parent(runner: &LinuxRunner) -> String {
+        if matches!(runner.target, RunnerTarget::Gitlab { .. }) {
+            format!(
+                "{}-{}.slice",
+                consts::SERVICE_SLICE.trim_end_matches(".slice"),
+                hex::encode(Sha256::digest(runner.name.as_bytes()))
+            )
+        } else {
+            consts::SERVICE_SLICE.to_owned()
+        }
+    }
     pub(super) const WORKSPACE: &'static str = "/runner/_work";
     pub(super) const CACHE: &'static str = "/cache";
     /// The volumes this runner mounts.
@@ -265,7 +276,7 @@ pub(super) fn container<'a>(
         network: &host.network,
         cpuset,
         memory: &runner.memory,
-        cgroup_parent: consts::SERVICE_SLICE,
+        cgroup_parent: Container::cgroup_parent(runner),
         devices: &runner.devices,
         groups: &runner.groups,
         env_file: super::services::env_file(runner),
