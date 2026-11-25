@@ -551,31 +551,31 @@ mod tests {
         )
         .unwrap();
         let before = fs::read(active).unwrap();
+        let backup = active.with_extension("toml.previous");
+        let sentinel = "concurrent = 19\n";
+        fs::write(&backup, sentinel).unwrap();
         let parent = Container::cgroup_parent(&host.runners[0]);
         let recording = manager_process(directory.path(), &host, &pins)
             .recorded()
             .unwrap()
-            .with_reply(
-                &[
-                    "systemctl",
-                    "show",
-                    &parent,
-                    "--property=TasksMax",
-                    "--value",
-                ],
-                "0",
-            );
-        assert!(
-            install(
-                &Process::recording(directory.path(), recording),
-                &host,
-                &pins,
-                &["0,1".into(), "2,3".into()]
-            )
-            .is_err()
+            .with_reply(&["systemctl", "show", &parent], "0");
+        let error = install(
+            &Process::recording(directory.path(), recording),
+            &host,
+            &pins,
+            &["2,3".into(), "0,1".into()],
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "native worker aggregate PID budget is not installed"
         );
         assert_eq!(fs::read(active).unwrap(), before);
-        assert!(!active.with_extension("toml.previous").exists());
+        assert_eq!(fs::read(backup).unwrap(), sentinel.as_bytes());
+        assert_ne!(
+            fs::read(active.with_extension("candidate.toml")).unwrap(),
+            before
+        );
     }
 
     #[cfg(unix)]
