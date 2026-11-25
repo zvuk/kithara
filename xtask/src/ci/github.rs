@@ -10,7 +10,12 @@ use serde_json::Value;
 /// Rejects missing or malformed inputs, unauthorized actors and unsuccessful required jobs.
 pub fn run(mode: &str) -> io::Result<()> {
     match mode {
-        "authorize" => authorize(&input("ACTOR")?, &input("OWNER")?, &input("RUNNER_LABELS")?),
+        "authorize" => authorize(
+            &input("EVENT_NAME")?,
+            &input("ACTOR")?,
+            &input("OWNER")?,
+            &input("RUNNER_LABELS")?,
+        ),
         "kind" => publish_kind(
             &input("PULLS")?,
             &input("BASE_REPOSITORY")?,
@@ -31,10 +36,16 @@ fn input(name: &str) -> io::Result<String> {
     env::var(name).map_err(|error| io::Error::other(format!("{name}: {error}")))
 }
 
-fn authorize(actor: &str, owner: &str, labels: &str) -> io::Result<()> {
-    if actor != owner || owner.is_empty() {
+fn authorize(event: &str, actor: &str, owner: &str, labels: &str) -> io::Result<()> {
+    let authorized = match event {
+        "push" => true,
+        "workflow_dispatch" => actor == owner,
+        _ => false,
+    };
+    if !authorized || actor.is_empty() || owner.is_empty() {
         return Err(io::Error::other(format!(
-            "CI may only be started by repository owner {owner:?}, got {actor:?}"
+            "CI requires a repository push or an owner workflow_dispatch, \
+             got {event:?} by {actor:?} for {owner:?}"
         )));
     }
     let labels: Vec<String> = serde_json::from_str(labels)
