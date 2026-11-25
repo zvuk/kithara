@@ -1,12 +1,12 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::Seq;
 use kithara_config::LiveConfig;
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     GainDb,
-    eq::{EqConfig, EqLayout, GainShapeError, StereoEq, generate_log_spaced_bands},
+    eq::{EqConfig, EqError, EqLayout, GainShapeError, StereoEq, generate_log_spaced_bands},
     filter::{FilterEffect, FilterKnob},
 };
 use num_traits::cast::AsPrimitive;
@@ -47,7 +47,7 @@ impl RenderPass {
         pools: &PoolRegion<S>,
         shape: StreamShape,
         config: DeckMixerConfig,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
@@ -734,6 +734,40 @@ mod tests {
             actual_right.map(f32::to_bits),
             reference_right.map(f32::to_bits)
         );
+    }
+
+    #[kithara::test]
+    fn eq_sample_rate_retune_matches_a_fresh_low_rate_render() {
+        let rate = |hz| NonZeroU32::new(hz).expect("rate");
+        let shape = |sample_rate| StreamShape::new(rate(4), sample_rate);
+        let config = || DeckMixerConfig::builder().eq_bands(3).build();
+        let mut actual =
+            RenderPass::new(&pools(), shape(rate(48_000)), config()).expect("initial render chain");
+        let (mut left, mut right) = ([0.25; 4], [-0.5; 4]);
+        actual.finish(&mut left, &mut right).expect("warm PCM");
+        actual.update_sample_rate(rate(2_000));
+        actual.set_eq_gain(1, GainDb::checked(-6.0).expect("middle gain"));
+        actual.set_eq_gain(2, GainDb::MAX);
+
+        let mut fresh =
+            RenderPass::new(&pools(), shape(rate(2_000)), config()).expect("low-rate render chain");
+        fresh.idle();
+        fresh.set_eq_gain(1, GainDb::checked(-6.0).expect("middle gain"));
+        fresh.set_eq_gain(2, GainDb::MAX);
+        let (mut actual_left, mut actual_right) = ([0.25, -0.5, 0.75, -1.0], [0.5; 4]);
+        let (mut fresh_left, mut fresh_right) = (actual_left, actual_right);
+        actual
+            .finish(&mut actual_left, &mut actual_right)
+            .expect("retuned PCM");
+        fresh
+            .finish(&mut fresh_left, &mut fresh_right)
+            .expect("fresh PCM");
+        assert_eq!(actual_left.map(f32::to_bits), fresh_left.map(f32::to_bits));
+        assert_eq!(
+            actual_right.map(f32::to_bits),
+            fresh_right.map(f32::to_bits)
+        );
+        assert_ne!(actual_left, [0.25, -0.5, 0.75, -1.0]);
     }
 
     /// A ramp a sample-rate change catches goes on toward its target at the
