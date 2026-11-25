@@ -1,12 +1,12 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_command::Seq;
 use kithara_config::LiveConfig;
 use kithara_dsp::param::{SmoothedParam, SmootherConfig};
 use kithara_effects::{
     GainDb,
-    eq::{EqConfig, EqLayout, GainShapeError, StereoEq, generate_log_spaced_bands},
+    eq::{EqConfig, EqError, EqLayout, GainShapeError, StereoEq, generate_log_spaced_bands},
     filter::{FilterEffect, FilterKnob},
 };
 use num_traits::cast::AsPrimitive;
@@ -47,7 +47,7 @@ impl RenderPass {
         pools: &PoolRegion<S>,
         shape: StreamShape,
         config: DeckMixerConfig,
-    ) -> Result<Self, PoolError>
+    ) -> Result<Self, EqError>
     where
         S: HasPool<f32>,
     {
@@ -80,6 +80,7 @@ impl RenderPass {
                     effect: None,
                     mix: smoothed(0.0, shape.sample_rate),
                     on: false,
+                    delivered: vec![None; config.fx_parameters()].into_boxed_slice(),
                 })
                 .collect(),
             wet: [
@@ -131,21 +132,20 @@ impl RenderPass {
     ) -> Result<(), GainShapeError> {
         let frames = left.len().min(right.len());
         self.prepare_output(programs);
-        let trim_values =
-            programs.and_then(|rows| rows.values(DeckParameter::Trim.index(), frames));
+        let trim_values = programs.and_then(|rows| rows.values(DeckParameter::TRIM, frames));
         let trim_state = trim_values.is_none().then_some(self.trim);
-        let trim = &mut self.control_buffers[DeckParameter::Trim.index()][..frames];
+        let trim = &mut self.control_buffers[DeckParameter::TRIM][..frames];
         if let Some(value) = native_values(&mut self.trim, trim_values, trim, false) {
             self.trim_value = value;
         }
         apply_gain(trim_state, left, right, trim);
         let gains = programs.map_or(&[][..], DeckPrograms::eq_values);
         self.eq.process_with_gains(left, right, gains)?;
-        for unit in &mut self.units {
-            unit.process(left, right, &mut self.wet);
+        for (index, unit) in self.units.iter_mut().enumerate() {
+            unit.run(index, [&mut *left, &mut *right], &mut self.wet, programs);
         }
         let planes = &mut [&mut left[..frames], &mut right[..frames]];
-        let knobs = programs.and_then(|rows| rows.values(DeckParameter::Filter.index(), frames));
+        let knobs = programs.and_then(|rows| rows.values(DeckParameter::FILTER, frames));
         if let Some(knobs) = knobs {
             self.filter
                 .process_program(planes, 0..frames, knobs)
@@ -157,11 +157,10 @@ impl RenderPass {
         }
         let programmed = self.output_owners.iter().any(Option::is_some);
         if programmed {
-            for (parameter, value) in [
-                (DeckParameter::Volume, f32::from(self.mix.volume())),
-                (DeckParameter::Crossfader, f32::from(self.mix.crossfader())),
+            for (index, value) in [
+                (DeckParameter::VOLUME, f32::from(self.mix.volume())),
+                (DeckParameter::CROSSFADER, f32::from(self.mix.crossfader())),
             ] {
-                let index = parameter.index();
                 let output = &mut self.control_buffers[index][..frames];
                 if self.output_owners[index].is_some() {
                     if let Some(values) = programs.and_then(|rows| rows.values(index, frames)) {
@@ -170,12 +169,10 @@ impl RenderPass {
                         output.fill(value);
                     }
                     if let Some(value) = output.last() {
-                        let change = match parameter {
-                            DeckParameter::Volume => {
-                                Some(DeckMixSettingsChange::Volume((*value).into()))
-                            }
-                            _ => CrossfaderGain::checked(*value)
-                                .map(DeckMixSettingsChange::Crossfader),
+                        let change = if index == DeckParameter::VOLUME {
+                            Some(DeckMixSettingsChange::Volume((*value).into()))
+                        } else {
+                            CrossfaderGain::checked(*value).map(DeckMixSettingsChange::Crossfader)
                         };
                         if let Some(change) = change {
                             self.mix.apply_change(change);
@@ -214,23 +211,20 @@ impl RenderPass {
         programs: &DeckPrograms,
     ) -> Result<(), GainShapeError> {
         self.prepare_output(Some(programs));
-        for parameter in [
-            DeckParameter::Trim,
-            DeckParameter::Volume,
-            DeckParameter::Crossfader,
+        for index in [
+            DeckParameter::TRIM,
+            DeckParameter::VOLUME,
+            DeckParameter::CROSSFADER,
         ] {
-            if let Some(value) = programs
-                .values(parameter.index(), frames)
-                .and_then(<[f64]>::last)
-            {
+            if let Some(value) = programs.values(index, frames).and_then(<[f64]>::last) {
                 let value: f32 = value.as_();
-                match parameter {
-                    DeckParameter::Trim => {
+                match index {
+                    DeckParameter::TRIM => {
                         self.trim_value = value;
                         self.trim.set_value(value);
                         self.trim.reset_to_target();
                     }
-                    DeckParameter::Volume => self
+                    DeckParameter::VOLUME => self
                         .mix
                         .apply_change(DeckMixSettingsChange::Volume(value.into())),
                     _ => {
@@ -243,7 +237,10 @@ impl RenderPass {
             }
         }
         self.eq.advance_gains(programs.eq_values(), frames)?;
-        let knobs = programs.values(DeckParameter::Filter.index(), frames);
+        for (index, unit) in self.units.iter_mut().enumerate() {
+            unit.advance(programs, index, frames);
+        }
+        let knobs = programs.values(DeckParameter::FILTER, frames);
         if let Some(value) = knobs.and_then(<[f64]>::last) {
             if let Some(knob) = FilterKnob::checked(*value) {
                 self.filter.configure(knob);
@@ -268,10 +265,10 @@ impl RenderPass {
     /// Whether a unit still sounds a tail of input the deck no longer plays,
     /// or still ramps its dry/wet, which settles on its own frame only while
     /// the chain renders.
-    pub(crate) fn ringing(&self) -> bool {
+    pub(in crate::rt) fn ringing(&self, programs: Option<&DeckPrograms>, frames: usize) -> bool {
         !self.filter.tail_exhausted()
-            || self.units.iter().any(|unit| {
-                unit.running()
+            || self.units.iter().enumerate().any(|(index, unit)| {
+                unit.running(programs.and_then(|rows| rows.mix_values(index, frames)))
                     && (!unit.mix.has_settled()
                         || unit
                             .effect
@@ -327,8 +324,8 @@ impl RenderPass {
     }
     pub(crate) fn set_mix(&mut self, change: DeckMixSettingsChange) {
         match change {
-            DeckMixSettingsChange::Volume(_) => self.release_output(DeckParameter::Volume),
-            DeckMixSettingsChange::Crossfader(_) => self.release_output(DeckParameter::Crossfader),
+            DeckMixSettingsChange::Volume(_) => self.release_output(DeckParameter::VOLUME),
+            DeckMixSettingsChange::Crossfader(_) => self.release_output(DeckParameter::CROSSFADER),
             _ => {}
         }
         self.mix.apply_change(change);
@@ -350,11 +347,11 @@ impl RenderPass {
         ]
     }
 
-    fn release_output(&mut self, parameter: DeckParameter) {
-        if self.output_owners[parameter.index()].take().is_none() {
+    fn release_output(&mut self, index: usize) {
+        if self.output_owners[index].take().is_none() {
             return;
         }
-        let (volume, cross) = if parameter == DeckParameter::Volume {
+        let (volume, cross) = if index == DeckParameter::VOLUME {
             (f32::from(self.mix.volume()), 1.0)
         } else {
             (1.0, f32::from(self.mix.crossfader()))
@@ -369,8 +366,11 @@ impl RenderPass {
     /// Program entry snaps the remainder to manual targets; release folds held factors.
     fn prepare_output(&mut self, programs: Option<&DeckPrograms>) {
         let mut owners = [None; DeckParameter::CHANNELS];
-        for parameter in [DeckParameter::Volume, DeckParameter::Crossfader] {
-            owners[parameter.index()] = programs.and_then(|programs| programs.owner(parameter));
+        for (index, parameter) in [
+            (DeckParameter::VOLUME, DeckParameter::Volume),
+            (DeckParameter::CROSSFADER, DeckParameter::Crossfader),
+        ] {
+            owners[index] = programs.and_then(|programs| programs.owner(parameter));
         }
         let target = output_target(self.mix, owners);
         let entering = owners
@@ -382,9 +382,9 @@ impl RenderPass {
             self.output.reset_to_target();
             self.output_current = target;
         } else {
-            for parameter in [DeckParameter::Volume, DeckParameter::Crossfader] {
-                if owners[parameter.index()].is_none() {
-                    self.release_output(parameter);
+            for index in [DeckParameter::VOLUME, DeckParameter::CROSSFADER] {
+                if owners[index].is_none() {
+                    self.release_output(index);
                 }
             }
         }
@@ -395,12 +395,12 @@ impl RenderPass {
 
 fn output_target(mix: DeckMixSettings, owners: [Option<Seq>; DeckParameter::CHANNELS]) -> f32 {
     let mut remainder = mix;
-    if owners[DeckParameter::Volume.index()].is_some() {
+    if owners[DeckParameter::VOLUME].is_some() {
         remainder.apply_change(DeckMixSettingsChange::Volume(
             kithara_signal::FaderValue::DEFAULT,
         ));
     }
-    if owners[DeckParameter::Crossfader.index()].is_some() {
+    if owners[DeckParameter::CROSSFADER].is_some() {
         remainder.apply_change(DeckMixSettingsChange::Crossfader(CrossfaderGain::DEFAULT));
     }
     remainder.output_gain()
@@ -637,7 +637,7 @@ mod tests {
                 .build(),
         );
         let scope = sender.open(1).expect("scope");
-        let mut programs = DeckPrograms::new(scope, 1, 2, 4);
+        let mut programs = DeckPrograms::new(scope, [1, 2, 0], 4);
         programs.write_curve(DeckParameter::eq_index(0), &program, start, 4);
         let (mut left, mut right) = ([0.125; 4], [-0.5; 4]);
         render
@@ -707,7 +707,7 @@ mod tests {
                 .collect(),
         )
         .expect("prepared gain program");
-        let mut programs = DeckPrograms::new(scope, 2, config.fx_units(), 3);
+        let mut programs = DeckPrograms::new(scope, [2, config.fx_units(), 0], 3);
         programs.write_curve(DeckParameter::eq_index(0), &curve, start, 3);
         actual.advance(3, &programs).expect("quiet gain rows");
         actual.idle();
@@ -734,6 +734,40 @@ mod tests {
             actual_right.map(f32::to_bits),
             reference_right.map(f32::to_bits)
         );
+    }
+
+    #[kithara::test]
+    fn eq_sample_rate_retune_matches_a_fresh_low_rate_render() {
+        let rate = |hz| NonZeroU32::new(hz).expect("rate");
+        let shape = |sample_rate| StreamShape::new(rate(4), sample_rate);
+        let config = || DeckMixerConfig::builder().eq_bands(3).build();
+        let mut actual =
+            RenderPass::new(&pools(), shape(rate(48_000)), config()).expect("initial render chain");
+        let (mut left, mut right) = ([0.25; 4], [-0.5; 4]);
+        actual.finish(&mut left, &mut right).expect("warm PCM");
+        actual.update_sample_rate(rate(2_000));
+        actual.set_eq_gain(1, GainDb::checked(-6.0).expect("middle gain"));
+        actual.set_eq_gain(2, GainDb::MAX);
+
+        let mut fresh =
+            RenderPass::new(&pools(), shape(rate(2_000)), config()).expect("low-rate render chain");
+        fresh.idle();
+        fresh.set_eq_gain(1, GainDb::checked(-6.0).expect("middle gain"));
+        fresh.set_eq_gain(2, GainDb::MAX);
+        let (mut actual_left, mut actual_right) = ([0.25, -0.5, 0.75, -1.0], [0.5; 4]);
+        let (mut fresh_left, mut fresh_right) = (actual_left, actual_right);
+        actual
+            .finish(&mut actual_left, &mut actual_right)
+            .expect("retuned PCM");
+        fresh
+            .finish(&mut fresh_left, &mut fresh_right)
+            .expect("fresh PCM");
+        assert_eq!(actual_left.map(f32::to_bits), fresh_left.map(f32::to_bits));
+        assert_eq!(
+            actual_right.map(f32::to_bits),
+            fresh_right.map(f32::to_bits)
+        );
+        assert_ne!(actual_left, [0.25, -0.5, 0.75, -1.0]);
     }
 
     /// A ramp a sample-rate change catches goes on toward its target at the
@@ -810,7 +844,7 @@ mod tests {
                 "{from} Hz to {to} Hz: the chain sounds {settled} once settled"
             );
             assert!(
-                !render.ringing(),
+                !render.ringing(None, 0),
                 "{from} Hz to {to} Hz: a settled unit with its tail spent no longer rings"
             );
         }

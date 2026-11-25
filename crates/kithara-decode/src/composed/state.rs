@@ -59,6 +59,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     pub(super) pending_seek_target: Option<SeekTrim>,
     pub(super) pools: PoolRegion<S>,
     pub(super) prefill: Prefill,
+    pub(super) past_eof: bool,
     /// The `(timestamp, frame)` the decoded PCM timeline is anchored at.
     /// `None` after open and every seek: the next emitted chunk anchors it on
     /// its packet time. A contiguous chunk is stamped from the anchor, not from

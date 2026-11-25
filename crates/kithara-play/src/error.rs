@@ -2,6 +2,7 @@ use std::convert::Infallible;
 
 use kithara_audio::TrackFailureKind;
 use kithara_bufpool::PoolError;
+use kithara_effects::eq::EqError;
 use kithara_platform::time::Duration;
 use kithara_render::{InvalidCrossfade, bridge::DeckRefusal, rt::BufferGeometryError};
 
@@ -129,6 +130,20 @@ pub enum PlayError {
 
     #[error("{0}")]
     Internal(String),
+}
+
+impl From<EqError> for PlayError {
+    fn from(error: EqError) -> Self {
+        match error {
+            EqError::Pool(error) => Self::Pool(error),
+            EqError::Filter(error) => Self::InvalidConfiguration {
+                reason: error.to_string(),
+            },
+            error => Self::InvalidConfiguration {
+                reason: error.to_string(),
+            },
+        }
+    }
 }
 
 impl From<BufferGeometryError> for PlayError {

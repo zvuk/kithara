@@ -12,6 +12,8 @@ pub(super) mod consts {
 pub(crate) struct LameTrim {
     pub(crate) enc_delay: u32,
     pub(crate) enc_padding: u32,
+    /// Rate of the stream the counts are in, from the tag's frame header.
+    pub(crate) sample_rate: u32,
 }
 
 /// Read raw `enc_delay`/`enc_padding` from a Xing/Info+LAME tag in `data`.
@@ -32,11 +34,13 @@ pub(crate) fn read_lame_trim(data: &[u8]) -> Option<LameTrim> {
     Some(LameTrim {
         enc_delay,
         enc_padding,
+        sample_rate: tag.sample_rate,
     })
 }
 struct XingTag<'a> {
     tag: &'a [u8],
     flags: u32,
+    sample_rate: u32,
 }
 
 fn read_xing_tag(data: &[u8]) -> Option<XingTag<'_>> {
@@ -63,7 +67,11 @@ fn read_xing_tag(data: &[u8]) -> Option<XingTag<'_>> {
         return None;
     }
     let flags = u32::from_be_bytes([tag[4], tag[5], tag[6], tag[7]]);
-    Some(XingTag { tag, flags })
+    Some(XingTag {
+        tag,
+        flags,
+        sample_rate: header.sample_rate,
+    })
 }
 
 fn xing_lame_cursor(flags: u32) -> Option<usize> {
@@ -113,6 +121,7 @@ pub(super) fn skip_id3v2(data: &[u8]) -> usize {
 struct FrameHeader {
     side_info_mono: bool,
     samples_per_frame: u32,
+    sample_rate: u32,
 }
 
 fn parse_header(word: u32) -> Option<FrameHeader> {
@@ -121,16 +130,19 @@ fn parse_header(word: u32) -> Option<FrameHeader> {
     if layer_bits != 0b01 {
         return None;
     }
-    let samples_per_frame = match version_bits {
-        0b11 => 1152,
-        0b10 | 0b00 => 576,
+    let (samples_per_frame, rates) = match version_bits {
+        0b11 => (1152, [44_100, 48_000, 32_000]),
+        0b10 => (576, [22_050, 24_000, 16_000]),
+        0b00 => (576, [11_025, 12_000, 8_000]),
         _ => return None,
     };
+    let sample_rate = *rates.get(usize::try_from((word >> 10) & 0x3).ok()?)?;
     let channel_mode = (word >> 6) & 0x3;
     let mono = channel_mode == 0b11;
     Some(FrameHeader {
         samples_per_frame,
         side_info_mono: mono,
+        sample_rate,
     })
 }
 
@@ -176,6 +188,7 @@ mod tests {
         let lame = read_lame_trim(&buf).expect("BUG: lame");
         assert_eq!(lame.enc_delay, 576);
         assert_eq!(lame.enc_padding, 960);
+        assert_eq!(lame.sample_rate, 44_100);
     }
 
     #[kithara::test(native, flash(false))]

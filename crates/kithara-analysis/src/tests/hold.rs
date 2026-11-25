@@ -89,6 +89,7 @@ fn run(
         token: "hold".into(),
         revision: 0,
         resume: None,
+        report: None,
         demand: AnalysisDemand::ALL,
     };
     let mut task = AnalysisTask::new(
@@ -306,7 +307,7 @@ async fn a_checkpoint_past_the_end_resumes_on_a_source_claiming_more(analysis_si
     let (mut rx, _producer, pass) = worker
         .open_resume(checkpoint.clone())
         .expect("a checkpoint past the end is a valid resume");
-    worker.start(pass, Box::new(claiming(&analysis_silence, pools)));
+    let _completion = worker.start(pass, Box::new(claiming(&analysis_silence, pools)));
 
     while rx.changed().await.is_ok() {}
     let held = rx.borrow().clone().expect("the resume publishes");

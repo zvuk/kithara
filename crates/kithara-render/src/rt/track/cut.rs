@@ -1,8 +1,8 @@
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioSpec, SegmentId, SessionFrame, SourceElapsed, SourceSpan};
 
-use super::{PlayerResource, ReadOutcome};
-use crate::{LaneFrame, PcmPacket, bridge::SlotMark};
+use super::{PlayerResource, PlayerTrack, ReadOutcome};
+use crate::{LaneFrame, PcmPacket, PcmReceiver, bridge::SlotMark};
 
 /// The last private PCM boundary retired while catching up.
 #[derive(Clone, Copy)]
@@ -109,6 +109,31 @@ pub(in crate::rt) struct CutPlan {
     pub(in crate::rt) retire_frames: usize,
     pub(in crate::rt) prefix: Option<CutPrefix>,
     pub(in crate::rt) point: Option<CutPoint>,
+}
+
+impl PlayerTrack {
+    pub(in crate::rt) fn request_cut_window(
+        &self,
+        frames: usize,
+        request: fn(&PcmReceiver, SegmentId, usize),
+    ) {
+        let resource = &self.resource;
+        if resource.eof || resource.failed.is_some() {
+            return;
+        }
+        let remaining = match resource.packet.as_ref() {
+            Some(PcmPacket::Chunk(chunk))
+                if !chunk.meta.end_of_track && chunk.meta.segment == self.segment() =>
+            {
+                frames.saturating_sub(chunk.frames().saturating_sub(resource.offset))
+            }
+            Some(_) => return,
+            None => frames,
+        };
+        if remaining > 0 {
+            request(&resource.receiver, self.segment(), remaining);
+        }
+    }
 }
 
 impl PlayerResource {

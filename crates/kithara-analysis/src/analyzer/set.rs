@@ -22,7 +22,8 @@ use crate::{
 /// Why a pass ended in error: its analyzers could not be built, or its key
 /// estimator failed on the way.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum PassError {
+#[non_exhaustive]
+pub enum PassError {
     #[error(transparent)]
     Waveform(#[from] AnalyzerError),
     #[error(transparent)]

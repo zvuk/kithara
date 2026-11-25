@@ -5,8 +5,8 @@ use kithara_effects::GainDb;
 use kithara_signal::AudioChunkInfo;
 
 use super::{
-    DeckParameter, FilterSnapshot, LayoutRevision, RtMetricsSnapshot, SlotBinding, SlotMark,
-    SlotOutputSnapshot, SlotState,
+    DeckParameter, FilterSnapshot, FxTarget, LayoutRevision, RtMetricsSnapshot, SlotBinding,
+    SlotMark, SlotOutputSnapshot, SlotState,
 };
 
 /// What a deck's mixer last published of each slot and of itself, once per block.
@@ -26,13 +26,31 @@ pub struct DeckSnapshot {
     pub filter: FilterSnapshot,
     pub epoch: Option<kithara_signal::SessionEpoch>,
     pub channels: [ParameterSnapshot; DeckParameter::CHANNELS],
-    pub fx_layouts: Vec<Option<LayoutRevision>>,
+    /// One entry per FX unit, in unit order.
+    pub fx: Vec<FxSnapshot>,
+}
+
+/// One FX unit as its mixer last published it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FxSnapshot {
+    /// The revision of the effect the unit holds, which addresses its programs.
+    pub layout: Option<LayoutRevision>,
+    /// The dry/wet the unit applied.
+    pub mix: ParameterSnapshot,
+    /// The effect parameters the unit last delivered, one entry for each the
+    /// deck has program room for.
+    pub params: Vec<ParameterSnapshot>,
 }
 
 impl DeckSnapshot {
     /// Allocates an empty snapshot for the deck's fixed slot, EQ and effect capacities.
     #[must_use]
-    pub fn new(slots: NonZeroUsize, eq_bands: usize, fx_units: usize) -> Self {
+    pub fn new(
+        slots: NonZeroUsize,
+        eq_bands: usize,
+        fx_units: usize,
+        fx_parameters: usize,
+    ) -> Self {
         Self {
             slots: vec![SlotSnapshot::default(); slots.get()],
             eq: EqSnapshot {
@@ -40,7 +58,13 @@ impl DeckSnapshot {
                 bands: vec![EqBandSnapshot::default(); eq_bands],
                 layout: None,
             },
-            fx_layouts: vec![None; fx_units],
+            fx: vec![
+                FxSnapshot {
+                    params: vec![ParameterSnapshot::default(); fx_parameters],
+                    ..FxSnapshot::default()
+                };
+                fx_units
+            ],
             ..Self::default()
         }
     }
@@ -48,14 +72,15 @@ impl DeckSnapshot {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ParameterSnapshot {
-    value: f64,
+    value: Option<f64>,
     program: Option<Seq>,
     authority: Option<Seq>,
 }
 
 impl ParameterSnapshot {
+    /// The applied value, or none before an effect parameter's first delivery.
     #[must_use]
-    pub fn value(&self) -> f64 {
+    pub fn value(&self) -> Option<f64> {
         self.value
     }
 
@@ -69,7 +94,11 @@ impl ParameterSnapshot {
         self.authority
     }
 
-    pub(crate) const fn new(value: f64, program: Option<Seq>, authority: Option<Seq>) -> Self {
+    pub(crate) const fn new(
+        value: Option<f64>,
+        program: Option<Seq>,
+        authority: Option<Seq>,
+    ) -> Self {
         Self {
             value,
             program,
@@ -83,21 +112,35 @@ impl DeckSnapshot {
     pub fn parameter(&self, parameter: DeckParameter) -> Option<ParameterSnapshot> {
         match parameter {
             DeckParameter::Filter => Some(ParameterSnapshot::new(
-                self.filter.knob(),
+                Some(self.filter.knob()),
                 self.filter.program(),
                 self.filter.authority(),
             )),
             DeckParameter::EqBand { band, layout } if self.eq.layout() == Some(layout) => {
                 self.eq.gain(band).map(|gain| {
                     ParameterSnapshot::new(
-                        f64::from(f32::from(gain)),
+                        Some(f64::from(f32::from(gain))),
                         self.eq.program(band),
                         self.eq.authority(band),
                     )
                 })
             }
             DeckParameter::EqBand { .. } => None,
-            parameter => self.channels.get(parameter.index()).copied(),
+            DeckParameter::Fx {
+                unit,
+                layout,
+                target,
+            } => {
+                let unit = self.fx.get(unit).filter(|fx| fx.layout == Some(layout))?;
+                match target {
+                    FxTarget::Mix => Some(unit.mix),
+                    FxTarget::Param(index) => unit.params.get(index).copied(),
+                }
+            }
+            parameter => parameter
+                .fixed()
+                .and_then(|index| self.channels.get(index))
+                .copied(),
         }
     }
 }

@@ -3,16 +3,19 @@ use std::{
     ops::Range,
 };
 
-use kithara_audio::{AudioReader, ChunkOutcome, SeekOutcome};
+use kithara_audio::{AudioReadError, AudioReader, ChunkOutcome, SeekOutcome};
 use kithara_bufpool::{HasPool, SampleBuffer};
-use kithara_platform::{CancelToken, tokio::sync::watch};
+use kithara_platform::{
+    CancelToken,
+    tokio::sync::{oneshot, watch},
+};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::{AudioSpec, FrameCoverage};
 use kithara_worker::TickResult;
 use rangemap::RangeSet;
 use tracing::{debug, warn};
 
-use super::schedule::Schedule;
+use super::{AnalysisError, schedule::Schedule};
 use crate::{
     AnalysisProgress, BlobError,
     analyzer::{
@@ -36,12 +39,20 @@ pub(crate) struct Job {
     pub(crate) ingest: ring::Reader,
     pub(crate) tx: watch::Sender<Option<AnalysisProgress>>,
     pub(crate) revision: u64,
+    pub(crate) report: Option<oneshot::Sender<Result<AnalysisProgress, AnalysisError>>>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
+enum End {
+    Settled,
+    Cancelled,
+    Read(AudioReadError),
+}
+
+#[derive(Debug)]
 enum TaskPhase {
     Decode,
-    Ending { settled: bool },
+    Ending(End),
     Done,
 }
 
@@ -74,6 +85,7 @@ where
     schedule: Schedule,
     tx: watch::Sender<Option<AnalysisProgress>>,
     phase: TaskPhase,
+    pub(super) report: Option<oneshot::Sender<Result<AnalysisProgress, AnalysisError>>>,
     beat_dirty: bool,
     frontier: u64,
     publish_frames: u64,
@@ -130,6 +142,7 @@ where
             revision: job.revision,
             demand: job.demand,
             tx: job.tx,
+            report: job.report,
         })
     }
 
@@ -180,7 +193,7 @@ where
                 let outcome = match pushed {
                     Ok(outcome) => outcome,
                     Err(error) => {
-                        self.fail(&error);
+                        self.fail(error);
                         return TickResult::Progress;
                     }
                 };
@@ -210,13 +223,13 @@ where
                 if scheduled {
                     self.retire();
                 } else {
-                    self.finish(true);
+                    self.finish(End::Settled);
                 }
                 TickResult::Progress
             }
             Err(error) => {
                 warn!(?error, "analysis: decode error; pass ended");
-                self.finish(false);
+                self.finish(End::Read(error));
                 TickResult::Progress
             }
         }
@@ -266,28 +279,47 @@ where
         analyzers.covered_frames().saturating_sub(self.published_at) >= self.publish_frames
     }
 
-    fn fail(&mut self, error: &PassError) {
+    fn fail(&mut self, error: PassError) {
         warn!(?error, "analysis: pass failed; ended unsettled");
+        self.report(Err(AnalysisError::Analyzer(error)));
         self.phase = TaskPhase::Done;
     }
 
     pub(crate) fn fail_compute_unavailable(&mut self) {
         warn!("analysis: compute pool unavailable; pass ended");
+        self.report(Err(AnalysisError::ComputeUnavailable));
         self.phase = TaskPhase::Done;
     }
 
-    fn finish(&mut self, settled: bool) {
+    fn finish(&mut self, end: End) {
         debug!(
             extent = ?self.extent.frames(),
             covered = ?self.analyzers.as_ref().map(TrackAnalyzers::covered_frames),
-            settled,
+            ?end,
             "analysis: reading ended"
         );
-        self.phase = if self.analyzers.is_some() {
-            TaskPhase::Ending { settled }
+        if self.analyzers.is_some() {
+            self.phase = TaskPhase::Ending(end);
         } else {
-            TaskPhase::Done
-        };
+            self.phase = TaskPhase::Done;
+            self.report_end(end, None);
+        }
+    }
+
+    fn report(&mut self, result: Result<AnalysisProgress, AnalysisError>) {
+        if let Some(report) = self.report.take() {
+            report.send(result).ok();
+        }
+    }
+
+    fn report_end(&mut self, end: End, progress: Option<AnalysisProgress>) {
+        match end {
+            End::Settled => self.report(progress.ok_or(AnalysisError::Empty)),
+            End::Read(error) => self.report(Err(AnalysisError::Read(error))),
+            End::Cancelled => {
+                drop(self.report.take());
+            }
+        }
     }
 
     fn intake(&self) -> Intake {
@@ -311,11 +343,11 @@ where
     }
 
     pub(crate) fn is_done(&self) -> bool {
-        self.phase == TaskPhase::Done
+        matches!(self.phase, TaskPhase::Done)
     }
 
     pub(crate) fn is_ending(&self) -> bool {
-        matches!(self.phase, TaskPhase::Ending { .. })
+        matches!(self.phase, TaskPhase::Ending(_))
     }
 
     pub(crate) fn prepare_detection(&mut self) -> Option<DetectRequest> {
@@ -323,19 +355,25 @@ where
         self.analyzers.as_mut()?.prepare_detection(trailing)
     }
 
-    fn publish(&mut self, detector: Option<&mut Detector>, ending: bool) {
-        let Some(analyzers) = &mut self.analyzers else {
-            return;
-        };
+    fn publish(
+        &mut self,
+        detector: Option<&mut Detector>,
+        ending: bool,
+    ) -> Option<AnalysisProgress> {
+        let analyzers = self.analyzers.as_mut()?;
         if analyzers.covered_frames() == 0 {
-            return;
+            return None;
         }
         match analyzers.progress(detector, ending, self.chunk_frames, self.extent.frames()) {
             Ok(progress) => {
                 self.published_at = analyzers.covered_frames();
-                self.tx.send(Some(progress)).ok();
+                self.tx.send(Some(progress.clone())).ok();
+                Some(progress)
             }
-            Err(error) => self.fail(&error.into()),
+            Err(error) => {
+                self.fail(error.into());
+                None
+            }
         }
     }
 
@@ -365,7 +403,7 @@ where
             if self.intake() == Intake::Full {
                 return TickResult::Backpressured;
             }
-            self.finish(true);
+            self.finish(End::Settled);
             return TickResult::Progress;
         };
 
@@ -448,7 +486,7 @@ where
             return self.decode(builder, detector);
         }
         if self.is_complete() {
-            self.finish(true);
+            self.finish(End::Settled);
             return TickResult::Progress;
         }
         let window = self.run_window();
@@ -465,14 +503,20 @@ where
         builder: &AnalyzerBuilder<B, S>,
         detector: Option<&mut Detector>,
     ) -> TickResult {
-        if self.cancel.is_cancelled() && self.phase == TaskPhase::Decode {
+        if self.cancel.is_cancelled()
+            && matches!(
+                self.phase,
+                TaskPhase::Decode | TaskPhase::Ending(End::Settled)
+            )
+        {
             debug!("analysis cancelled");
-            self.finish(false);
+            self.finish(End::Cancelled);
             return TickResult::Progress;
         }
 
-        match self.phase {
+        match std::mem::replace(&mut self.phase, TaskPhase::Done) {
             TaskPhase::Decode => {
+                self.phase = TaskPhase::Decode;
                 let visible_origin = match self.analyzers.as_ref() {
                     Some(analyzers) => analyzers.visible_origin(),
                     None => self.reader.visible_origin(),
@@ -481,7 +525,7 @@ where
                 let drained = match self.drain(builder, detector.as_deref_mut()) {
                     Ok(drained) => drained,
                     Err(error) => {
-                        self.fail(&error);
+                        self.fail(error);
                         return TickResult::Progress;
                     }
                 };
@@ -504,12 +548,14 @@ where
                     result
                 }
             }
-            TaskPhase::Ending { settled } => {
-                if settled && let Some(analyzers) = &mut self.analyzers {
+            TaskPhase::Ending(end) => {
+                if matches!(end, End::Settled)
+                    && let Some(analyzers) = &mut self.analyzers
+                {
                     analyzers.settle();
                 }
-                self.publish(detector, true);
-                self.phase = TaskPhase::Done;
+                let progress = self.publish(detector, true);
+                self.report_end(end, progress);
                 TickResult::Progress
             }
             TaskPhase::Done => TickResult::Done,

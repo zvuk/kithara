@@ -1,40 +1,18 @@
-use std::{
-    io::{Read, Seek},
-    ops::ControlFlow,
-};
+use std::{num::NonZeroU32, ops::ControlFlow};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 
 use crate::{
     DecodeResult, GaplessInfo,
-    mp4::{Mp4EditListEntry, Mp4Event, Mp4MediaTiming, scan_mp4},
+    gapless::DeclaredGapless,
+    mp4::{ItunSmpb, Mp4Event, Mp4MediaTiming, TrackEdit, scan_mp4},
     traits::DecoderInput,
 };
-
-/// Stream the MP4 boxes in `reader` and derive a [`GaplessInfo`] if any
-/// recognised source is present. Returns `Ok(None)` when the file is well-formed
-/// but carries no gapless metadata.
-///
-/// # Errors
-///
-/// Returns the wrapping [`crate::DecodeError`] only if reading the source
-/// itself fails. Malformed MP4 data is treated as "no gapless info" rather
-/// than propagated, so callers can fall back to other probes.
-pub fn probe_mp4_gapless<R, S>(
-    reader: &mut R,
-    pools: &PoolRegion<S>,
-) -> DecodeResult<Option<GaplessInfo>>
-where
-    R: Read + Seek + Send + Sync,
-    S: HasPool<u8>,
-{
-    probe_mp4_gapless_dyn(reader, pools)
-}
 
 pub(crate) fn probe_mp4_gapless_dyn<S>(
     reader: &mut dyn DecoderInput,
     pools: &PoolRegion<S>,
-) -> DecodeResult<Option<GaplessInfo>>
+) -> DecodeResult<Option<DeclaredGapless>>
 where
     S: HasPool<u8>,
 {
@@ -52,51 +30,49 @@ where
 /// Priority follows the established contract:
 /// 1. A track-level edit list (`elst`) that yields a positive leading/trailing
 ///    pair — emitted at track end. Once seen, the scan is told to stop.
-/// 2. An iTunSMPB freeform tag — emitted when the tag is read. Used only as a
-///    fallback because traks come before `udta` in well-formed `moov` boxes,
-///    and we don't want the iTunes tag to override a real `elst`.
+/// 2. An iTunSMPB freeform tag in the first audio track's media timescale.
+///    It never overrides that track's `elst`.
 #[derive(Default)]
 struct GaplessProbe {
     current: Option<TrackState>,
-    elst_derived: Option<GaplessInfo>,
-    itunsmpb: Option<GaplessInfo>,
+    /// Media timing of the first audio track.
+    first_track: Option<Mp4MediaTiming>,
+    elst_derived: Option<DeclaredGapless>,
+    itunsmpb: Option<ItunSmpb>,
     movie_timescale: Option<u32>,
 }
 
 #[derive(Default)]
 struct TrackState {
-    edit: Option<Mp4EditListEntry>,
+    kind: Option<re_mp4::TrackKind>,
+    edit: TrackEdit,
     media: Option<Mp4MediaTiming>,
     sample_rate: Option<u32>,
 }
 
-impl From<GaplessProbe> for Option<GaplessInfo> {
+impl From<GaplessProbe> for Option<DeclaredGapless> {
     fn from(probe: GaplessProbe) -> Self {
-        probe.elst_derived.or(probe.itunsmpb)
+        probe.elst_derived.or_else(|| {
+            let media = probe.first_track?;
+            declared(probe.itunsmpb?.gapless()?, media.timescale)
+        })
     }
 }
 
 impl GaplessProbe {
     fn visit(&mut self, event: Mp4Event<'_>) -> ControlFlow<()> {
         match event {
-            Mp4Event::ItunSmpb(info) => {
-                if info.leading_frames == 0 && info.trailing_frames == 0 {
-                    return ControlFlow::Continue(());
-                }
-                self.itunsmpb = Some(GaplessInfo {
-                    leading_frames: info.leading_frames,
-                    trailing_frames: info.trailing_frames,
-                });
-                return ControlFlow::Break(());
-            }
+            Mp4Event::ItunSmpb(info) => self.itunsmpb = Some(info),
             Mp4Event::MovieTimescale(timescale) => self.movie_timescale = Some(timescale),
             Mp4Event::TrackBegin => self.current = Some(TrackState::default()),
+            Mp4Event::TrackKind(kind) => {
+                if let Some(track) = &mut self.current {
+                    track.kind = Some(kind);
+                }
+            }
             Mp4Event::TrackEditList(entries) => {
                 if let Some(track) = &mut self.current {
-                    track.edit = match entries {
-                        [edit] => Some(*edit),
-                        _ => None,
-                    };
+                    track.edit = TrackEdit::from(entries);
                 }
             }
             Mp4Event::TrackEnd => return self.finish_track(),
@@ -116,9 +92,14 @@ impl GaplessProbe {
     }
 
     fn finish_track(&mut self) -> ControlFlow<()> {
-        if let Some(track) = self.current.take()
-            && let Some(info) = derive_from_track(&track, self.movie_timescale)
-        {
+        let Some(track) = self.current.take() else {
+            return ControlFlow::Continue(());
+        };
+        if track.kind != Some(re_mp4::TrackKind::Audio) || self.first_track.is_some() {
+            return ControlFlow::Continue(());
+        }
+        self.first_track = track.media;
+        if let Some(info) = derive_from_track(&track, self.movie_timescale) {
             self.elst_derived = Some(info);
             return ControlFlow::Break(());
         }
@@ -126,65 +107,43 @@ impl GaplessProbe {
     }
 }
 
-fn derive_from_track(track: &TrackState, movie_timescale: Option<u32>) -> Option<GaplessInfo> {
-    derive_from_edit(
-        track.edit?,
-        track.media?,
-        track.sample_rate?,
-        movie_timescale?,
+fn derive_from_track(track: &TrackState, movie_timescale: Option<u32>) -> Option<DeclaredGapless> {
+    let sample_rate = track.sample_rate?;
+    declared(
+        track
+            .edit
+            .gapless(track.media?, sample_rate, movie_timescale)?,
+        sample_rate,
     )
 }
 
-pub(crate) fn derive_from_edit(
-    edit: Mp4EditListEntry,
-    media: Mp4MediaTiming,
-    sample_rate: u32,
-    movie_timescale: u32,
-) -> Option<GaplessInfo> {
-    if edit.media_rate != 1 << 16 {
-        return None;
-    }
-    let media_time = u64::try_from(edit.media_time).ok()?;
-
-    let leading = scale_frames(media_time, sample_rate, media.timescale)?;
-    let valid = scale_frames(edit.segment_duration, sample_rate, movie_timescale)?;
-    let total = scale_frames(media.duration, sample_rate, media.timescale)?;
-    let trailing = total.checked_sub(leading.checked_add(valid)?)?;
-
-    if leading == 0 && trailing == 0 {
-        return None;
-    }
-
-    Some(GaplessInfo {
-        leading_frames: leading,
-        trailing_frames: trailing,
+fn declared(info: GaplessInfo, sample_rate: u32) -> Option<DeclaredGapless> {
+    Some(DeclaredGapless {
+        info,
+        rate: NonZeroU32::new(sample_rate)?,
     })
-}
-
-fn scale_frames(value: u64, numerator: u32, denominator: u32) -> Option<u64> {
-    if denominator == 0 {
-        return None;
-    }
-
-    let scaled = u128::from(value)
-        .saturating_mul(u128::from(numerator))
-        .saturating_add(u128::from(denominator / 2))
-        / u128::from(denominator);
-    u64::try_from(scaled).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
+    use kithara_bufpool::{HasPool, PoolRegion};
     use kithara_test_utils::kithara;
 
-    use super::probe_mp4_gapless;
+    use super::probe_mp4_gapless_dyn;
     use crate::{
-        GaplessInfo,
+        DecodeResult, DecoderInput, GaplessInfo,
         mp4::{Mp4EditListEntry, Mp4MediaTiming},
         test_pools::pools,
     };
+
+    fn probe_mp4_gapless<R: DecoderInput, S: HasPool<u8>>(
+        reader: &mut R,
+        pools: &PoolRegion<S>,
+    ) -> DecodeResult<Option<GaplessInfo>> {
+        Ok(probe_mp4_gapless_dyn(reader, pools)?.map(|declared| declared.info))
+    }
 
     fn atom(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let size = u32::try_from(payload.len() + 8).unwrap_or(u32::MAX);
@@ -273,8 +232,21 @@ mod tests {
     }
 
     fn track_with_elst(sample_rate: u32, media: Mp4MediaTiming, edit: Mp4EditListEntry) -> Vec<u8> {
+        track(sample_rate, media, Some(edit))
+    }
+
+    fn track(sample_rate: u32, media: Mp4MediaTiming, edit: Option<Mp4EditListEntry>) -> Vec<u8> {
+        track_with_stsd(&stsd(sample_rate), media, edit, re_mp4::TrackKind::Audio)
+    }
+
+    fn track_with_stsd(
+        description: &[u8],
+        media: Mp4MediaTiming,
+        edit: Option<Mp4EditListEntry>,
+        kind: re_mp4::TrackKind,
+    ) -> Vec<u8> {
         let mut stbl = Vec::new();
-        stbl.extend_from_slice(&stsd(sample_rate));
+        stbl.extend_from_slice(description);
 
         let minf = atom(*b"minf", &atom(*b"stbl", &stbl));
 
@@ -283,34 +255,113 @@ mod tests {
             media.timescale,
             u32::try_from(media.duration).expect("fixture duration"),
         ));
+        let mut handler = vec![0; 4];
+        handler.extend_from_slice(&u32::from(re_mp4::FourCC::from(kind)).to_be_bytes());
+        handler.extend_from_slice(&[0; 13]);
+        mdia.extend(full_box(*b"hdlr", 0, &handler));
         mdia.extend_from_slice(&minf);
-
-        let edts = atom(
-            *b"edts",
-            &elst_v0(
-                u32::try_from(edit.segment_duration).expect("fixture duration"),
-                i32::try_from(edit.media_time).expect("fixture media time"),
-            ),
-        );
 
         let mut trak = Vec::new();
         trak.extend_from_slice(&atom(*b"mdia", &mdia));
-        trak.extend_from_slice(&edts);
+        if let Some(edit) = edit {
+            trak.extend_from_slice(&atom(
+                *b"edts",
+                &elst_v0(
+                    u32::try_from(edit.segment_duration).expect("fixture duration"),
+                    i32::try_from(edit.media_time).expect("fixture media time"),
+                ),
+            ));
+        }
         atom(*b"trak", &trak)
     }
 
     #[kithara::test]
-    fn derives_gapless_from_edit_list() {
+    #[case::audio_only(false, false)]
+    #[case::video_first(true, false)]
+    #[case::another_audio_edit(false, true)]
+    fn itunsmpb_uses_the_audio_track_when_video_precedes_it(
+        #[case] video_first: bool,
+        #[case] another_audio_edit: bool,
+    ) {
+        let mut moov = mvhd(1_000);
+        if video_first {
+            let mut visual = vec![0; 78];
+            visual[6..8].copy_from_slice(&1_u16.to_be_bytes());
+            visual[24..26].copy_from_slice(&1920_u16.to_be_bytes());
+            visual[26..28].copy_from_slice(&1080_u16.to_be_bytes());
+            visual[28..32].copy_from_slice(&(72_u32 << 16).to_be_bytes());
+            visual[32..36].copy_from_slice(&(72_u32 << 16).to_be_bytes());
+            let mut description = 1_u32.to_be_bytes().to_vec();
+            description.extend(atom(*b"avc1", &visual));
+            moov.extend(track_with_stsd(
+                &full_box(*b"stsd", 0, &description),
+                Mp4MediaTiming {
+                    timescale: 90_000,
+                    duration: 0,
+                },
+                None,
+                re_mp4::TrackKind::Video,
+            ));
+        }
+        moov.extend(track(
+            48_000,
+            Mp4MediaTiming {
+                timescale: 48_000,
+                duration: 0,
+            },
+            None,
+        ));
+        if another_audio_edit {
+            moov.extend(track_with_elst(
+                32_000,
+                Mp4MediaTiming {
+                    timescale: 32_000,
+                    duration: 0,
+                },
+                Mp4EditListEntry {
+                    media_time: 3200,
+                    segment_duration: 0,
+                    media_rate: 1 << 16,
+                },
+            ));
+        }
+        let ilst = atom(
+            *b"ilst",
+            &freeform_itunsmpb(" 00000000 00000840 00000048 0000000000000000"),
+        );
+        let mut metadata = vec![0; 4];
+        metadata.extend(ilst);
+        moov.extend(atom(*b"udta", &atom(*b"meta", &metadata)));
+        let mut reader = Cursor::new(atom(*b"moov", &moov));
+        assert_eq!(
+            probe_mp4_gapless(&mut reader, &pools()).expect("audio tag probe"),
+            Some(GaplessInfo::new(2112, 72)),
+        );
+        let declared = probe_mp4_gapless_dyn(&mut reader, &pools())
+            .expect("audio declaration probe")
+            .expect("audio declaration");
+        assert_eq!(declared.rate.get(), 48_000);
+    }
+
+    #[kithara::test]
+    #[case::bounded_edit(96_000, 1_916, 1_920)]
+    #[case::open_ended_edit_of_a_known_track(96_000, 0, 0)]
+    #[case::open_ended_edit_of_a_fragmented_track(0, 0, 0)]
+    fn derives_gapless_from_edit_list(
+        #[case] media_duration: u64,
+        #[case] segment_duration: u64,
+        #[case] trailing_frames: u64,
+    ) {
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd(1_000));
         moov.extend_from_slice(&track_with_elst(
             48_000,
             Mp4MediaTiming {
                 timescale: 48_000,
-                duration: 96_000,
+                duration: media_duration,
             },
             Mp4EditListEntry {
-                segment_duration: 1_916,
+                segment_duration,
                 media_time: 2_112,
 
                 media_rate: 1 << 16,
@@ -322,13 +373,21 @@ mod tests {
             probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
-                trailing_frames: 1_920,
+                trailing_frames,
             })
         );
     }
 
+    /// Tag counts use the track's `mdhd` media timescale, including when the
+    /// sample entry names a different PCM rate.
     #[kithara::test]
-    fn derives_gapless_from_itunsmpb_when_elst_missing() {
+    #[case::media_timescale_is_the_sample_rate(48_000, 48_000)]
+    #[case::media_timescale_is_the_core_rate(48_000, 24_000)]
+    #[case::sample_entry_is_the_core_rate(22_050, 44_100)]
+    fn derives_gapless_from_itunsmpb_when_elst_missing(
+        #[case] sample_rate: u32,
+        #[case] media_timescale: u32,
+    ) {
         let ilst = atom(
             *b"ilst",
             &freeform_itunsmpb(" 00000000 00000840 00000048 0000000000000000"),
@@ -338,16 +397,25 @@ mod tests {
 
         let mut moov = Vec::new();
         moov.extend_from_slice(&mvhd(1_000));
+        moov.extend_from_slice(&track(
+            sample_rate,
+            Mp4MediaTiming {
+                timescale: media_timescale,
+                duration: 0,
+            },
+            None,
+        ));
         moov.extend_from_slice(&atom(*b"udta", &atom(*b"meta", &meta_payload)));
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
             probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
-            Some(GaplessInfo {
-                leading_frames: 0x840,
-                trailing_frames: 0x48,
-            })
+            Some(GaplessInfo::new(2112, 72)),
         );
+        let declared = probe_mp4_gapless_dyn(&mut reader, &pools())
+            .expect("audio declaration probe")
+            .expect("audio declaration");
+        assert_eq!(declared.rate.get(), media_timescale);
     }
 
     #[kithara::test]

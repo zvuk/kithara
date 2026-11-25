@@ -76,17 +76,15 @@ impl CallbackCtx {
             });
         };
         window.active = None;
-        let SizeMode::Snapshot(end) = self.size else {
-            return Err(DecodeError::InvalidData {
-                detail: "native FLAC staging requires a declared extent",
-            });
+        let limit = match self.size {
+            SizeMode::Snapshot(end) => usize::try_from(
+                u64::try_from(end)
+                    .map_err(DecodeError::backend)?
+                    .saturating_sub(start),
+            )
+            .map_or(window.bytes.len(), |len| len.min(window.bytes.len())),
+            SizeMode::Unknown => window.bytes.len(),
         };
-        let limit = usize::try_from(
-            u64::try_from(end)
-                .map_err(DecodeError::backend)?
-                .saturating_sub(start),
-        )
-        .map_or(window.bytes.len(), |len| len.min(window.bytes.len()));
         let mut source = self.source.borrow_mut();
         let previous = source.stream_position().map_err(DecodeError::backend)?;
         let read = source
@@ -106,7 +104,7 @@ impl CallbackCtx {
             .seek(SeekFrom::Start(previous))
             .map_err(DecodeError::backend)?;
         let len = read?;
-        if len < limit {
+        if len < limit && matches!(self.size, SizeMode::Snapshot(_)) {
             return Err(DecodeError::backend(Error::new(
                 ErrorKind::UnexpectedEof,
                 "native FLAC source ended before its declared extent",

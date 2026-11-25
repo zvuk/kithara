@@ -1,38 +1,110 @@
+use std::collections::BTreeSet;
+
 use serde_yaml_ng::Value;
 
 use super::{GitlabConfig, mapping, workspace_root};
 
 #[test]
-fn dependency_audit_publishes_raw_evidence_on_every_job_outcome() {
+fn quarantine_advisories_compare_dependency_inputs_to_their_base() {
     let config = GitlabConfig::load(&workspace_root());
+    let rules = config.definition("deps:advisories")["rules"]
+        .as_sequence()
+        .expect("advisory scheduling rules are a sequence");
+    assert_eq!(rules.len(), 2);
+
+    let weekly = rules[0].as_mapping().expect("the weekly rule is a mapping");
     assert_eq!(
-        config.effective_value("deps:deny", "script"),
-        Some(Value::Sequence(vec![Value::String(
-            "just ci run deps-deny".to_owned()
-        )]))
+        weekly.get("if").and_then(Value::as_str),
+        Some("$KITHARA_PIPELINE_KIND == \"weekly\"")
     );
-    let artifacts = config
-        .effective_value("deps:deny", "artifacts")
-        .expect("deps:deny must publish its raw evidence");
-    let artifacts = mapping(&artifacts, "the dependency audit artifacts");
+    assert!(!weekly.contains_key("changes"));
+
+    let quarantine = rules[1]
+        .as_mapping()
+        .expect("the quarantine rule is a mapping");
     assert_eq!(
-        artifacts.get("when").and_then(Value::as_str),
-        Some("always")
+        quarantine.get("if").and_then(Value::as_str),
+        Some("$KITHARA_PIPELINE_KIND == \"quarantine\"")
+    );
+    let changes = mapping(
+        quarantine
+            .get("changes")
+            .expect("quarantine advisories are path-gated"),
+        "quarantine advisory changes",
     );
     assert_eq!(
-        artifacts.get("expire_in").and_then(Value::as_str),
-        Some("30 days")
+        changes.get("compare_to").and_then(Value::as_str),
+        Some("$KITHARA_QUARANTINE_BASE_SHA")
     );
-    let paths = artifacts
+    let paths = changes
         .get("paths")
         .and_then(Value::as_sequence)
-        .expect("dependency evidence paths are a sequence");
-    assert_eq!(paths.len(), 2);
-    assert_eq!(paths[0].as_str(), Some(".ci-artifacts/deps-deny/"));
+        .expect("dependency input paths are a sequence")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
     assert_eq!(
-        paths[1].as_str(),
-        Some(".ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json")
+        paths,
+        BTreeSet::from([
+            "**/Cargo.toml",
+            ".cargo/config.toml",
+            "Cargo.lock",
+            "deny.toml",
+        ])
     );
+
+    let static_rules = config.definition("deps:deny")["rules"]
+        .as_sequence()
+        .expect("static dependency checks keep their scheduling rules");
+    assert!(
+        static_rules
+            .iter()
+            .filter_map(Value::as_mapping)
+            .filter(|rule| {
+                rule.get("if").and_then(Value::as_str)
+                    == Some("$KITHARA_PIPELINE_KIND == \"quarantine\"")
+            })
+            .all(|rule| !rule.contains_key("changes")),
+        "bans, licenses and sources stay unconditional on quarantine"
+    );
+}
+
+#[test]
+fn dependency_audit_publishes_raw_evidence_on_every_job_outcome() {
+    let config = GitlabConfig::load(&workspace_root());
+    for (job, lane) in [
+        ("deps:deny", "deps-deny"),
+        ("deps:advisories", "deps-advisories"),
+    ] {
+        assert_eq!(
+            config.effective_value(job, "script"),
+            Some(Value::Sequence(vec![Value::String(format!(
+                "just ci run {lane}"
+            ))]))
+        );
+        let artifacts = config
+            .effective_value(job, "artifacts")
+            .unwrap_or_else(|| panic!("{job} must publish its raw evidence"));
+        let artifacts = mapping(&artifacts, "the dependency audit artifacts");
+        assert_eq!(
+            artifacts.get("when").and_then(Value::as_str),
+            Some("always")
+        );
+        assert_eq!(
+            artifacts.get("expire_in").and_then(Value::as_str),
+            Some("30 days")
+        );
+        let paths = artifacts
+            .get("paths")
+            .and_then(Value::as_sequence)
+            .expect("dependency evidence paths are a sequence");
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0].as_str(), Some(".ci-artifacts/deps-deny/"));
+        assert_eq!(
+            paths[1].as_str(),
+            Some(".ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json")
+        );
+    }
 }
 
 #[cfg(unix)]

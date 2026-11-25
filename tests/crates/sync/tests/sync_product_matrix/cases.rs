@@ -321,6 +321,13 @@ pub(crate) const TEMPO_DOWN_30: SyncCase =
         .ride(TempoRide::Down, 30);
 pub(crate) const ONE_DECK: SyncCase =
     SyncCase::running("one-deck-runtime", 1, 48_000, OperationOrder::PlaySyncSeek);
+/// [`ONE_DECK`] on a host whose rate differs from the fixtures' 48 kHz.
+pub(crate) const ONE_DECK_RESAMPLED: SyncCase = SyncCase::running(
+    "one-deck-resampled",
+    1,
+    44_100,
+    OperationOrder::PlaySyncSeek,
+);
 /// A paused deck on a host whose rate differs from the fixtures' 48 kHz.
 pub(crate) const STAGED_CUE: SyncCase =
     SyncCase::running("staged-cue", 1, 44_100, OperationOrder::SyncPlaySeek)

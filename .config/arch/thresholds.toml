@@ -194,7 +194,7 @@ allowed_files = [
 [smoothing_primitive_sites]
 # Parameter smoothing has one primitive (firewheel `SmoothedParam`, composed
 # as `MixDSP` for A-to-B transitions). A hand-rolled one-pole or a direct
-# `SmoothingFilter` is sanctioned only in the biquad gain bank; the
+# `SmoothingFilter` is sanctioned only in the EQ gain bank; the
 # `kithara_dsp::param` facade re-exports the primitive. `patterns` names the
 # primitive and its coefficient helper; a hand-rolled one-pole is found by its
 # shape (a state stepping toward a scalar target), not by its name.

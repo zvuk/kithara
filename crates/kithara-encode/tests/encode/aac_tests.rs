@@ -1,7 +1,7 @@
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_fixtures::{
-    integration_fixtures::{encoder_saw_aac, encoder_saw_he},
+    integration_fixtures::{encoder_saw_aac, encoder_saw_flac, encoder_saw_he},
     signal::Pcm,
 };
 use kithara_test_utils::{bufpool::pools, kithara};
@@ -68,6 +68,37 @@ fn encode_packaged_aac_happy_path_emits_monotonic_access_units(encoder_saw_aac: 
         }
         expected_pts = Some(unit.pts + u64::from(unit.duration));
     }
+}
+
+#[kithara::test]
+#[case::aac_lc_priming(AudioCodec::AacLc, 128_000, encoder_saw_aac(), 1_024)]
+#[case::flac_without_delay(AudioCodec::Flac, 512_000, encoder_saw_flac(), 0)]
+fn encode_packaged_reports_the_encoder_codec_delay(
+    #[case] codec: AudioCodec,
+    #[case] bit_rate: u64,
+    #[case] pcm: Pcm,
+    #[case] codec_delay: u32,
+) {
+    let encoded = EncoderFactory::encode_packaged(
+        &pools(),
+        &PackagedEncodeRequest::builder()
+            .pcm(&pcm)
+            .media_info(
+                MediaInfo::builder()
+                    .codec(codec)
+                    .container(ContainerFormat::Fmp4)
+                    .build(),
+            )
+            .timescale(48_000)
+            .bit_rate(bit_rate)
+            .packets_per_segment(2)
+            .encoder_delay(0)
+            .trailing_delay(0)
+            .build(),
+    )
+    .unwrap_or_else(|error| panic!("encode_packaged({codec:?}) failed: {error}"));
+
+    assert_eq!(encoded.codec_delay, codec_delay);
 }
 
 #[kithara::test]

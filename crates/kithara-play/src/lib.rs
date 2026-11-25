@@ -43,10 +43,10 @@ pub use kithara_render::{
     bridge::{
         CrossfaderGain, CurveShape, CurveShapeError, DeckEqChange, DeckEvent, DeckFxChange,
         DeckMixSettings, DeckMixSettingsChange, DeckParameter, DeckPart, DeckProgram, DeckProtocol,
-        DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, FilterSnapshot, FxMix, LayoutRevision,
-        MixTapWriter, ParameterCurveError, ParameterKnot, ParameterSnapshot, PlaybackFault,
-        Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot, SlotSnapshot,
-        TrackClock, Trim,
+        DeckRefusal, DeckSnapshot, EqSnapshot, FadeDir, FilterSnapshot, FxMix, FxTarget,
+        LayoutRevision, MixTapWriter, ParameterCurveError, ParameterKnot, ParameterSnapshot,
+        PlaybackFault, Returned, RtMetricsSnapshot, Slot, SlotGainProgram, SlotOutputSnapshot,
+        SlotSnapshot, TrackClock, Trim,
     },
     dispatch,
     rt::{

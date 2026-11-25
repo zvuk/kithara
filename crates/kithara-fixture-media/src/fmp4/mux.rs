@@ -1,4 +1,7 @@
+use std::num::NonZeroU32;
+
 use kithara_encode::{EncodedAccessUnit, EncodedTrack};
+use kithara_signal::rescale_frame_round;
 use kithara_stream::AudioCodec;
 use num_traits::cast;
 use thiserror::Error;
@@ -8,17 +11,6 @@ use crate::fmp4::{
     codec::CodecDescriptor,
     gapless::GaplessEncoding,
 };
-
-/// Native priming the codec's encoder emits at the start of every track,
-/// folded into the container's `encoder_delay`/`iTunSMPB` count by the
-/// fmp4 mux so a downstream `probe_mp4_gapless` reports the same trim
-/// total `FFmpeg` would have written.
-const fn codec_native_priming_frames(codec: AudioCodec) -> u64 {
-    match codec {
-        AudioCodec::AacLc => 1024,
-        _ => 0,
-    }
-}
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -38,6 +30,18 @@ pub enum Fmp4MuxError {
     UnorderedSegmentBoundaries,
     #[error("fMP4 segment boundaries must name at least one segment")]
     MissingSegmentBoundaries,
+    #[error("MP4 timing coordinate exceeds its field range")]
+    TimingOverflow,
+    #[error(
+        "PCM trim {frames} at {sample_rate} Hz is not representable at media timescale {timescale}"
+    )]
+    UnrepresentableTrim {
+        frames: u64,
+        sample_rate: u32,
+        timescale: u32,
+    },
+    #[error("gapless trim does not leave a representable presentation")]
+    InvalidTrim,
 }
 
 /// One track packaged as fMP4: the init segment plus every media segment.
@@ -154,22 +158,24 @@ fn mux_audio_track_chunks<'a>(
         .ok_or(Fmp4MuxError::InvalidMediaInfo)?;
     let descriptor =
         CodecDescriptor::for_codec(codec).ok_or(Fmp4MuxError::UnsupportedCodec(codec))?;
-    let _ = track
-        .media_info
-        .sample_rate
-        .ok_or(Fmp4MuxError::InvalidMediaInfo)?;
+    let _ = clock_rates(track)?;
     let _ = track
         .media_info
         .channels
+        .filter(|channels| *channels != 0)
         .ok_or(Fmp4MuxError::InvalidMediaInfo)?;
 
     let chunks = chunks.into_iter().collect::<Vec<_>>();
-    let total_duration: u64 = chunks
-        .iter()
-        .flat_map(|chunk| chunk.iter())
-        .map(|unit| u64::from(unit.duration))
-        .sum();
-    let init_segment = build_init_segment(track, &descriptor, total_duration, gapless_encoding);
+    let total_duration: u64 =
+        chunks
+            .iter()
+            .flat_map(|chunk| chunk.iter())
+            .try_fold(0_u64, |total, unit| {
+                total
+                    .checked_add(u64::from(unit.duration))
+                    .ok_or(Fmp4MuxError::TimingOverflow)
+            })?;
+    let init_segment = build_init_segment(track, &descriptor, total_duration, gapless_encoding)?;
 
     let mut media_segments = Vec::new();
     let mut segment_durations_secs = Vec::new();
@@ -201,15 +207,15 @@ fn build_init_segment(
     descriptor: &CodecDescriptor,
     total_duration: u64,
     gapless_encoding: GaplessEncoding,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, Fmp4MuxError> {
     let mut bytes = ftyp_box();
     bytes.extend(moov_box(
         track,
         descriptor,
         total_duration,
         gapless_encoding,
-    ));
-    bytes
+    )?);
+    Ok(bytes)
 }
 
 fn build_media_segment(
@@ -252,20 +258,30 @@ fn moov_box(
     descriptor: &CodecDescriptor,
     total_duration: u64,
     gapless_encoding: GaplessEncoding,
-) -> Vec<u8> {
-    mp4_box(*b"moov", |buf| {
+) -> Result<Vec<u8>, Fmp4MuxError> {
+    let edit = if gapless_encoding.writes_edts() {
+        edts_box(track, total_duration)?
+    } else {
+        None
+    };
+    let tag = if gapless_encoding.writes_itunsmpb() {
+        Some(udta_itunsmpb_box(track, total_duration)?)
+    } else {
+        None
+    };
+    Ok(mp4_box(*b"moov", |buf| {
         buf.push_bytes(&mvhd_box(track.timescale, total_duration));
         buf.push_bytes(&trak_box(
             track,
             descriptor,
             total_duration,
-            gapless_encoding,
+            edit.as_deref(),
         ));
-        if gapless_encoding.writes_itunsmpb() {
-            buf.push_bytes(&udta_itunsmpb_box(track, total_duration));
+        if let Some(tag) = tag {
+            buf.push_bytes(&tag);
         }
         buf.push_bytes(&mvex_box());
-    })
+    }))
 }
 
 fn mvhd_box(timescale: u32, total_duration: u64) -> Vec<u8> {
@@ -288,46 +304,79 @@ fn trak_box(
     track: &EncodedTrack,
     descriptor: &CodecDescriptor,
     total_duration: u64,
-    gapless_encoding: GaplessEncoding,
+    edit: Option<&[u8]>,
 ) -> Vec<u8> {
     mp4_box(*b"trak", |buf| {
         buf.push_bytes(&tkhd_box(total_duration));
-        if gapless_encoding.writes_edts()
-            && let Some(edts) = edts_box(track, total_duration)
-        {
-            buf.push_bytes(&edts);
+        if let Some(edit) = edit {
+            buf.push_bytes(edit);
         }
         buf.push_bytes(&mdia_box(track, descriptor, total_duration));
     })
 }
 
-fn edts_box(track: &EncodedTrack, total_duration: u64) -> Option<Vec<u8>> {
-    let codec = track.media_info.codec?;
-    if track.encoder_delay == 0 && track.trailing_delay == 0 {
-        return None;
-    }
-    let native_priming = codec_native_priming_frames(codec);
-    let leading = u64::from(track.encoder_delay).saturating_add(native_priming);
-    let trailing_delay = u64::from(track.trailing_delay);
-
-    let valid_duration = total_duration
-        .checked_sub(leading)?
-        .checked_sub(trailing_delay)?;
-    if valid_duration == 0 {
-        return None;
-    }
-
-    Some(mp4_box(*b"edts", |buf| {
-        buf.push_bytes(&elst_box(valid_duration, leading));
-    }))
+fn clock_rates(track: &EncodedTrack) -> Result<(NonZeroU32, NonZeroU32), Fmp4MuxError> {
+    let sample_rate = track
+        .media_info
+        .sample_rate
+        .and_then(NonZeroU32::new)
+        .ok_or(Fmp4MuxError::InvalidMediaInfo)?;
+    let timescale = NonZeroU32::new(track.timescale).ok_or(Fmp4MuxError::InvalidMediaInfo)?;
+    Ok((sample_rate, timescale))
 }
 
-fn elst_box(segment_duration: u64, media_time: u64) -> Vec<u8> {
-    if u32::try_from(segment_duration).is_ok() && i32::try_from(media_time).is_ok() {
+fn trim_ticks(
+    frames: u64,
+    sample_rate: NonZeroU32,
+    timescale: NonZeroU32,
+) -> Result<u64, Fmp4MuxError> {
+    let ticks =
+        rescale_frame_round(frames, sample_rate, timescale).ok_or(Fmp4MuxError::TimingOverflow)?;
+    if rescale_frame_round(ticks, timescale, sample_rate) != Some(frames) {
+        return Err(Fmp4MuxError::UnrepresentableTrim {
+            frames,
+            sample_rate: sample_rate.get(),
+            timescale: timescale.get(),
+        });
+    }
+    Ok(ticks)
+}
+
+fn edts_box(track: &EncodedTrack, total_duration: u64) -> Result<Option<Vec<u8>>, Fmp4MuxError> {
+    let leading = leading_frames(track);
+    let trailing = u64::from(track.trailing_delay);
+    if leading == 0 && trailing == 0 {
+        return Ok(None);
+    }
+    let (sample_rate, timescale) = clock_rates(track)?;
+    let leading = trim_ticks(leading, sample_rate, timescale)?;
+    let trailing = trim_ticks(trailing, sample_rate, timescale)?;
+    let valid_duration = total_duration
+        .checked_sub(leading)
+        .and_then(|duration| duration.checked_sub(trailing))
+        .ok_or(Fmp4MuxError::InvalidTrim)?;
+    if valid_duration == 0 && trailing != 0 {
+        return Err(Fmp4MuxError::InvalidTrim);
+    }
+    let leading = i64::try_from(leading).map_err(|_| Fmp4MuxError::TimingOverflow)?;
+    Ok(Some(mp4_box(*b"edts", |buf| {
+        buf.push_bytes(&elst_box(valid_duration, leading));
+    })))
+}
+
+/// Frames before content zero: the requested padding plus the delay the
+/// codec's encoder reported.
+fn leading_frames(track: &EncodedTrack) -> u64 {
+    u64::from(track.encoder_delay) + u64::from(track.codec_delay)
+}
+
+fn elst_box(segment_duration: u64, media_time: i64) -> Vec<u8> {
+    if let (Ok(duration), Ok(start)) = (u32::try_from(segment_duration), i32::try_from(media_time))
+    {
         return full_box(*b"elst", 0, 0, |buf| {
             buf.push_u32(1);
-            buf.push_u32(u32::try_from(segment_duration).unwrap_or(u32::MAX));
-            buf.push_i32(i32::try_from(media_time).unwrap_or(i32::MAX));
+            buf.push_u32(duration);
+            buf.push_i32(start);
             buf.push_u16(1);
             buf.push_u16(0);
         });
@@ -336,7 +385,7 @@ fn elst_box(segment_duration: u64, media_time: u64) -> Vec<u8> {
     full_box(*b"elst", 1, 0, |buf| {
         buf.push_u32(1);
         buf.push_u64(segment_duration);
-        buf.push_i64(i64::try_from(media_time).unwrap_or(i64::MAX));
+        buf.push_i64(media_time);
         buf.push_u16(1);
         buf.push_u16(0);
     })
@@ -349,33 +398,31 @@ fn elst_box(segment_duration: u64, media_time: u64) -> Vec<u8> {
 /// canonical layout for the value is whitespace-separated hex tokens:
 /// `<version> <leading> <trailing> <total> ...`. We pad the tail with
 /// zero tokens so the string size matches what real-world tooling produces.
-fn udta_itunsmpb_box(track: &EncodedTrack, total_duration: u64) -> Vec<u8> {
-    let native_priming = track
-        .media_info
-        .codec
-        .map_or(0, codec_native_priming_frames);
-    let leading = u64::from(track.encoder_delay).saturating_add(native_priming);
-    let trailing = u64::from(track.trailing_delay);
-    let total_audible = total_duration
-        .saturating_sub(leading)
-        .saturating_sub(trailing);
+fn udta_itunsmpb_box(track: &EncodedTrack, total_duration: u64) -> Result<Vec<u8>, Fmp4MuxError> {
+    let (sample_rate, timescale) = clock_rates(track)?;
+    let leading = trim_ticks(leading_frames(track), sample_rate, timescale)?;
+    let trailing = trim_ticks(u64::from(track.trailing_delay), sample_rate, timescale)?;
+    let total = total_duration
+        .checked_sub(leading)
+        .and_then(|duration| duration.checked_sub(trailing))
+        .ok_or(Fmp4MuxError::InvalidTrim)?;
     let payload = format!(
         " 00000000 {leading:08X} {trailing:08X} {total:016X} \
          00000000 00000000 00000000 00000000 \
          00000000 00000000 00000000 00000000",
         leading = leading,
         trailing = trailing,
-        total = total_audible,
+        total = total,
     );
 
-    mp4_box(*b"udta", |udta| {
+    Ok(mp4_box(*b"udta", |udta| {
         udta.push_bytes(&full_box(*b"meta", 0, 0, |meta| {
             meta.push_bytes(&hdlr_meta_box());
             meta.push_bytes(&mp4_box(*b"ilst", |ilst| {
                 ilst.push_bytes(&itunsmpb_freeform_box(&payload));
             }));
         }));
-    })
+    }))
 }
 
 fn hdlr_meta_box() -> Vec<u8> {
@@ -610,6 +657,7 @@ mod tests {
             codec_config: Vec::new(),
             packets_per_segment: 2,
             encoder_delay: 0,
+            codec_delay: 1024,
             trailing_delay: 0,
             access_units: vec![
                 EncodedAccessUnit {
@@ -661,6 +709,7 @@ mod tests {
             ],
             packets_per_segment: 2,
             encoder_delay: 0,
+            codec_delay: 0,
             trailing_delay: 0,
             access_units: vec![
                 EncodedAccessUnit {
@@ -810,10 +859,144 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn unpadded_track_with_edts_encoding_skips_edit_list() {
-        let packaged = mux_audio_track(&test_track(), GaplessEncoding::Edts).unwrap();
+        let mut track = test_track();
+        track.codec_delay = 0;
+        let packaged = mux_audio_track(&track, GaplessEncoding::Edts).unwrap();
         let init = packaged.init_segment.as_slice();
 
         assert!(!has_marker(init, b"edts"));
         assert!(!has_marker(init, b"elst"));
+    }
+
+    fn edit_entry(init: &[u8]) -> (u64, i64) {
+        let at = init
+            .windows(4)
+            .position(|bytes| bytes == b"elst")
+            .expect("edit list");
+        match init[at + 4] {
+            0 => (
+                u64::from(u32::from_be_bytes(
+                    init[at + 12..at + 16].try_into().unwrap(),
+                )),
+                i64::from(i32::from_be_bytes(
+                    init[at + 16..at + 20].try_into().unwrap(),
+                )),
+            ),
+            1 => (
+                u64::from_be_bytes(init[at + 12..at + 20].try_into().unwrap()),
+                i64::from_be_bytes(init[at + 20..at + 28].try_into().unwrap()),
+            ),
+            other => panic!("unexpected edit version {other}"),
+        }
+    }
+
+    #[kithara::test(native)]
+    #[case::edts(GaplessEncoding::Edts)]
+    #[case::itunsmpb(GaplessEncoding::ItunSmpb)]
+    #[case::both(GaplessEncoding::Both)]
+    fn padding_fields_use_their_own_clocks(#[case] encoding: GaplessEncoding) {
+        let mut track = padded_track();
+        track.media_info.sample_rate = Some(48_000);
+        track.timescale = 24_000;
+        for (index, unit) in track.access_units.iter_mut().enumerate() {
+            unit.duration = 512;
+            unit.pts = index as u64 * 512;
+            unit.dts = unit.pts;
+        }
+        let package = mux_audio_track(&track, encoding).expect("representable clock domains");
+        if encoding.writes_edts() {
+            assert_eq!(edit_entry(&package.init_segment), (544, 1568));
+        }
+        if encoding.writes_itunsmpb() {
+            assert!(
+                has_marker(
+                    &package.init_segment,
+                    b" 00000000 00000620 000003C0 0000000000000220 "
+                ),
+                "SMPB total and padding are mdhd tick counts"
+            );
+        }
+    }
+
+    #[kithara::test(native)]
+    fn codec_delay_without_requested_padding_writes_an_edit() {
+        let package =
+            mux_audio_track(&test_track(), GaplessEncoding::Edts).expect("codec-only delay");
+        assert_eq!(edit_entry(&package.init_segment), (3072, 1024));
+    }
+
+    #[kithara::test(native)]
+    fn a_media_clock_that_cannot_preserve_pcm_trim_is_refused() {
+        let mut track = test_track();
+        track.media_info.sample_rate = Some(48_000);
+        track.timescale = 24_000;
+        track.codec_delay = 1025;
+        for encoding in [
+            GaplessEncoding::Edts,
+            GaplessEncoding::ItunSmpb,
+            GaplessEncoding::Both,
+        ] {
+            assert!(matches!(
+                mux_audio_track(&track, encoding),
+                Err(Fmp4MuxError::UnrepresentableTrim {
+                    frames: 1025,
+                    sample_rate: 48_000,
+                    timescale: 24_000
+                })
+            ));
+        }
+    }
+
+    #[kithara::test(native)]
+    fn an_edit_at_the_media_end_keeps_the_open_ended_rule() {
+        let mut track = test_track();
+        track.access_units.truncate(1);
+        let package =
+            mux_audio_track(&track, GaplessEncoding::Edts).expect("empty open-ended edit");
+        assert_eq!(edit_entry(&package.init_segment), (0, 1024));
+        track.trailing_delay = 1;
+        assert!(matches!(
+            mux_audio_track(&track, GaplessEncoding::Edts),
+            Err(Fmp4MuxError::InvalidTrim)
+        ));
+    }
+
+    #[kithara::test(native)]
+    fn wide_edit_fields_keep_their_exact_coordinates() {
+        let duration = u64::from(u32::MAX) + 1;
+        let media_time = i64::from(i32::MAX) + 1;
+        assert_eq!(
+            edit_entry(&elst_box(duration, media_time)),
+            (duration, media_time)
+        );
+    }
+
+    #[kithara::test(native)]
+    fn untagged_and_equal_clock_bytes_stay_stable() {
+        let mut control = Vec::new();
+        for track in [test_track(), flac_track()] {
+            control.extend(Vec::<u8>::from(
+                mux_audio_track(&track, GaplessEncoding::None).expect("untagged control"),
+            ));
+        }
+        for encoding in [
+            GaplessEncoding::Edts,
+            GaplessEncoding::ItunSmpb,
+            GaplessEncoding::Both,
+        ] {
+            control.extend(Vec::<u8>::from(
+                mux_audio_track(&padded_track(), encoding).expect("equal-clock control"),
+            ));
+        }
+        let key = crate::store::formatted_asset_id("mux_controls", "unchanged", &control);
+        kithara_test_utils::tracing::warn!(
+            key,
+            bytes = control.len(),
+            "unchanged MP4 wire domains"
+        );
+        assert_eq!(
+            key, "dd9caf25e476d62211f9f042d662e4a5",
+            "untagged and equal-clock bytes changed"
+        );
     }
 }

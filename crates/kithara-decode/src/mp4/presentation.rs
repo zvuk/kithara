@@ -3,63 +3,65 @@ use std::ops::ControlFlow;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::time::Duration;
 
-use super::{Mp4EditListEntry, Mp4Event, Mp4MediaTiming, scan_mp4};
-use crate::{DecodeResult, DecoderInput, GaplessInfo, gapless::derive_from_edit};
+use super::{Mp4Event, Mp4MediaTiming, TrackEdit, scan_mp4};
+use crate::{DecodeResult, DecoderInput, gapless::DeclaredGapless};
 
 pub(crate) struct Presentation {
     pub(crate) track_id: u32,
     pub(crate) media_origin: Option<Duration>,
     pub(crate) media_end: Option<Duration>,
-    pub(crate) gapless: Option<GaplessInfo>,
-}
-
-#[derive(Clone, Copy, Default)]
-enum Edit {
-    #[default]
-    Identity,
-    Offset(Mp4EditListEntry),
-    Unsupported,
+    pub(crate) gapless: Option<DeclaredGapless>,
+    declaration_rate: u32,
 }
 
 #[derive(Default)]
 struct Track {
+    kind: Option<re_mp4::TrackKind>,
     id: Option<u32>,
     media: Option<Mp4MediaTiming>,
     sample_rate: Option<u32>,
-    edit: Edit,
+    edit: TrackEdit,
 }
 
 impl Track {
     fn presentation(self, movie_timescale: Option<u32>) -> Option<Presentation> {
+        if self.kind != Some(re_mp4::TrackKind::Audio) {
+            return None;
+        }
         let track_id = self.id?;
         let media = self.media?;
         let sample_rate = self.sample_rate?;
-        let gapless = match self.edit {
-            Edit::Offset(edit) => {
-                movie_timescale.and_then(|scale| derive_from_edit(edit, media, sample_rate, scale))
-            }
-            Edit::Identity | Edit::Unsupported => None,
-        };
+        let gapless = self
+            .edit
+            .gapless(media, sample_rate, movie_timescale)
+            .and_then(|info| {
+                Some(DeclaredGapless {
+                    info,
+                    rate: std::num::NonZeroU32::new(sample_rate)?,
+                })
+            });
         let (media_origin, media_end) = match self.edit {
-            Edit::Identity => (
+            TrackEdit::Identity => (
                 Some(Duration::ZERO),
                 duration(media.duration, media.timescale).filter(|end| !end.is_zero()),
             ),
-            Edit::Offset(edit) => (
-                u64::try_from(edit.media_time)
-                    .ok()
-                    .and_then(|time| duration(time, media.timescale)),
-                movie_timescale
-                    .and_then(|scale| duration(edit.segment_duration, scale))
-                    .filter(|end| !end.is_zero()),
+            TrackEdit::Offset {
+                media_time,
+                segment,
+            } => (
+                duration(media_time, media.timescale),
+                segment
+                    .zip(movie_timescale)
+                    .and_then(|(segment, scale)| duration(segment.get(), scale)),
             ),
-            Edit::Unsupported => (None, None),
+            TrackEdit::Unsupported => (None, None),
         };
         Some(Presentation {
             track_id,
             media_origin,
             media_end,
             gapless,
+            declaration_rate: media.timescale,
         })
     }
 }
@@ -81,6 +83,11 @@ where
             match event {
                 Mp4Event::MovieTimescale(scale) => movie_timescale = Some(scale),
                 Mp4Event::TrackBegin => track = Some(Track::default()),
+                Mp4Event::TrackKind(kind) => {
+                    if let Some(track) = &mut track {
+                        track.kind = Some(kind);
+                    }
+                }
                 Mp4Event::TrackId(id) => {
                     if let Some(track) = &mut track {
                         track.id = Some(id);
@@ -96,23 +103,10 @@ where
                         track.sample_rate = Some(rate);
                     }
                 }
-                Mp4Event::ItunSmpb(info) => {
-                    if info.leading_frames != 0 || info.trailing_frames != 0 {
-                        itunsmpb = Some(GaplessInfo {
-                            leading_frames: info.leading_frames,
-                            trailing_frames: info.trailing_frames,
-                        });
-                    }
-                }
+                Mp4Event::ItunSmpb(info) => itunsmpb = Some(info),
                 Mp4Event::TrackEditList(edits) => {
                     if let Some(track) = &mut track {
-                        track.edit = match edits {
-                            [] => Edit::Identity,
-                            [edit] if edit.media_time >= 0 && edit.media_rate == 1 << 16 => {
-                                Edit::Offset(*edit)
-                            }
-                            _ => Edit::Unsupported,
-                        };
+                        track.edit = TrackEdit::from(edits);
                     }
                 }
                 Mp4Event::TrackEnd => {
@@ -129,8 +123,15 @@ where
         pools,
     )
     .map_err(|error| crate::DecodeError::parse("mp4 presentation", error))?;
-    if let [presentation] = result.as_mut_slice() {
-        presentation.gapless = presentation.gapless.or(itunsmpb);
+    if let [presentation] = result.as_mut_slice()
+        && presentation.gapless.is_none()
+    {
+        presentation.gapless = itunsmpb.and_then(|info| {
+            Some(DeclaredGapless {
+                info: info.gapless()?,
+                rate: std::num::NonZeroU32::new(presentation.declaration_rate)?,
+            })
+        });
     }
     Ok(result)
 }

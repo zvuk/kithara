@@ -38,6 +38,7 @@ pub(crate) struct FfmpegStream {
     next_pts: i64,
     channels: u16,
     sample_rate: u32,
+    encoder_delay_frames: u32,
 }
 
 impl FfmpegStream {
@@ -78,6 +79,13 @@ impl FfmpegStream {
         encoder.set_time_base((1, rate));
 
         let encoder = encoder.open_as_with(output_codec, Dictionary::new())?;
+        // SAFETY: `encoder` owns an opened codec context for its whole lifetime.
+        let initial_padding = unsafe { (*encoder.as_ptr()).initial_padding };
+        let encoder_delay_frames = u32::try_from(initial_padding).map_err(|_| {
+            EncodeError::backend_message(format!(
+                "FFmpeg AAC reports a negative initial padding {initial_padding}"
+            ))
+        })?;
         let filter = build_direct_filter(&encoder, sample_rate, channels, consts::INPUT_FORMAT)?;
 
         Ok(Self {
@@ -91,6 +99,7 @@ impl FfmpegStream {
             },
             timestamp_origin: None,
             next_pts: 0,
+            encoder_delay_frames,
         })
     }
 
@@ -112,6 +121,10 @@ impl FfmpegStream {
 }
 
 impl AacStream for FfmpegStream {
+    fn encoder_delay_frames(&self) -> Option<u32> {
+        Some(self.encoder_delay_frames)
+    }
+
     fn finish(mut self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>> {
         flush_filter(&mut self.filter)?;
         let mut units = self.drain_filter()?;

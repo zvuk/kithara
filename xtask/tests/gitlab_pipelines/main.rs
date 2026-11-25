@@ -1573,6 +1573,7 @@ fn native_dependency_audits_retain_the_linux_fleet_and_host_cache() {
     let lanes = lane_catalog(&workspace_root());
     for name in [
         "deps-deny",
+        "deps-advisories",
         "deps-unused",
         "deps-shear",
         "deps-features-full",
