@@ -6,15 +6,30 @@ use std::{
     process::Stdio,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use sha2::{Digest as _, Sha256};
 use tracing::info;
 
 use super::profile::{LinuxHost, parse_subnet};
 use crate::{ci::process::Process, consts};
 
+/// Require bridge-local `IPv4` traffic to traverse the same fence as routed traffic.
+pub(super) fn require_bridge_filtering(process: &Process) -> Result<()> {
+    let enabled = process.capture(
+        "sysctl",
+        &["-n", consts::HOST_BRIDGE_IPV4_FILTER],
+        "read IPv4 bridge filtering",
+    )?;
+    ensure!(
+        enabled.trim() == "1",
+        "IPv4 bridge filtering must be enabled before publishing a runner fence"
+    );
+    Ok(())
+}
+
 /// Replace only this subnet's owned policy in one filter-table transaction.
 pub(super) fn apply(process: &Process, host: &LinuxHost) -> Result<()> {
+    require_bridge_filtering(process)?;
     let mut existing = BTreeMap::new();
     for hook in ["DOCKER-USER", "INPUT"] {
         existing.insert(
@@ -25,12 +40,21 @@ pub(super) fn apply(process: &Process, host: &LinuxHost) -> Result<()> {
     let text = transaction(host, &existing)?;
     let mut input = tempfile::tempfile().context("stage subnet fence transaction")?;
     input.write_all(text.as_bytes())?;
-    input.rewind()?;
-    let mut command = process.command("iptables-restore");
-    command
-        .args(["--noflush", "--wait", "5"])
-        .stdin(Stdio::from(input));
-    process.run_command(&mut command, "replace owned subnet fence")?;
+    for (args, label) in [
+        (
+            &["--test", "--noflush", "--wait", "5"][..],
+            "validate owned subnet fence",
+        ),
+        (
+            &["--noflush", "--wait", "5"][..],
+            "replace owned subnet fence",
+        ),
+    ] {
+        input.rewind()?;
+        let mut command = process.command("iptables-restore");
+        command.args(args).stdin(Stdio::from(input.try_clone()?));
+        process.run_command(&mut command, label)?;
+    }
     info!(subnet = host.subnet, "runner subnet fenced");
     Ok(())
 }
@@ -127,6 +151,47 @@ fn transaction(host: &LinuxHost, existing: &BTreeMap<&str, String>) -> Result<St
 mod tests {
     use super::*;
     use crate::ci::{host::linux::profile::tests::gitlab_fixture, process::Recording};
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_or_disabled_bridge_filtering_cannot_mutate_firewall() {
+        use std::ffi::OsString;
+
+        use crate::testing::install_double;
+
+        for (failure, answer) in [("sysctl:*:*=1", ""), ("", "0\n")] {
+            let directory = tempfile::tempdir().unwrap();
+            let bin = directory.path().join("bin");
+            for program in ["sysctl", "iptables", "iptables-restore"] {
+                install_double(&bin, program);
+            }
+            let trace = directory.path().join("trace");
+            let process = Process::new(
+                directory.path(),
+                BTreeMap::from([
+                    (OsString::from("PATH"), bin.into_os_string()),
+                    (
+                        OsString::from("KITHARA_TEST_TRACE"),
+                        trace.clone().into_os_string(),
+                    ),
+                    (OsString::from("KITHARA_TEST_RULES"), failure.into()),
+                    (OsString::from("KITHARA_TEST_STDOUT"), answer.into()),
+                ]),
+            );
+            let args = ["-n", "net.bridge.bridge-nf-call-iptables"];
+            let probe = process.capture("sysctl", &args, "verify bridge fixture");
+            assert_eq!(probe.is_err(), !failure.is_empty());
+            if failure.is_empty() {
+                assert_eq!(probe.unwrap(), "0");
+            }
+            let result = apply(&process, &gitlab_fixture());
+            let trace = std::fs::read_to_string(trace).unwrap();
+            assert!(
+                result.is_err() && trace.lines().all(|line| line == args.join(" ")),
+                "{result:?}, native_commands={trace:?}"
+            );
+        }
+    }
 
     fn first_verdict<'a>(
         policy: &'a [Vec<String>],
@@ -294,7 +359,11 @@ mod tests {
         )));
         assert!(!next.contains("-F INPUT\n") && !next.contains("-F DOCKER-USER\n"));
         assert!(next.ends_with("COMMIT\n"));
-        let process = Process::recording(std::path::Path::new("."), Recording::default());
+        let process = Process::recording(
+            std::path::Path::new("."),
+            Recording::default()
+                .with_reply(&["sysctl", "-n", "net.bridge.bridge-nf-call-iptables"], "1"),
+        );
         apply(&process, &host).unwrap();
         let recorded = process.recorded().unwrap();
         assert_eq!(
@@ -303,13 +372,24 @@ mod tests {
                 .iter()
                 .filter(|step| step.program == "iptables-restore")
                 .count(),
-            1
+            2
         );
-        assert!(
-            recorded
-                .steps()
-                .iter()
-                .all(|step| step.program == "iptables" || step.program == "iptables-restore")
+        assert!(recorded.steps().iter().all(|step| matches!(
+            step.program.as_str(),
+            "sysctl" | "iptables" | "iptables-restore"
+        )));
+        let restores: Vec<_> = recorded
+            .steps()
+            .iter()
+            .filter(|step| step.program == "iptables-restore")
+            .map(|step| step.args.clone())
+            .collect();
+        assert_eq!(
+            restores,
+            vec![
+                vec!["--test", "--noflush", "--wait", "5"],
+                vec!["--noflush", "--wait", "5"],
+            ]
         );
     }
 }

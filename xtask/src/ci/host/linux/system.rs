@@ -1,3 +1,5 @@
+use std::io::Write as _;
+
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
@@ -13,6 +15,7 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
     require_linux()?;
     require_devices(host)?;
     process.require_tools(&["docker"])?;
+    prepare_bridge_filtering(process)?;
 
     std::fs::create_dir_all(&host.cache_root)
         .with_context(|| format!("creating {}", host.cache_root.display()))?;
@@ -48,6 +51,41 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
     }
     info!(network = host.network, "runner machine prepared");
     Ok(())
+}
+
+fn prepare_bridge_filtering(process: &Process) -> Result<()> {
+    process.require_tools(&["install", "modprobe", "sysctl"])?;
+    let module = "br_netfilter";
+    let sysctl = "/etc/sysctl.d/90-kithara-ci-bridge.conf";
+    for (path, contents) in [
+        ("/etc/modules-load.d/kithara-ci.conf", format!("{module}\n")),
+        (sysctl, format!("{}=1\n", consts::HOST_BRIDGE_IPV4_FILTER)),
+    ] {
+        let mut input =
+            tempfile::NamedTempFile::new().context("stage bridge filter configuration")?;
+        input.write_all(contents.as_bytes())?;
+        process.run(
+            "install",
+            &[
+                "-D",
+                "-m",
+                "0644",
+                input
+                    .path()
+                    .to_str()
+                    .context("bridge configuration path is not UTF-8")?,
+                path,
+            ],
+            "persist bridge filtering",
+        )?;
+    }
+    process.run("modprobe", &[module], "load bridge netfilter")?;
+    process.run(
+        "sysctl",
+        &["--load", sysctl],
+        "enable IPv4 bridge filtering",
+    )?;
+    super::firewall::require_bridge_filtering(process)
 }
 
 pub(super) fn require_devices(host: &LinuxHost) -> Result<()> {
@@ -198,10 +236,46 @@ mod tests {
     #[test]
     fn ordinary_gitlab_checks_need_no_virtual_machine_or_gpu_packages() {
         let host = super::super::profile::tests::gitlab_fixture();
-        assert_eq!(required_packages(&host), vec!["iptables"]);
+        assert_eq!(required_packages(&host), vec!["iptables", "kmod", "procps"]);
         let host = host_fixture();
         assert!(required_packages(&host).contains(&"qemu-system-x86"));
         assert!(!required_packages(&host).contains(&"nvidia-container-toolkit"));
+    }
+
+    #[test]
+    fn bootstrap_persists_bridge_filtering_before_loading_and_verifying_it() {
+        use crate::ci::process::Recording;
+
+        let process = Process::recording(
+            std::path::Path::new("."),
+            Recording::default()
+                .with_reply(&["sysctl", "-n", "net.bridge.bridge-nf-call-iptables"], "1"),
+        );
+        prepare_bridge_filtering(&process).unwrap();
+        let recorded = process.recorded().unwrap();
+        let steps: Vec<_> = recorded
+            .steps()
+            .iter()
+            .filter(|step| !step.program.starts_with('<'))
+            .collect();
+        for (step, destination) in steps.iter().zip([
+            "/etc/modules-load.d/kithara-ci.conf",
+            "/etc/sysctl.d/90-kithara-ci-bridge.conf",
+        ]) {
+            assert_eq!(step.program, "install");
+            assert_eq!(&step.args[..3], ["-D", "-m", "0644"]);
+            assert_eq!(step.args.last().unwrap(), destination);
+        }
+        assert_eq!(steps.len(), 5);
+        assert_eq!(steps[2].program, "modprobe");
+        assert_eq!(steps[2].args, ["br_netfilter"]);
+        assert_eq!(steps[3].program, "sysctl");
+        assert_eq!(
+            steps[3].args,
+            ["--load", "/etc/sysctl.d/90-kithara-ci-bridge.conf"]
+        );
+        assert_eq!(steps[4].program, "sysctl");
+        assert_eq!(steps[4].args, ["-n", "net.bridge.bridge-nf-call-iptables"]);
     }
 
     /// A machine holds the images its units start from, under the tag the

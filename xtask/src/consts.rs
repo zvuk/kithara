@@ -559,7 +559,10 @@ pub(crate) const API_VERSION: &str = "X-GitHub-Api-Version";
 /// machine's, so it is written beside the code that mounts into that image.
 pub(crate) const JOB_USER: u32 = 1000;
 
-pub(crate) const HOST_PACKAGES: [&str; 1] = ["iptables"];
+/// Kernel switch routing bridge-local `IPv4` through the host filter.
+pub(crate) const HOST_BRIDGE_IPV4_FILTER: &str = "net.bridge.bridge-nf-call-iptables";
+
+pub(crate) const HOST_PACKAGES: [&str; 3] = ["iptables", "kmod", "procps"];
 
 pub(crate) const HOST_VM_PACKAGES: [&str; 8] = [
     "dnsmasq-base",
