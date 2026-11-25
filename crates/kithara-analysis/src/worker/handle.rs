@@ -5,7 +5,7 @@ use kithara_bufpool::{HasPool, PoolError};
 use kithara_platform::{
     CancelGroup, CancelScope, CancelToken,
     sync::{Mutex, mpsc},
-    tokio::sync::watch,
+    tokio::sync::{oneshot, watch},
 };
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{
@@ -14,7 +14,9 @@ use kithara_worker::{
 };
 use tracing::warn;
 
-use super::{AnalysisNode, AnalysisObserver, AnalysisWorkerConfig, Job};
+use super::{
+    AnalysisCompletion, AnalysisError, AnalysisNode, AnalysisObserver, AnalysisWorkerConfig, Job,
+};
 use crate::{
     AnalysisFileError, AnalysisProgress,
     analyzer::{AnalysisDemand, AnalysisFingerprint, AnalysisToken},
@@ -68,6 +70,12 @@ pub type AnalysisOpen = (
     watch::Receiver<Option<AnalysisProgress>>,
     AnalysisProducer,
     AnalysisPass,
+);
+
+type AnalysisRun = (
+    watch::Receiver<Option<AnalysisProgress>>,
+    AnalysisProducer,
+    AnalysisCompletion,
 );
 
 impl AnalysisPass {
@@ -139,8 +147,16 @@ impl AnalysisWorker {
         let pools = builder.pools().clone();
         let open_ring: OpenRing = Box::new(move |rate| ring::open_for(&pools, rate));
         let job_dispatcher = dispatcher.clone();
-        let start_job: StartJob = Box::new(move |job, completion| {
-            let pending = job_dispatcher.reserve(task_config.clone())?;
+        let start_job: StartJob = Box::new(move |mut job, completion| {
+            let pending = match job_dispatcher.reserve(task_config.clone()) {
+                Ok(pending) => pending,
+                Err(error) => {
+                    if let Some(report) = job.report.take() {
+                        report.send(Err(AnalysisError::Rejected(error))).ok();
+                    }
+                    return Err(error);
+                }
+            };
             let (jobs, receiver) = mpsc::channel();
             if jobs.send(job).is_err() {
                 return Err(TaskError::Stopped);
@@ -174,8 +190,8 @@ impl AnalysisWorker {
     }
 
     /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
-    /// another axis is refused. Returns where its snapshots arrive and the
-    /// producer another component may contribute decoded ranges through.
+    /// another axis is refused. Returns progressive snapshots, the producer
+    /// for decoded ranges, and the pass's terminal completion handle.
     ///
     /// # Errors
     ///
@@ -188,10 +204,10 @@ impl AnalysisWorker {
         rate: NonZeroU32,
         revision: u64,
         demand: AnalysisDemand,
-    ) -> Result<(watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer), PoolError> {
+    ) -> Result<AnalysisRun, PoolError> {
         let (rx, producer, pass) = self.open(token, rate, revision, demand)?;
-        self.start(pass, reader);
-        Ok((rx, producer))
+        let completion = self.start(pass, reader);
+        Ok((rx, producer, completion))
     }
 
     /// Identity of the analyzers that survived worker initialization.
@@ -294,8 +310,9 @@ impl AnalysisWorker {
 
     /// Start an already-open pass, fresh or resumed, with its fallback
     /// reader. A resumed pass re-proves what the reader claims past the
-    /// checkpoint's extent the way a fresh pass proves it.
-    pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
+    /// checkpoint's extent the way a fresh pass proves it. Returns the pass's
+    /// terminal completion handle.
+    pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) -> AnalysisCompletion {
         let AnalysisPass {
             cancel,
             ingest,
@@ -306,6 +323,8 @@ impl AnalysisWorker {
             tx,
             resume,
         } = pass;
+        let (report, reported) = oneshot::channel();
+        let completion = AnalysisCompletion::new(reported, tx.subscribe(), cancel.clone());
         self.submit(Job {
             demand,
             token,
@@ -316,7 +335,9 @@ impl AnalysisWorker {
             ingest,
             tx,
             revision,
+            report: Some(report),
         });
+        completion
     }
 
     fn submit(&self, job: Job) {

@@ -29,7 +29,7 @@ use super::{
     node::NodeHarness,
 };
 use crate::{
-    AnalysisProgress, consts,
+    AnalysisCompletion, AnalysisOutcome, AnalysisProgress, consts,
     test_pools::{TestPools, pools},
 };
 
@@ -313,6 +313,7 @@ where
     log: Log,
     node: NodeHarness<B, S>,
     results: watch::Receiver<Option<AnalysisProgress>>,
+    completion: Option<AnalysisCompletion>,
     _jobs: mpsc::Sender<Job>,
 }
 
@@ -400,17 +401,21 @@ where
         let log = source.log();
         let (jobs, receiver) = mpsc::channel();
         let (tx, results) = watch::channel(None);
+        let (report, reported) = kithara_platform::tokio::sync::oneshot::channel();
+        let cancel = CancelToken::root();
+        let completion = AnalysisCompletion::new(reported, results.clone(), cancel.clone());
         let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
         jobs.send(Job {
             tx,
             rate,
             ingest,
+            cancel,
             demand: AnalysisDemand::ALL,
             token: consts::SCHEDULE_TOKEN.into(),
             revision: 0,
             reader: Box::new(source),
-            cancel: CancelToken::root(),
             resume: None,
+            report: Some(report),
         })
         .expect("analysis node accepts the test job");
 
@@ -418,6 +423,7 @@ where
             pcm,
             log,
             results,
+            completion: Some(completion),
             _jobs: jobs,
             node: NodeHarness::with_settings(
                 builder,
@@ -1049,6 +1055,17 @@ async fn a_decode_error_still_publishes_what_the_pass_covered(analysis_pcm: &'st
         !analysis.missing().is_empty(),
         "the rest of the track is reported missing, not silently dropped"
     );
+    let completion = pass.completion.take().expect("the pass has a completion");
+    let AnalysisOutcome::Failed {
+        error: crate::AnalysisError::Read(_),
+        last: Some(last),
+    } = completion.outcome().await
+    else {
+        panic!("read failure carries the last partial publication");
+    };
+    assert!(!last.analysis().is_settled());
+    assert_eq!(last.analysis().revision(), analysis.revision());
+    assert_eq!(last.analysis().missing(), analysis.missing());
 }
 
 #[kithara::test]
@@ -1221,4 +1238,24 @@ mod artifacts {
             "half offered, half scheduled",
         );
     }
+}
+
+#[kithara::test]
+async fn a_source_hole_reports_incomplete(analysis_pcm: &'static [f32]) {
+    const FLOOR: u64 = 1000;
+    let mut pass = Pass::open(
+        Source::new(analysis_pcm, consts::SCHEDULE_EXTENT).flooring(FLOOR),
+        scheduled(consts::SCHEDULE_WINDOW_SECONDS),
+    );
+    assert_eq!(pass.drive(consts::TICKS).await, Drive::Ended);
+    let last = pass.analysis();
+    let completion = pass.completion.take().expect("the pass has a completion");
+    let AnalysisOutcome::Incomplete(progress) = completion.outcome().await else {
+        panic!("unreachable source coverage must report incomplete");
+    };
+    assert!(progress.analysis().is_settled());
+    assert!(!progress.analysis().is_complete());
+    assert_eq!(progress.analysis().missing(), vec![0..FLOOR]);
+    assert_eq!(progress.analysis().missing(), last.missing());
+    assert_eq!(progress.analysis().revision(), last.revision());
 }
