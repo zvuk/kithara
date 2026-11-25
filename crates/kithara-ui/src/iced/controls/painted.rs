@@ -16,7 +16,7 @@ use iced::{
     mouse::{self, Cursor},
     widget::canvas::Action,
 };
-use kithara_platform::time::Instant;
+use kithara_platform::{sync::Arc, time::Instant};
 use kithara_test_macros as kithara;
 
 use crate::{
@@ -188,6 +188,24 @@ where
         let mut text = self.text.borrow_mut();
         with(text.get_or_insert_with(|| resources.into()))
     }
+}
+
+/// Keeps shaping bound to the skin's exact immutable resource owner.
+pub(crate) fn shaped_with_resources<T>(
+    kept: &RefCell<Option<(Arc<TextResources>, TextContext)>>,
+    resources: &Arc<TextResources>,
+    with: impl FnOnce(&mut TextContext) -> T,
+) -> T {
+    let mut kept = kept.borrow_mut();
+    if kept
+        .as_ref()
+        .is_some_and(|(owner, _)| !Arc::ptr_eq(owner, resources))
+    {
+        *kept = None;
+    }
+    let (_, text) =
+        kept.get_or_insert_with(|| (Arc::clone(resources), TextContext::from(resources.as_ref())));
+    with(text)
 }
 
 impl<'skin, Painter> Paint<'skin, Painter>
@@ -2534,5 +2552,155 @@ mod cached {
             Marked::Changed,
             "a checkbox must not be left showing a switch"
         );
+    }
+}
+
+#[cfg(test)]
+pub(super) mod picture_tests {
+    use iced::{Font, Pixels, Rectangle, Renderer, Size};
+    use iced_tiny_skia::{Layer, Primitive};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{
+        builtin,
+        ids::SourceUri,
+        shaping::{FontId, FontPolicy, GlyphFace},
+        skin::{TextRoleSkin, parse_skin_over},
+    };
+
+    pub(crate) const WORDS: &str = "WWWWiiii";
+
+    pub(crate) fn skin(font: FontId) -> Skin {
+        let origin = SourceUri("theme/skin.ron".into());
+        let document = parse_skin_over(
+            builtin::skin_doc(),
+            r#"(schema: "kithara.skin", version: 1, id: "owned-font",
+                fonts: {Sans: ["face.ttf"], Mono: ["face.ttf"], Display: ["face.ttf"]})"#,
+            &origin,
+        )
+        .unwrap();
+        let mut resolver = builtin::resolver();
+        resolver.insert_bytes("theme/face.ttf", font.bytes());
+        Skin::resolve_with_font_policy(
+            document,
+            builtin::text_doc(),
+            &origin,
+            &resolver,
+            FontPolicy::Embedded,
+        )
+        .unwrap()
+    }
+
+    pub(crate) fn assert_font(skin: &Skin, role: TextRoleSkin, font: FontId) {
+        let run = TextContext::from(skin.text_resources.as_ref()).shape(WORDS, role, None);
+        assert!(!run.segments().is_empty());
+        for segment in run.segments() {
+            let GlyphFace::System(data) = segment.face() else {
+                panic!("the drawn role must use the explicitly supplied font bytes");
+            };
+            assert_eq!(data.data.as_ref(), font.bytes());
+            assert!(segment.glyphs().iter().all(|glyph| glyph.id != 0));
+        }
+    }
+
+    pub(crate) fn renderer() -> Renderer {
+        Renderer::Secondary(iced_tiny_skia::Renderer::new(Font::DEFAULT, Pixels(14.0)))
+    }
+
+    pub(crate) fn reset(renderer: &mut Renderer) {
+        renderer.reset(Rectangle::with_size(Size::new(640.0, 480.0)));
+    }
+
+    pub(crate) fn layer(renderer: &mut Renderer) -> Layer {
+        let Renderer::Secondary(renderer) = renderer else {
+            panic!("the structural witness uses TinySkia");
+        };
+        let layers: Vec<_> = renderer
+            .layers()
+            .iter()
+            .filter(|layer| !layer.primitives.is_empty())
+            .collect();
+        assert_eq!(layers.len(), 1);
+        assert!(
+            layers[0]
+                .primitives
+                .iter()
+                .all(|item| !item.as_slice().is_empty())
+        );
+        (*layers[0]).clone()
+    }
+
+    pub(crate) fn primitives(layer: &Layer) -> Vec<&Primitive> {
+        layer
+            .primitives
+            .iter()
+            .flat_map(|item| item.as_slice().iter())
+            .collect()
+    }
+
+    pub(crate) fn assert_picture(actual: &Layer, fresh: &Layer) {
+        assert_eq!(actual.bounds, fresh.bounds);
+        assert!(actual.quads.is_empty() && fresh.quads.is_empty());
+        assert!(actual.images.is_empty() && fresh.images.is_empty());
+        assert!(actual.text.iter().all(|item| item.as_slice().is_empty()));
+        assert!(fresh.text.iter().all(|item| item.as_slice().is_empty()));
+        assert_eq!(actual.primitives.len(), fresh.primitives.len());
+        assert!(!actual.primitives.is_empty());
+        for (actual, fresh) in actual.primitives.iter().zip(&fresh.primitives) {
+            assert_eq!(actual.as_slice(), fresh.as_slice());
+            assert_eq!(actual.transformation(), fresh.transformation());
+            assert_eq!(actual.clip_bounds(), fresh.clip_bounds());
+        }
+    }
+
+    pub(crate) fn assert_reused(first: &Layer, next: &Layer) {
+        assert_eq!(first.primitives.len(), next.primitives.len());
+        assert!(!first.primitives.is_empty());
+        for (first, next) in first.primitives.iter().zip(&next.primitives) {
+            assert!(!first.as_slice().is_empty());
+            assert_eq!(first.as_slice().as_ptr(), next.as_slice().as_ptr());
+        }
+    }
+
+    pub(crate) fn assert_changed(first: &Layer, next: &Layer) {
+        assert!(!first.primitives.is_empty() && !next.primitives.is_empty());
+        assert_ne!(
+            first.primitives[0].as_slice().as_ptr(),
+            next.primitives[0].as_slice().as_ptr(),
+        );
+        assert_ne!(primitives(first), primitives(next));
+    }
+
+    #[kithara::test]
+    fn retained_shaping_reconciles_equal_maps_with_distinct_resource_owners() {
+        let first = skin(FontId::InterRegular);
+        let second = skin(FontId::InterRegular);
+        assert_eq!(first.text_resources, second.text_resources);
+        assert!(!Arc::ptr_eq(&first.text_resources, &second.text_resources));
+        let kept = RefCell::default();
+        let before = shaped_with_resources(&kept, &first.text_resources, |text| {
+            text.shape(WORDS, first.chrome.chip_text, None)
+        });
+        let after = shaped_with_resources(&kept, &second.text_resources, |text| {
+            text.shape(WORDS, second.chrome.chip_text, None)
+        });
+        let fresh = TextContext::from(second.text_resources.as_ref()).shape(
+            WORDS,
+            second.chrome.chip_text,
+            None,
+        );
+        let fresh_first = TextContext::from(first.text_resources.as_ref()).shape(
+            WORDS,
+            first.chrome.chip_text,
+            None,
+        );
+        assert_eq!(before, fresh_first);
+        assert_eq!(after, fresh);
+        let current = kept.borrow();
+        assert!(Arc::ptr_eq(
+            &current.as_ref().unwrap().0,
+            &second.text_resources
+        ));
     }
 }

@@ -122,6 +122,21 @@ where
     }
 }
 
+impl Marks<()> {
+    /// Retains an already-built picture without cloning a drawing key or value.
+    pub(crate) fn picture(&self, picture: DrawList) -> Marked {
+        let mut kept = self.kept.borrow_mut();
+        if kept.value() == Some(&picture) {
+            return Marked::Same;
+        }
+        self.geometry.clear();
+        let mut next = CachedValue::default();
+        next.update(None, Some(picture));
+        *kept = next;
+        Marked::Changed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
@@ -228,5 +243,22 @@ mod tests {
             )),
             Marked::Kept
         );
+    }
+
+    #[kithara::test]
+    fn already_built_picture_is_moved_once_and_compared_without_a_drawlist_key() {
+        let marks: Marks<()> = Marks::default();
+        let first = filled(1.0);
+        let backing = first.commands().as_ptr();
+        assert_eq!(marks.picture(first), Marked::Changed);
+        marks.drawn(|_, kept| assert_eq!(kept.commands().as_ptr(), backing));
+        assert_eq!(marks.kept.borrow().key(), &None);
+        assert_eq!(marks.picture(filled(1.0)), Marked::Same);
+        marks.drawn(|_, kept| assert_eq!(kept.commands().as_ptr(), backing));
+        let changed = filled(0.0);
+        let changed_backing = changed.commands().as_ptr();
+        assert_eq!(marks.picture(changed), Marked::Changed);
+        marks.drawn(|_, kept| assert_eq!(kept.commands().as_ptr(), changed_backing));
+        assert_eq!(marks.kept.borrow().key(), &None);
     }
 }
