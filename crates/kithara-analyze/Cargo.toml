@@ -1,0 +1,46 @@
+[package]
+name = "kithara-analyze"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Batch audio analysis exported as JSON records."
+publish = false
+
+[[bin]]
+name = "kithara-analyze"
+path = "src/main.rs"
+
+[features]
+default = ["beat-nn-small", "symphonia", "fdk-aac"]
+beat-nn-small = ["kithara/beat-nn-small"]
+beat-nn-full = ["kithara/beat-nn-full"]
+beat-nn-full-int8 = ["kithara/beat-nn-full-int8"]
+beat-dsp = ["kithara/beat-dsp"]
+symphonia = ["kithara/symphonia"]
+fdk-aac = ["kithara/fdk-aac"]
+client-wreq = ["kithara/client-wreq"]
+flash = ["kithara/flash"]
+
+[dependencies]
+kithara = { workspace = true, features = ["audio", "analysis", "analysis-waveform", "analysis-beat", "play", "file", "hls", "download", "platform", "bufpool", "resampler", "resample-rubato", "stretch-identity", "client-reqwest", "tls-rustls"] }
+
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+signal-hook = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+kithara = { workspace = true, features = ["test"] }
+kithara-test-fixtures = { workspace = true, features = ["wav", "rhythm", "signal"] }
+kithara-test-utils = { workspace = true, features = ["test", "temp-dir", "http-server"] }
+
+axum = { workspace = true }
+
+[lints]
+workspace = true

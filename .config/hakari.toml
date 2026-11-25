@@ -48,6 +48,7 @@ platforms = [
 [traversal-excludes]
 workspace-members = [
   "kithara-analysis-tests",
+  "kithara-analyze",
   "kithara-apple",
   "kithara-app-tests",
   "kithara-audio-tests",
