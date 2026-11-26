@@ -219,5 +219,4 @@ jobs:
       bench_base_ref: ${{ inputs.bench_base_ref }}
       bench_mode: ${{ inputs.bench_mode }}
       bench_allocator_policy: ${{ inputs.bench_allocator_policy }}
-      bench_preflight: ${{ inputs.bench_preflight }}
       pr-tests: ${{ inputs.pr-tests }}
