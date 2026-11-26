@@ -16,7 +16,6 @@ token_file = "/etc/kithara-ci/tokens/hubot.token"
 
 [[runners]]
 name = "kithara-ci-octocat"
-repository = "octocat/kithara"
 sccache_s3_env_file = "/etc/kithara-ci/cache/octocat.env"
 cache_trust = "review"
 cache_scope = "review"
@@ -24,9 +23,12 @@ cpus = 24
 memory = "96g"
 labels = ["self-hosted", "linux", "x64", "kithara"]
 
+[runners.target]
+provider = "github"
+repository = "octocat/kithara"
+
 [[runners]]
 name = "kithara-ci-octocat-gpu"
-repository = "octocat/kithara"
 sccache_s3_env_file = "/etc/kithara-ci/cache/octocat.env"
 cache_trust = "review"
 cache_scope = "review"
@@ -36,9 +38,12 @@ labels = ["self-hosted", "linux", "x64", "kithara", "gpu"]
 devices = ["/dev/dri"]
 groups = [993]
 
+[runners.target]
+provider = "github"
+repository = "octocat/kithara"
+
 [[runners]]
 name = "kithara-ci-octocat-android"
-repository = "octocat/kithara"
 sccache_s3_env_file = "/etc/kithara-ci/cache/octocat.env"
 cache_trust = "review"
 cache_scope = "review"
@@ -49,15 +54,22 @@ devices = ["/dev/kvm"]
 groups = [994]
 flavor = "android"
 
+[runners.target]
+provider = "github"
+repository = "octocat/kithara"
+
 [[runners]]
 name = "kithara-ci-hubot"
-repository = "hubot/kithara"
 sccache_s3_env_file = "/etc/kithara-ci/cache/hubot.env"
 cache_trust = "review"
 cache_scope = "review-hubot"
 cpus = 3
 memory = "8g"
 labels = ["self-hosted", "linux", "x64", "kithara"]
+
+[runners.target]
+provider = "github"
+repository = "hubot/kithara"
 
 [windows]
 name = "kithara-ci-windows"

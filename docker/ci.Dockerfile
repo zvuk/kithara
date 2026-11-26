@@ -328,3 +328,5 @@ ENV MONKEYS_AUDIO_DIR=/usr/local
 
 # Cached CMake build scripts retain Cargo's compiler-launcher path.
 RUN ln -s /usr/local/bin/kache /usr/local/cargo/bin/kache
+
+USER runner

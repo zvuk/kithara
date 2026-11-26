@@ -5178,6 +5178,7 @@ dependencies = [
  "kithara-config",
  "kithara-test-dylib",
  "kithara-test-utils",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "serde",

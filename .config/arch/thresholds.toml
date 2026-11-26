@@ -225,6 +225,11 @@ allowed_files = [
   "crates/kithara-dsp/src/param.rs",
 ]
 
+[facade_pool_owner]
+# Crates whose dual pool ownership is never flagged. The facade owns the pool
+# crate it re-exports under `kithara::bufpool`, so it names both by design.
+exempt_crates = ["kithara"]
+
 [tokio_dep_quarantine]
 quarantined = ["tokio", "tokio-util", "tokio-stream"]
 # Crates whose direct tokio dependency is never flagged. `kithara-platform` is
