@@ -31,19 +31,20 @@ the same name (`kithara::hls`, `kithara::play`, `kithara::queue`, ...).
 ## Usage
 
 Play a list of tracks on the default audio device (features `queue` and the
-defaults):
+defaults). The pool schema derive names the crate that owns the pool types, so
+a crate that depends on the facade declares its schema against
+`kithara::bufpool`:
 
 ```rust
-use kithara::bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara::bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
 use kithara::host::{Host, HostConfig};
 use kithara::play::{PlayWorker, PlayWorkerConfig, ResourcePrep};
 use kithara::queue::{Queue, QueueConfig};
 
-pool_schema! {
-    pub AppPools {
-        bytes: u8,
-        samples: f32,
-    }
+#[derive(Pool)]
+pub struct AppPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
 #[tokio::main]
