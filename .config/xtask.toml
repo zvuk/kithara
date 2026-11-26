@@ -322,6 +322,7 @@ network-manual = "it reaches hosts only the corporate network resolves, and no r
 doc = "doc-tests run under `cargo test`, which leaves no per-test verdict a campaign can count"
 ui-doc = "doc-tests run under `cargo test`, which leaves no per-test verdict a campaign can count"
 selenium-firefox = "it drives a real browser under `cargo test`, which leaves no per-test verdict a campaign can count"
+apple = "a review selection of the workspace, tooling and ui lanes' packages in one Apple build; the month repeats each of those lanes it can, and `ui` is exempt above"
 
 [stress.artifacts]
 attempts = "attempts.json"
