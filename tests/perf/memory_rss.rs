@@ -174,6 +174,7 @@ async fn test_hls_playback_rss_within_budget(
 
     for run in 0..consts::BUDGET_RUNS {
         let baseline_rss = physical_memory().expect("RSS measurement unsupported");
+        eprintln!("rss budget run {run}: baseline={baseline_rss}");
 
         let pools = pools();
         let store = AssetStore::builder(pools.clone())
@@ -193,12 +194,25 @@ async fn test_hls_playback_rss_within_budget(
             kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
                 .await
                 .expect("audio creation");
+        eprintln!("rss budget run {run}: audio ready");
 
-        let drain = spawn_blocking(move || drain_sampling_rss(&mut audio))
-            .await
-            .expect("spawn_blocking");
+        let drain = spawn_blocking(move || {
+            let drain = drain_sampling_rss(&mut audio);
+            eprintln!(
+                "rss budget run {run}: drain returned reads={} elapsed={:?}",
+                drain.samples.len(),
+                drain.elapsed
+            );
+            drop(audio);
+            eprintln!("rss budget run {run}: audio dropped");
+            drain
+        })
+        .await
+        .expect("spawn_blocking");
+        eprintln!("rss budget run {run}: drain joined");
 
         let samples = drain.complete_samples();
+        eprintln!("rss budget run {run}: samples complete");
         let peak_rss = samples
             .iter()
             .copied()
@@ -228,6 +242,8 @@ async fn test_hls_playback_rss_within_budget(
         max_delta as f64 / consts::MB as f64,
         consts::RSS_BUDGET_MB
     );
+
+    eprintln!("rss budget scoring complete: max_delta={max_delta}");
 
     assert!(
         max_delta < consts::RSS_BUDGET_MB * consts::MB,
