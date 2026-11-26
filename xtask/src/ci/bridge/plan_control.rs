@@ -4,13 +4,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use sha2::{Digest as _, Sha256};
 use xtask::ci::lane::plan::wire;
 
 use super::{
     api::view_path,
     command::PlanControl,
-    ledger::PlanSeal,
+    ledger::Ledger,
     model::{CheckStatus, Scope},
     reconcile::VerificationAttempt,
 };
@@ -114,46 +113,49 @@ fn operation(
 
 /// Export an attempt's plan view before its run is dispatched.
 ///
-/// A fresh attempt seals its view, retains the bytes, records the seal in the
-/// ledger and only then publishes the status that exports it. An attempt that
-/// sealed one already publishes that same record, unless the merge it judged
-/// has moved since: the view no longer describes the run, so nothing starts.
+/// A fresh attempt resolves its view once and freezes the bytes in the ledger
+/// before anything leaves the host. Every later step works from those frozen
+/// bytes: retention and readback, then the attestation, then the status that
+/// exports it, last. A crash anywhere recovers the same bytes, never a second
+/// resolution from a policy or test block that moved since. A judged merge
+/// that moved fails closed, so nothing starts.
 pub(super) fn publish(
     attempt: &VerificationAttempt<'_>,
-    sealed: Option<&PlanSeal>,
+    ledger: &Ledger,
     judged: &str,
     seal: impl FnOnce() -> Result<Vec<u8>>,
     retain: impl FnOnce(&[u8], &str) -> Result<String>,
-    record: impl FnOnce(&PlanSeal) -> Result<()>,
     report: impl FnOnce(&CheckStatus) -> Result<()>,
 ) -> Result<()> {
-    let seal = if let Some(sealed) = sealed {
+    let (head, base, number) = (attempt.head_sha, attempt.base_sha, attempt.attempt);
+    let frozen = ledger
+        .get(head, base)?
+        .filter(|entry| entry.attempt == number)
+        .and_then(|entry| entry.plan);
+    let seal = if let Some(seal) = frozen {
         ensure!(
-            sealed.judged == judged,
-            "the judged merge moved under sealed plan view {}",
-            sealed.sha256
+            seal.judged == judged,
+            "the judged merge moved under frozen plan view {}",
+            seal.sha256
         );
-        sealed.clone()
-    } else {
-        let bytes = seal()?;
-        let sha256 = hex::encode(Sha256::digest(&bytes));
-        let commit = retain(&bytes, &sha256)?;
-        let seal = PlanSeal {
-            sha256,
-            commit,
-            judged: judged.to_owned(),
-        };
-        record(&seal)?;
         seal
+    } else {
+        ledger.freeze_plan(head, base, number, judged, &seal()?)?
+    };
+    let commit = if let Some(commit) = seal.commit {
+        commit
+    } else {
+        let commit = retain(&ledger.frozen_view(&seal.sha256)?, &seal.sha256)?;
+        ledger.attest_plan(head, base, number, &seal.sha256, &commit)?;
+        commit
     };
     report(&CheckStatus {
         context: context(attempt),
         state: "success",
         description: format!("pc3:{}", seal.sha256),
         target_url: Some(format!(
-            "https://github.com/{}/blob/{}/{}",
+            "https://github.com/{}/blob/{commit}/{}",
             attempt.config.github_repo,
-            seal.commit,
             view_path(&seal.sha256)
         )),
     })
@@ -165,8 +167,12 @@ mod tests {
 
     use anyhow::bail;
     use serde_json::json;
+    use sha2::{Digest as _, Sha256};
 
     use super::{super::command::BridgeConfig, *};
+
+    const HEAD: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+    const BASE: &str = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
 
     fn config() -> BridgeConfig {
         toml::from_str(include_str!(
@@ -177,102 +183,106 @@ mod tests {
 
     fn attempt(config: &BridgeConfig) -> VerificationAttempt<'_> {
         VerificationAttempt {
-            head_sha: "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
-            base_sha: "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
-            attempt: 2,
+            head_sha: HEAD,
+            base_sha: BASE,
+            attempt: 1,
             scope: Scope::Draft,
             config,
         }
     }
 
+    fn ledger(directory: &tempfile::TempDir) -> Ledger {
+        let ledger = Ledger::new(directory.path()).unwrap();
+        ledger.reserve(HEAD, BASE, Scope::Draft).unwrap();
+        ledger
+    }
+
+    fn digest(bytes: &[u8]) -> String {
+        hex::encode(Sha256::digest(bytes))
+    }
+
     #[test]
-    fn a_fresh_attempt_exports_its_view_only_after_retention_and_the_ledger() {
+    fn a_fresh_attempt_freezes_retains_attests_and_exports_last() {
         let config = config();
         let attempt = attempt(&config);
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = ledger(&directory);
         let judged = "c".repeat(40);
         let events = RefCell::new(Vec::new());
-        let sha256 = hex::encode(Sha256::digest(b"{}"));
+        let plan = || ledger.get(HEAD, BASE).unwrap().unwrap().plan;
         publish(
             &attempt,
-            None,
+            &ledger,
             &judged,
             || {
                 events.borrow_mut().push("seal");
                 Ok(b"{}".to_vec())
             },
-            |bytes, digest| {
-                assert_eq!((bytes, digest), (&b"{}"[..], sha256.as_str()));
+            |bytes, sha256| {
+                assert_eq!((bytes, sha256), (&b"{}"[..], digest(b"{}").as_str()));
+                assert_eq!(plan().unwrap().commit, None, "frozen before it leaves");
                 events.borrow_mut().push("retain");
                 Ok("d".repeat(40))
             },
-            |seal| {
-                assert_eq!(seal.judged, judged);
-                events.borrow_mut().push("record");
-                Ok(())
-            },
             |status| {
+                assert_eq!(plan().unwrap().commit, Some("d".repeat(40)));
                 assert_eq!(
                     status.context,
-                    format!(
-                        "kithara/plan-control/{}:{}",
-                        attempt.head_sha, attempt.base_sha
-                    )
+                    format!("kithara/plan-control/{HEAD}:{BASE}")
                 );
+                assert_eq!(status.state, "success");
+                assert_eq!(status.description, format!("pc3:{}", digest(b"{}")));
                 assert_eq!(
-                    (status.state, status.description.as_str()),
-                    ("success", format!("pc3:{sha256}").as_str())
-                );
-                assert_eq!(
-                    status.target_url.as_deref(),
-                    Some(
-                        format!(
-                            "https://github.com/{}/blob/{}/.ci-artifacts/plan-control/v3/{sha256}.json",
-                            config.github_repo,
-                            "d".repeat(40)
-                        )
-                        .as_str()
-                    )
+                    status.target_url,
+                    Some(format!(
+                        "https://github.com/{}/blob/{}/.ci-artifacts/plan-control/v3/{}.json",
+                        config.github_repo,
+                        "d".repeat(40),
+                        digest(b"{}")
+                    ))
                 );
                 events.borrow_mut().push("report");
                 Ok(())
             },
         )
         .unwrap();
-        assert_eq!(*events.borrow(), ["seal", "retain", "record", "report"]);
+        assert_eq!(*events.borrow(), ["seal", "retain", "report"]);
     }
 
+    /// The crash the freeze exists for: retention went through, the
+    /// attestation never landed, and the policy and the draft's test block
+    /// moved before the next tick. That tick must carry the bytes it froze,
+    /// not resolve a second plan for the same attempt, and must not export
+    /// or dispatch anything until those bytes are attested.
     #[test]
-    fn bytes_that_were_not_retained_are_never_recorded_or_exported() {
-        let config = config();
-        let result = publish(
-            &attempt(&config),
-            None,
-            &"c".repeat(40),
-            || Ok(b"{}".to_vec()),
-            |_, _| bail!("retention branch moved"),
-            |_| panic!("an unretained view was recorded"),
-            |_| panic!("an unretained view was exported"),
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn a_sealed_attempt_exports_its_record_again_and_never_reseals() {
+    fn a_crash_after_retention_recovers_the_frozen_bytes_never_a_new_plan() {
         let config = config();
         let attempt = attempt(&config);
-        let sealed = PlanSeal {
-            sha256: "e".repeat(64),
-            commit: "d".repeat(40),
-            judged: "c".repeat(40),
-        };
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = ledger(&directory);
+        let judged = "c".repeat(40);
+        let original = br#"{"policy":"old"}"#;
+        let crashed = publish(
+            &attempt,
+            &ledger,
+            &judged,
+            || Ok(original.to_vec()),
+            |_, _| bail!("lost after the retention branch moved"),
+            |_| panic!("a view was exported before its attestation"),
+        );
+        assert!(crashed.is_err(), "a failed tick must not reach dispatch");
+
+        let retained = RefCell::new(None);
         let exported = RefCell::new(None);
         publish(
             &attempt,
-            Some(&sealed),
-            &sealed.judged,
-            || panic!("a sealed attempt resolved again"),
-            |_, _| panic!("a sealed attempt retained again"),
-            |_| panic!("a sealed attempt recorded again"),
+            &Ledger::new(directory.path()).unwrap(),
+            &judged,
+            || panic!("the same attempt resolved a second plan"),
+            |bytes, sha256| {
+                retained.replace(Some((bytes.to_vec(), sha256.to_owned())));
+                Ok("d".repeat(40))
+            },
             |status| {
                 exported.replace(Some(status.description.clone()));
                 Ok(())
@@ -280,17 +290,43 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
+            retained.into_inner(),
+            Some((original.to_vec(), digest(original)))
+        );
+        assert_eq!(
             exported.into_inner(),
-            Some(format!("pc3:{}", sealed.sha256))
+            Some(format!("pc3:{}", digest(original)))
         );
 
+        publish(
+            &attempt,
+            &ledger,
+            &judged,
+            || panic!("an attested attempt resolved again"),
+            |_, _| panic!("an attested attempt retained again"),
+            |status| {
+                assert_eq!(status.description, format!("pc3:{}", digest(original)));
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_judged_merge_that_moved_under_a_frozen_view_fails_closed() {
+        let config = config();
+        let attempt = attempt(&config);
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = ledger(&directory);
+        ledger
+            .freeze_plan(HEAD, BASE, 1, &"c".repeat(40), b"{}")
+            .unwrap();
         let moved = publish(
             &attempt,
-            Some(&sealed),
+            &ledger,
             &"f".repeat(40),
             || panic!("a moved merge resolved again"),
-            |_, _| panic!("a moved merge retained again"),
-            |_| panic!("a moved merge recorded again"),
+            |_, _| panic!("a moved merge retained its stale view"),
             |_| panic!("a moved merge exported a stale view"),
         );
         assert!(moved.is_err());
@@ -310,8 +346,8 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&operation).unwrap(),
             json!({
-                "key": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
-                "attempt": 2,
+                "key": format!("{HEAD}:{BASE}"),
+                "attempt": 1,
                 "predecessor_status_id": 9,
                 "original_kind": "branch",
                 "event_kind": "api",

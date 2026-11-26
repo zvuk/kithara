@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use kithara_devtools::lock::{FileLock, Wait};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use super::model::{Scope, VerificationState};
 
@@ -23,20 +24,21 @@ pub(super) struct LedgerEntry {
     /// Entries written before drafts were scoped were all full verifications.
     #[serde(default)]
     pub(super) scope: Scope,
-    /// The plan view this attempt sealed, once its bytes were read back.
+    /// The plan view this attempt froze before anything left the host.
     #[serde(default)]
     pub(super) plan: Option<PlanSeal>,
     updated_at: u64,
 }
 
-/// A sealed plan view: its digest, the retention commit holding its bytes and
-/// the judged commit it describes. It attests the plan, not a verdict.
+/// The plan view an attempt froze: the digest of its stored bytes and the
+/// judged commit it describes. It attests the plan, not a verdict, and only
+/// once `commit` names the retention commit its bytes read back from.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PlanSeal {
     pub(super) sha256: String,
-    pub(super) commit: String,
     pub(super) judged: String,
+    pub(super) commit: Option<String>,
 }
 
 /// What the bridge last posted on one default-branch commit.
@@ -60,6 +62,7 @@ struct LedgerData {
 pub(super) struct Ledger {
     path: PathBuf,
     lock_path: PathBuf,
+    views: PathBuf,
 }
 
 impl Ledger {
@@ -69,6 +72,7 @@ impl Ledger {
         Ok(Self {
             path: state_dir.join("verification-ledger.json"),
             lock_path: state_dir.join("verification-ledger.lock"),
+            views: state_dir.join("plan-views"),
         })
     }
 
@@ -248,22 +252,72 @@ impl Ledger {
         })
     }
 
-    /// Record the plan view an attempt sealed. An attempt seals one view: a
-    /// second would let two plans speak for the same run.
-    pub(super) fn seal_plan(
+    /// Freeze an attempt's plan view before anything leaves the host: its
+    /// bytes are stored durably and the ledger names them. An attempt freezes
+    /// one view, so a crash can only ever recover these bytes, never resolve
+    /// a second plan from inputs that moved since.
+    pub(super) fn freeze_plan(
         &self,
         head_sha: &str,
         base_sha: &str,
         attempt: u64,
-        seal: PlanSeal,
-    ) -> Result<()> {
+        judged: &str,
+        bytes: &[u8],
+    ) -> Result<PlanSeal> {
+        let seal = PlanSeal {
+            sha256: hex::encode(Sha256::digest(bytes)),
+            judged: judged.to_owned(),
+            commit: None,
+        };
+        fs::create_dir_all(&self.views)
+            .with_context(|| format!("creating plan views {}", self.views.display()))?;
+        durable_write(&self.views.join(format!("{}.json", seal.sha256)), bytes)?;
         self.update(head_sha, base_sha, |data, key| {
             let entry = testing_attempt(data, key, attempt)?;
             if entry.plan.is_some() {
-                bail!("verification {key} attempt {attempt} already sealed a plan view");
+                bail!("verification {key} attempt {attempt} already froze a plan view");
             }
-            entry.plan = Some(seal);
+            entry.plan = Some(seal.clone());
             Ok(true)
+        })?;
+        Ok(seal)
+    }
+
+    /// The bytes of a frozen plan view, refused unless they are still exactly
+    /// the bytes that were frozen.
+    pub(super) fn frozen_view(&self, sha256: &str) -> Result<Vec<u8>> {
+        let path = self.views.join(format!("{sha256}.json"));
+        let bytes =
+            fs::read(&path).with_context(|| format!("reading plan view {}", path.display()))?;
+        if hex::encode(Sha256::digest(&bytes)) != sha256 {
+            bail!(
+                "frozen plan view {} no longer matches its digest",
+                path.display()
+            );
+        }
+        Ok(bytes)
+    }
+
+    /// Attest a frozen plan view once its bytes read back from `commit`.
+    pub(super) fn attest_plan(
+        &self,
+        head_sha: &str,
+        base_sha: &str,
+        attempt: u64,
+        sha256: &str,
+        commit: &str,
+    ) -> Result<()> {
+        self.update(head_sha, base_sha, |data, key| {
+            let entry = testing_attempt(data, key, attempt)?;
+            match &mut entry.plan {
+                Some(seal) if seal.sha256 == sha256 && seal.commit.is_none() => {
+                    seal.commit = Some(commit.to_owned());
+                    Ok(true)
+                }
+                _ => bail!(
+                    "verification {key} attempt {attempt} has no frozen view {sha256} to attest"
+                ),
+            }
         })
     }
 
@@ -387,42 +441,41 @@ impl Ledger {
     }
 
     fn write(&self, data: &LedgerData) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(data).context("serializing bridge ledger")?;
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .context("system clock is before Unix epoch")?
-            .as_nanos();
-        let temporary =
-            self.path
-                .with_extension(format!("json.{}.{}.tmp", std::process::id(), suffix));
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)
-            .with_context(|| format!("creating temporary ledger {}", temporary.display()))?;
-        file.write_all(&bytes)
-            .with_context(|| format!("writing temporary ledger {}", temporary.display()))?;
-        file.write_all(b"\n")
-            .with_context(|| format!("terminating temporary ledger {}", temporary.display()))?;
-        file.sync_all()
-            .with_context(|| format!("syncing temporary ledger {}", temporary.display()))?;
-        drop(file);
-        fs::rename(&temporary, &self.path).with_context(|| {
-            format!(
-                "publishing bridge ledger {} as {}",
-                temporary.display(),
-                self.path.display()
-            )
-        })?;
-        let parent = self
-            .path
-            .parent()
-            .context("verification ledger has no parent directory")?;
-        fs::File::open(parent)
-            .with_context(|| format!("opening ledger directory {}", parent.display()))?
-            .sync_all()
-            .with_context(|| format!("syncing ledger directory {}", parent.display()))
+        let mut bytes = serde_json::to_vec_pretty(data).context("serializing bridge ledger")?;
+        bytes.push(b'\n');
+        durable_write(&self.path, &bytes)
     }
+}
+
+/// Replace `path` with `bytes` so that a crash leaves either the old file or
+/// the new one, synced together with the directory that names it.
+fn durable_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?
+        .as_nanos();
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(format!(".{}.{}.tmp", std::process::id(), suffix));
+    let temporary = PathBuf::from(temporary);
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .with_context(|| format!("creating temporary {}", temporary.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("writing temporary {}", temporary.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing temporary {}", temporary.display()))?;
+    drop(file);
+    fs::rename(&temporary, path)
+        .with_context(|| format!("publishing {} as {}", temporary.display(), path.display()))?;
+    let parent = path
+        .parent()
+        .context("durable file has no parent directory")?;
+    fs::File::open(parent)
+        .with_context(|| format!("opening directory {}", parent.display()))?
+        .sync_all()
+        .with_context(|| format!("syncing directory {}", parent.display()))
 }
 
 fn testing_attempt<'a>(
@@ -812,32 +865,62 @@ mod tests {
         assert_eq!(entry.detail, None);
     }
 
-    /// An attempt seals one plan view; the next attempt starts unsealed, and a
-    /// stale attempt cannot seal over the current one.
+    /// An attempt freezes one plan view and attests only that one; the next
+    /// attempt starts unfrozen, and a stale attempt cannot freeze over it.
     #[test]
-    fn a_plan_view_is_sealed_once_per_attempt() {
+    fn a_plan_view_is_frozen_once_per_attempt_and_attested_once() {
         let directory = tempfile::tempdir().unwrap();
         let ledger = Ledger::new(directory.path()).unwrap();
         ledger.reserve("head", "base", Scope::Full).unwrap();
-        let seal = PlanSeal {
-            sha256: "a".repeat(64),
-            commit: "b".repeat(40),
-            judged: "c".repeat(40),
-        };
+        let judged = "c".repeat(40);
 
-        ledger.seal_plan("head", "base", 1, seal.clone()).unwrap();
-        assert!(ledger.seal_plan("head", "base", 1, seal.clone()).is_err());
-        let reopened = Ledger::new(directory.path()).unwrap();
-        assert_eq!(
-            reopened.get("head", "base").unwrap().unwrap().plan,
-            Some(seal.clone())
+        let seal = ledger
+            .freeze_plan("head", "base", 1, &judged, b"{}")
+            .unwrap();
+        assert_eq!(seal.commit, None);
+        assert!(
+            ledger
+                .freeze_plan("head", "base", 1, &judged, b"[]")
+                .is_err()
         );
+        assert_eq!(ledger.frozen_view(&seal.sha256).unwrap(), b"{}");
+        assert!(
+            ledger
+                .attest_plan("head", "base", 1, &"0".repeat(64), "commit")
+                .is_err()
+        );
+        ledger
+            .attest_plan("head", "base", 1, &seal.sha256, "commit")
+            .unwrap();
+        assert!(
+            ledger
+                .attest_plan("head", "base", 1, &seal.sha256, "other")
+                .is_err()
+        );
+        let reopened = Ledger::new(directory.path()).unwrap();
+        let plan = reopened.get("head", "base").unwrap().unwrap().plan.unwrap();
+        assert_eq!(plan.commit.as_deref(), Some("commit"));
 
         ledger.attach("head", "base", 1, 42).unwrap();
         ledger.release("head", "base", 1, 42).unwrap();
         assert_eq!(ledger.get("head", "base").unwrap().unwrap().plan, None);
-        assert!(ledger.seal_plan("head", "base", 1, seal.clone()).is_err());
-        ledger.seal_plan("head", "base", 2, seal).unwrap();
+        assert!(
+            ledger
+                .freeze_plan("head", "base", 1, &judged, b"{}")
+                .is_err()
+        );
+        ledger
+            .freeze_plan("head", "base", 2, &judged, b"{}")
+            .unwrap();
+
+        fs::write(
+            directory
+                .path()
+                .join(format!("plan-views/{}.json", seal.sha256)),
+            b"[]",
+        )
+        .unwrap();
+        assert!(ledger.frozen_view(&seal.sha256).is_err());
     }
 
     #[test]

@@ -349,7 +349,7 @@ impl Bridge {
                 }
             };
             if let Some(control) = &self.config.plan_control {
-                self.publish_plan(control, ledger, &attempt, &entry, &judged, pr_tests)?;
+                self.publish_plan(control, ledger, &attempt, &judged, pr_tests)?;
             }
             self.repo.push_gitlab(&self.gitlab, &judged, &reference)?;
             let discovered =
@@ -414,13 +414,12 @@ impl Bridge {
         control: &PlanControl,
         ledger: &Ledger,
         attempt: &VerificationAttempt<'_>,
-        entry: &LedgerEntry,
         judged: &str,
         pr_tests: Option<&str>,
     ) -> Result<()> {
         plan_control::publish(
             attempt,
-            entry.plan.as_ref(),
+            ledger,
             judged,
             || {
                 let predecessor = self
@@ -444,14 +443,6 @@ impl Bridge {
                 )
             },
             |bytes, sha256| self.github.retain_plan_view(bytes, sha256),
-            |seal| {
-                ledger.seal_plan(
-                    attempt.head_sha,
-                    attempt.base_sha,
-                    attempt.attempt,
-                    seal.clone(),
-                )
-            },
             |status| self.github.report_check_status(attempt.head_sha, status),
         )
     }
