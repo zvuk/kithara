@@ -23,8 +23,8 @@ use crate::error::AssetsResult;
 /// Source that can serialise its in-memory state to disk on demand.
 ///
 /// Implemented by `PinsInner`, `LruInner`, and `AvailabilityInner`.
-/// Each inner exposes a `dirty` flag the hub can swap to discover and
-/// clear pending work. `flush()` must be idempotent — replaying after a
+/// Each inner exposes a `dirty` flag that the shared flush protocol consumes
+/// before snapshotting. `flush()` must be idempotent — replaying after a
 /// successful flush should be a no-op or write the same bytes.
 pub(crate) trait Flushable: Send + Sync {
     fn dirty(&self) -> &AtomicBool;
@@ -161,18 +161,10 @@ impl FlushHub {
         let mut first_err = None;
         for src in &alive {
             let key = Arc::as_ptr(src).cast::<()>().addr();
-            let was_dirty = src.dirty().swap(false, Ordering::AcqRel);
-            let needs_flush = was_dirty || durable && self.non_durable.contains(&key);
-            if !needs_flush {
-                continue;
-            }
-            let result = if durable {
-                src.flush_durable()
-            } else {
-                src.flush()
-            };
-            match result {
-                Ok(()) => {
+            let force = durable && self.non_durable.contains(&key);
+            match flush_source(&**src, durable, force) {
+                Ok(false) => {}
+                Ok(true) => {
                     if durable {
                         self.non_durable.remove(&key);
                     } else {
@@ -185,7 +177,6 @@ impl FlushHub {
                         error = %e,
                         "FlushHub: source flush failed",
                     );
-                    src.dirty().store(true, Ordering::Release);
                     if first_err.is_none() {
                         first_err = Some(e);
                     }
@@ -226,10 +217,10 @@ impl FlushHub {
 
     /// Wake the worker to coalesce a burst of mutations into one
     /// background flush. Bumps the operation counter so a sustained
-    /// burst eventually bypasses the debounce. The availability index
-    /// is the caller: it is rewritten on every write/commit, so it
-    /// debounces through the worker. Pins and the LRU index instead
-    /// flush eagerly via [`flush_sync`] for crash safety.
+    /// burst eventually bypasses the debounce. Availability changes and
+    /// byte-only LRU updates debounce through the worker. Pin changes and
+    /// LRU recency/removal instead flush eagerly via [`flush_sync`] for
+    /// crash safety.
     pub(crate) fn signal(self: &Arc<Self>) {
         {
             let mut s = self.wait.state.lock();
@@ -268,16 +259,32 @@ impl std::fmt::Debug for FlushHub {
     }
 }
 
+fn flush_source(source: &dyn Flushable, durable: bool, force: bool) -> AssetsResult<bool> {
+    let was_dirty = source.dirty().swap(false, Ordering::AcqRel);
+    if !was_dirty && !force {
+        return Ok(false);
+    }
+    let result = if durable {
+        source.flush_durable()
+    } else {
+        source.flush()
+    };
+    if result.is_err() {
+        source.dirty().store(true, Ordering::Release);
+    }
+    result.map(|()| true)
+}
+
 /// Flush pin/LRU crash-safety state synchronously so a crash cannot lose a live pin.
-/// Marks dirty first and leaves it set on failure; availability uses the debounced [`FlushHub`].
+/// Consumes the dirty mark before snapshotting, preserves changes made during I/O,
+/// and restores the mark on failure. Availability and byte-only LRU updates use
+/// the debounced [`FlushHub`].
 ///
 /// # Errors
 /// Propagates the underlying flush error.
 pub(crate) fn flush_sync(source: &dyn Flushable) -> AssetsResult<()> {
     source.dirty().store(true, Ordering::Release);
-    source.flush()?;
-    source.dirty().store(false, Ordering::Release);
-    Ok(())
+    flush_source(source, false, false).map(|_| ())
 }
 
 #[cfg(test)]
@@ -389,6 +396,91 @@ mod tests {
             src.flush_count(),
             1,
             "pin/LRU mutators flush eagerly and synchronously"
+        );
+    }
+
+    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    fn eager_flush_preserves_updates_made_during_io_through_checkpoint_and_reopen() {
+        use std::{fs, path::PathBuf};
+
+        struct Source {
+            dirty: AtomicBool,
+            current: AtomicUsize,
+            path: PathBuf,
+            snapshot: Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+
+        impl Flushable for Source {
+            fn dirty(&self) -> &AtomicBool {
+                &self.dirty
+            }
+
+            fn flush(&self) -> AssetsResult<()> {
+                let snapshot = self.current.load(Ordering::Acquire);
+                self.snapshot.send(()).unwrap();
+                self.release.lock().recv().unwrap();
+                fs::write(&self.path, snapshot.to_le_bytes())?;
+                Ok(())
+            }
+
+            fn flush_durable(&self) -> AssetsResult<()> {
+                fs::write(
+                    &self.path,
+                    self.current.load(Ordering::Acquire).to_le_bytes(),
+                )?;
+                Ok(())
+            }
+
+            fn name(&self) -> &'static str {
+                "eager-byte-update"
+            }
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("index.bin");
+        let hub = FlushHub::new(
+            CancelToken::never(),
+            FlushPolicy {
+                debounce: Duration::from_secs(60),
+                force_every_n_ops: NonZeroUsize::new(8).unwrap(),
+            },
+        );
+        let (snapshot, captured) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let source = Arc::new(Source {
+            dirty: AtomicBool::new(false),
+            current: AtomicUsize::new(100),
+            path: path.clone(),
+            snapshot,
+            release: Mutex::new(released),
+        });
+        hub.register(Arc::downgrade(&source) as Weak<dyn Flushable>);
+
+        let eager = kithara_platform::thread::spawn_named("eager-byte-flush", {
+            let source = Arc::clone(&source);
+            move || flush_sync(&*source).unwrap()
+        });
+        captured.recv().unwrap();
+        source.current.store(200, Ordering::Release);
+        source.dirty.store(true, Ordering::Release);
+        hub.signal();
+        release.send(()).unwrap();
+        eager.join().unwrap();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            100_usize.to_le_bytes(),
+            "the eager write published the snapshot captured before the concurrent update"
+        );
+
+        hub.flush_now().unwrap();
+        drop(source);
+        drop(hub);
+
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            200_usize.to_le_bytes(),
+            "a checkpoint and restart must retain the update made during eager I/O"
         );
     }
 

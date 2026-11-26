@@ -158,27 +158,48 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
     fn update_bytes_leaves_the_write_to_the_flush_hub() {
+        use std::{fs, num::NonZeroUsize};
+
+        use kithara_platform::CancelToken;
+
+        use crate::index::persistence::FlushPolicy;
+
         let pools = crate::test_pools::pools();
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("lru.bin");
         let open =
             || LruIndex::with_persist_at(path.clone(), crate::test_pools::byte_buffer(&pools));
+        let hub = FlushHub::new(
+            CancelToken::never(),
+            FlushPolicy {
+                debounce: Duration::from_secs(60),
+                force_every_n_ops: NonZeroUsize::new(8).unwrap(),
+            },
+        );
         let lru = open();
+        lru.attach_to(&hub);
         lru.touch("A", Some(100)).unwrap();
+        let persisted = fs::read(&path).unwrap();
 
         assert!(lru.update_bytes("A", 200));
 
         assert_eq!(
-            open().total_bytes_best_effort(),
-            100,
+            fs::read(&path).unwrap(),
+            persisted,
             "a segment commit reports its size on the fetch path, so the file write \
              belongs to the flush hub rather than to the caller"
         );
-        assert!(
-            lru.inner.dirty.load(std::sync::atomic::Ordering::Acquire),
-            "the new total waits for the hub's next flush"
+
+        hub.flush_now().unwrap();
+        drop(lru);
+        drop(hub);
+
+        assert_eq!(
+            open().total_bytes_best_effort(),
+            200,
+            "checkpoint and reopen must observe the hub-persisted byte total"
         );
     }
 

@@ -68,8 +68,8 @@ impl<S: IndexState> IndexCell<S> {
     }
 }
 
-/// The flush itself never clears `dirty`: the hub swaps it before flushing,
-/// and a change that lands during the write must keep its signal.
+/// The flush itself never clears `dirty`: the shared flush protocol consumes it
+/// before snapshotting, and a change that lands during the write stays marked.
 impl<S: IndexState> Flushable for IndexCell<S> {
     fn dirty(&self) -> &AtomicBool {
         &self.dirty

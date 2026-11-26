@@ -68,6 +68,14 @@ pub struct DiskAssetStore {
     policy: Arc<dyn DiskPolicy>,
 }
 
+impl Drop for DiskAssetStore {
+    fn drop(&mut self) {
+        if let Err(error) = self.checkpoint() {
+            tracing::warn!(%error, "DiskAssetStore: final checkpoint failed");
+        }
+    }
+}
+
 /// Disk-backed [`AssetDeleter`].
 ///
 /// Owns clones of every shared in-memory + disk-backed index handle
