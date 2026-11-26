@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_platform::sync::Arc;
-use kithara_test_macros as kithara;
 use masonry::vello::{
     Renderer,
     peniko::ImageData,
@@ -79,7 +78,6 @@ impl ShaderPass {
     ///
     /// Everything here is CPU work up to the submit; the shader programs
     /// themselves are timed by whoever fences the queue.
-    #[kithara::measure(label = "shader.pass.cpu")]
     pub fn render(
         &mut self,
         device: &wgpu::Device,

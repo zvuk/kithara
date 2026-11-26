@@ -5,12 +5,11 @@ mod immediate;
 mod pages;
 mod retained;
 
-use std::{borrow::Cow, sync::LazyLock};
+use std::{borrow::Cow, cell::OnceCell, sync::LazyLock};
 
-use hotpath::HotpathGuardBuilder;
+use criterion::{BenchmarkId, Criterion};
 use iced::{Theme, advanced::graphics::text::font_system, theme::Palette};
 use kithara_platform::time::WallInstant as WallClock;
-use kithara_test_utils::kithara;
 use kithara_ui::{
     app::Ui,
     draw::Pt,
@@ -18,6 +17,7 @@ use kithara_ui::{
     view::ViewState,
 };
 use kithara_ui_gallery::{demo, fixture, sections};
+use pages::{Page, Program};
 
 use crate::{
     app::PageApp,
@@ -153,8 +153,6 @@ fn measure<'run>(
         drawn_as: driver.drawn_as(),
         reading: [reading_before, driver.reading(page.moving)],
         painted: painted(&pixels),
-        published: driver.published(),
-        fenced,
     }
 }
 
@@ -202,57 +200,7 @@ fn frames(driver: &mut dyn PageHost, page: &Page, run: Run, fence: bool) -> Tall
     tally
 }
 
-/// One stable line per run, with the counted facts beside the timed ones.
-fn report(label: &str, outcome: &Outcome<'_>) {
-    let tally = &outcome.tally;
-    let [total, mean, min, max] = tally.micros();
-    let scene = tally.scene.map_or_else(
-        || "scene -".to_owned(),
-        |scene| {
-            format!(
-                "tags {} path {} draw {} xform {}",
-                scene.draw_tags, scene.path_data, scene.draw_data, scene.transforms
-            )
-        },
-    );
-    let natives = tally.natives.map_or_else(
-        || "natives -".to_owned(),
-        |natives| {
-            format!(
-                "vis {}/{} shaders {}/{}",
-                natives.vis, outcome.expected.vis, natives.shaders, outcome.expected.shaders
-            )
-        },
-    );
-    println!(
-        "{label} {:<17} {:<14} {:<6} frames {:>3} wanted {:>3} published {:>3}  {scene}  \
-         {natives}  pool miss {} home {} steal {} drop {}  picture {:016x}->{:016x}  \
-         us total {total} mean {mean} min {min} max {max}",
-        outcome.page.name,
-        outcome.run.label(),
-        if outcome.fenced { "fenced" } else { "free" },
-        tally.frames,
-        tally.scheduled,
-        outcome.published,
-        tally.pool.alloc_misses,
-        tally.pool.home_hits,
-        tally.pool.steal_hits,
-        tally.pool.put_drops,
-        outcome.picture[0],
-        outcome.picture[1],
-    );
-    if outcome.fenced {
-        println!(
-            "{label} {:<17} {:<14} fenced: the queue was serialised, so these totals are their \
-             own scenario and may not be added to a free total",
-            outcome.page.name,
-            outcome.run.label(),
-        );
-    }
-}
-
-/// Every assertion this harness makes. Each names the thing a run claims to
-/// measure; none of them is about a duration.
+/// Check the declared frame, input, motion and completion evidence.
 fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
     let page = outcome.page;
     let run = outcome.run.label();
@@ -370,7 +318,6 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
 /// the unmeasured ones are printed rather than asserted away; what is asserted
 /// is that every measured page is one the gallery really has, or the harness's
 /// own, and that it compiles.
-#[kithara::test]
 fn the_page_table_is_pinned_to_the_gallery() {
     let fixture = Fixture::default();
     let tabs = sections::pages();
@@ -407,3 +354,286 @@ fn the_page_table_is_pinned_to_the_gallery() {
         );
     }
 }
+
+fn gallery_case_count() -> usize {
+    consts::PAGES
+        .iter()
+        .map(|page| {
+            usize::from(Vec::<Run>::from(page.program).len()) * 2 * if page.fenced { 2 } else { 1 }
+        })
+        .sum()
+}
+
+fn gallery_case(mut index: usize) -> (usize, Host, Run, bool) {
+    for (page_index, page) in consts::PAGES.iter().enumerate() {
+        for host in [Host::Immediate, Host::Retained] {
+            for run in Vec::<Run>::from(page.program) {
+                for fenced in [false, true] {
+                    if fenced && !page.fenced {
+                        continue;
+                    }
+                    if index == 0 {
+                        return (page_index, host, run, fenced);
+                    }
+                    index -= 1;
+                }
+            }
+        }
+    }
+    panic!("unknown gallery case {index}")
+}
+
+struct GalleryWork<'run> {
+    driver: Box<dyn PageHost + 'run>,
+    host: Host,
+    page: &'run Page,
+    run: Run,
+    fenced: bool,
+    expected: Natives,
+    picture_before: u64,
+    reading_before: Option<u64>,
+    tally: Option<Tally>,
+}
+
+impl<'run> GalleryWork<'run> {
+    fn run(&mut self) {
+        self.tally = Some(frames(
+            self.driver.as_mut(),
+            self.page,
+            self.run,
+            self.fenced,
+        ));
+    }
+
+    fn teardown(&mut self) {
+        let outcome = Outcome {
+            page: self.page,
+            run: self.run,
+            tally: self.tally.take().expect("gallery tally"),
+            expected: self.expected,
+            picture: [self.picture_before, self.driver.picture()],
+            drawn_as: self.driver.drawn_as(),
+            reading: [self.reading_before, self.driver.reading(self.page.moving)],
+            painted: painted(&self.driver.pixels()),
+        };
+        let baseline = match self.run {
+            Run::Wheels(count) if count > 0 => {
+                let fixture = Fixture::default();
+                let mut gpu = shared_gpu(self.host);
+                Some(
+                    measure(
+                        &fixture,
+                        self.page,
+                        Run::Wheels(0),
+                        self.expected,
+                        &mut gpu,
+                        false,
+                    )
+                    .picture[1],
+                )
+            }
+            Run::Moves(count) if count > 0 => {
+                let fixture = Fixture::default();
+                let mut gpu = shared_gpu(self.host);
+                Some(
+                    measure(
+                        &fixture,
+                        self.page,
+                        Run::Moves(0),
+                        self.expected,
+                        &mut gpu,
+                        false,
+                    )
+                    .picture[1],
+                )
+            }
+            _ => None,
+        };
+        prove(self.page.name, &outcome, baseline);
+    }
+}
+
+thread_local! {
+    static ICED_GPUS: OnceCell<Box<Gpu>> = OnceCell::new();
+    static VELLO_GPUS: OnceCell<Box<Gpu>> = OnceCell::new();
+    static FIXTURES: std::collections::BTreeMap<usize, Box<Fixture>> =
+        std::collections::BTreeMap::new();
+}
+
+fn shared_gpu(host: Host) -> &'static mut Gpu {
+    let cell = match host {
+        Host::Immediate => &ICED_GPUS,
+        Host::Retained => &VELLO_GPUS,
+    };
+    cell.with(|gpu| {
+        gpu.get_or_init(|| {
+            Box::new(
+                Gpu::try_from(host)
+                    .unwrap_or_else(|error| panic!("no host to measure on: {error}")),
+            )
+        })
+    })
+}
+
+fn shared_fixture(index: usize) -> &'static Fixture {
+    FIXTURES.with(|fixtures| {
+        fixtures
+            .entry(index)
+            .or_insert_with(|| Box::new(Fixture::default()))
+    })
+}
+
+fn prepare_gallery(index: usize) -> GalleryWork<'static> {
+    load_fonts();
+    let (page_index, host, run, fenced) = gallery_case(index);
+    let page = &consts::PAGES[page_index];
+    let fixture = shared_fixture(page_index);
+    let gpu = shared_gpu(host);
+    let expected = leaves(&fixture.compiled(page));
+    let app = PageApp::new(page, run);
+    let mut driver: Box<dyn PageHost + 'static> = match &mut *gpu {
+        Gpu::Immediate(gpu) => Box::new(Immediate::new(fixture.compiled(page), page, app, gpu)),
+        Gpu::Retained(gpu) => Box::new(Retained::new(fixture.config(), page, app, gpu)),
+    };
+    driver.place_pointer();
+    for _ in 0..3 {
+        driver.frame();
+    }
+    let picture_before = driver.picture();
+    let reading_before = driver.reading(page.moving);
+    GalleryWork {
+        driver,
+        host,
+        page,
+        run,
+        fenced,
+        expected,
+        picture_before,
+        reading_before,
+        tally: None,
+    }
+}
+
+fn teardown_gallery(mut work: GalleryWork) {
+    work.teardown();
+}
+
+#[metabench::benchmark(GALLERY_PERF, "gallery", "case", gungraun_setup = prepare_gallery, gungraun_teardown = teardown_gallery)]
+#[bench::iced_gallery_buttons_plain(0_usize)]
+#[bench::vello_gallery_buttons_plain(1_usize)]
+#[bench::iced_gallery_clock_plain(2_usize)]
+#[bench::vello_gallery_clock_plain(3_usize)]
+#[bench::iced_gallery_table_plain(4_usize)]
+#[bench::vello_gallery_table_plain(5_usize)]
+#[bench::iced_gallery_stress_buckets_8192(6_usize)]
+#[bench::iced_gallery_stress_buckets_4096(7_usize)]
+#[bench::iced_gallery_stress_buckets_1024(8_usize)]
+#[bench::iced_gallery_stress_buckets_256(9_usize)]
+#[bench::vello_gallery_stress_buckets_8192(10_usize)]
+#[bench::vello_gallery_stress_buckets_4096(11_usize)]
+#[bench::vello_gallery_stress_buckets_1024(12_usize)]
+#[bench::vello_gallery_stress_buckets_256(13_usize)]
+#[bench::iced_gallery_vis_plain(14_usize)]
+#[bench::iced_gallery_vis_plain_fenced(15_usize)]
+#[bench::vello_gallery_vis_plain(16_usize)]
+#[bench::vello_gallery_vis_plain_fenced(17_usize)]
+#[bench::iced_gallery_shader_plain(18_usize)]
+#[bench::iced_gallery_shader_plain_fenced(19_usize)]
+#[bench::vello_gallery_shader_plain(20_usize)]
+#[bench::vello_gallery_shader_plain_fenced(21_usize)]
+#[bench::iced_gallery_pivot_wheels_0(22_usize)]
+#[bench::iced_gallery_pivot_wheels_1(23_usize)]
+#[bench::iced_gallery_pivot_wheels_4(24_usize)]
+#[bench::iced_gallery_pivot_wheels_8(25_usize)]
+#[bench::vello_gallery_pivot_wheels_0(26_usize)]
+#[bench::vello_gallery_pivot_wheels_1(27_usize)]
+#[bench::vello_gallery_pivot_wheels_4(28_usize)]
+#[bench::vello_gallery_pivot_wheels_8(29_usize)]
+#[bench::iced_gallery_library2_wheels_0(30_usize)]
+#[bench::iced_gallery_library2_wheels_1(31_usize)]
+#[bench::iced_gallery_library2_wheels_4(32_usize)]
+#[bench::iced_gallery_library2_wheels_8(33_usize)]
+#[bench::vello_gallery_library2_wheels_0(34_usize)]
+#[bench::vello_gallery_library2_wheels_1(35_usize)]
+#[bench::vello_gallery_library2_wheels_4(36_usize)]
+#[bench::vello_gallery_library2_wheels_8(37_usize)]
+#[bench::iced_gallery_table_long_wheels_0(38_usize)]
+#[bench::iced_gallery_table_long_wheels_1(39_usize)]
+#[bench::iced_gallery_table_long_wheels_4(40_usize)]
+#[bench::iced_gallery_table_long_wheels_8(41_usize)]
+#[bench::vello_gallery_table_long_wheels_0(42_usize)]
+#[bench::vello_gallery_table_long_wheels_1(43_usize)]
+#[bench::vello_gallery_table_long_wheels_4(44_usize)]
+#[bench::vello_gallery_table_long_wheels_8(45_usize)]
+#[bench::iced_gallery_tree_wheels_0(46_usize)]
+#[bench::iced_gallery_tree_wheels_1(47_usize)]
+#[bench::iced_gallery_tree_wheels_4(48_usize)]
+#[bench::iced_gallery_tree_wheels_8(49_usize)]
+#[bench::vello_gallery_tree_wheels_0(50_usize)]
+#[bench::vello_gallery_tree_wheels_1(51_usize)]
+#[bench::vello_gallery_tree_wheels_4(52_usize)]
+#[bench::vello_gallery_tree_wheels_8(53_usize)]
+#[bench::iced_gallery_faders_moves_0(54_usize)]
+#[bench::iced_gallery_faders_moves_1(55_usize)]
+#[bench::iced_gallery_faders_moves_4(56_usize)]
+#[bench::iced_gallery_faders_moves_8(57_usize)]
+#[bench::vello_gallery_faders_moves_0(58_usize)]
+#[bench::vello_gallery_faders_moves_1(59_usize)]
+#[bench::vello_gallery_faders_moves_4(60_usize)]
+#[bench::vello_gallery_faders_moves_8(61_usize)]
+#[bench::iced_gallery_objects_plain(62_usize)]
+#[bench::vello_gallery_objects_plain(63_usize)]
+#[bench::iced_gallery_motion_plain(64_usize)]
+#[bench::vello_gallery_motion_plain(65_usize)]
+#[bench::iced_gallery_sprites_plain(66_usize)]
+#[bench::vello_gallery_sprites_plain(67_usize)]
+#[bench::iced_gallery_lottie_plain(68_usize)]
+#[bench::vello_gallery_lottie_plain(69_usize)]
+#[bench::iced_gallery_scene_plain(70_usize)]
+#[bench::vello_gallery_scene_plain(71_usize)]
+#[bench::iced_perf_scroll_vis_wheels_0(72_usize)]
+#[bench::iced_perf_scroll_vis_wheels_1(73_usize)]
+#[bench::iced_perf_scroll_vis_wheels_4(74_usize)]
+#[bench::iced_perf_scroll_vis_wheels_8(75_usize)]
+#[bench::vello_perf_scroll_vis_wheels_0(76_usize)]
+#[bench::vello_perf_scroll_vis_wheels_1(77_usize)]
+#[bench::vello_perf_scroll_vis_wheels_4(78_usize)]
+#[bench::vello_perf_scroll_vis_wheels_8(79_usize)]
+fn native_gallery(mut work: GalleryWork) -> GalleryWork {
+    work.run();
+    work
+}
+
+fn criterion_benchmarks(c: &mut Criterion) {
+    the_page_table_is_pinned_to_the_gallery();
+    let mut group = c.benchmark_group("gallery");
+    group.sample_size(10);
+    for index in 0..gallery_case_count() {
+        let (page_index, host, run, fenced) = gallery_case(index);
+        let page = &consts::PAGES[page_index];
+        let host = match host {
+            Host::Immediate => "iced",
+            Host::Retained => "vello",
+        };
+        let run = match run {
+            Run::Plain => "plain".to_owned(),
+            Run::Buckets(count) => format!("buckets_{count}"),
+            Run::Wheels(count) => format!("wheels_{count}"),
+            Run::Moves(count) => format!("moves_{count}"),
+        };
+        let fenced = if fenced { "_fenced" } else { "" };
+        let identity = format!("{host}_{}_{run}{fenced}", page.name).replace('-', "_");
+        group.bench_function(BenchmarkId::new("case", identity), |b| {
+            let mut work = prepare_gallery(index);
+            b.iter(|| work.run());
+            work.teardown();
+        });
+    }
+    group.finish();
+}
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [GALLERY_PERF],
+    allocator = std::alloc::System,
+);

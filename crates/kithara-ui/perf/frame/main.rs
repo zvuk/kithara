@@ -287,21 +287,67 @@ fn miss(reading: &Reading) -> Option<String> {
 }
 
 struct FrameWork {
-    action: Box<dyn FnMut() -> Reading>,
-    reading: Option<Reading>,
+    action: Box<dyn FnMut()>,
+    driver: Rc<std::cell::RefCell<Box<dyn FrameHost>>>,
+    rect: Rect,
+    name: &'static str,
+    steps: Vec<Step>,
+    gestured: bool,
 }
 
 impl FrameWork {
     fn run(&mut self) {
-        self.reading = Some((self.action)());
+        (self.action)();
     }
 
     fn teardown(&mut self) {
-        audit(
-            "frame",
-            std::slice::from_ref(self.reading.as_ref().expect("frame reading")),
-        );
+        let reading = Reading {
+            rect: self.rect,
+            gestured: self.gestured,
+            name: self.name,
+            points: self
+                .steps
+                .iter()
+                .filter_map(|step| match step {
+                    Step::Move(at) => Some(*at),
+                    Step::Press | Step::Release | Step::Data => None,
+                })
+                .collect(),
+            receipts: self.driver.borrow().receipts(),
+            scheduled: self.driver.scheduled(),
+        };
+        audit("frame", std::slice::from_ref(&reading));
     }
+}
+
+thread_local! {
+    static ICED_BACKEND: OnceCell<Box<Backend>> = OnceCell::new();
+    static VELLO_BACKEND: OnceCell<Box<Backend>> = OnceCell::new();
+    static FIXTURES: std::collections::BTreeMap<usize, Box<Fixture>> =
+        std::collections::BTreeMap::new();
+}
+
+fn shared_backend(host: Host) -> &'static Backend {
+    let cell = match host {
+        Host::Immediate => &ICED_BACKEND,
+        Host::Retained => &VELLO_BACKEND,
+    };
+    cell.with(|backend| {
+        backend.get_or_init(|| {
+            Box::new(
+                Backend::try_from(host)
+                    .unwrap_or_else(|error| panic!("no host to measure on: {error}")),
+            )
+        })
+    })
+}
+
+fn shared_fixture(index: usize, scenario: &Scenario) -> &'static Fixture {
+    FIXTURES.with(|fixtures| {
+        fixtures
+            .entry(index)
+            .or_insert_with(|| Box::new(Fixture::new(scenario.control)))
+    })
 }
 
 fn prepare_frame(index: usize) -> FrameWork {
@@ -317,42 +363,30 @@ fn prepare_frame(index: usize) -> FrameWork {
     } else {
         "vello"
     };
-    let backend = Backend::try_from(host)
-        .unwrap_or_else(|error| panic!("{label}: NOT MEASURED, no host to measure it on: {error}"));
-    // A driver borrows its fixture. Keep the one fixture for this case alive
-    // for the rest of the process, outside the measured frame and allocation window.
-    let fixture = Box::leak(Box::new(Fixture::new(scenario.control)));
+    let backend = shared_backend(host);
+    let fixture = shared_fixture(index, scenario);
     let reads = Rc::new(CensusReads::default());
     let rect = laid_out_rect(fixture, &reads, &backend.geometry());
     let mut driver = driver(&backend, fixture, Rc::clone(&reads));
     let _warm = driver.frame();
     let steps = scenario.interaction.steps(rect);
+    let action_steps = steps.clone();
     let action = Box::new(move || {
-        for step in &steps {
+        for step in &action_steps {
             driver.interact(*step);
         }
         let _frame = driver.frame();
-        Reading {
-            rect,
-            gestured: matches!(
-                scenario.interaction,
-                Interaction::Drag | Interaction::Press | Interaction::PressLeading
-            ),
-            name: scenario.name,
-            points: steps
-                .iter()
-                .filter_map(|step| match step {
-                    Step::Move(at) => Some(*at),
-                    Step::Press | Step::Release | Step::Data => None,
-                })
-                .collect(),
-            receipts: driver.receipts(),
-            scheduled: driver.scheduled(),
-        }
     });
     FrameWork {
         action,
-        reading: None,
+        driver: Rc::new(std::cell::RefCell::new(driver)),
+        rect,
+        name: scenario.name,
+        steps,
+        gestured: matches!(
+            scenario.interaction,
+            Interaction::Drag | Interaction::Press | Interaction::PressLeading
+        ),
     }
 }
 
