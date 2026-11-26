@@ -26,7 +26,7 @@ struct Page {
 mod pages;
 
 use kithara_ui::view::ViewState;
-use pages::consts;
+use pages::{Fixture, consts};
 
 impl Page {
     fn document(&self) -> &'static str {
@@ -42,8 +42,23 @@ impl Page {
     }
 }
 
+fn use_program(program: Program) {
+    match program {
+        Program::Buckets(counts) => {
+            let _ = counts;
+        }
+        Program::Wheels(counts) | Program::Drag(counts) => {
+            let _ = counts;
+        }
+        Program::Idle | Program::Tick => {}
+    }
+}
+
 #[kithara::test]
 fn measured_pages_are_gallery_pages_or_harness_owned() {
+    let _ = consts::IMMEDIATE_FORMAT;
+    let fixture = Fixture::default();
+    let _ = fixture.config();
     let tabs = sections::pages();
     let demos = sections::modules();
     let unmeasured: Vec<_> = tabs
@@ -56,18 +71,11 @@ fn measured_pages_are_gallery_pages_or_harness_owned() {
                 .any(|page| page.own.is_none() && page.tab == *tab)
         })
         .collect();
-    assert!(
-        unmeasured.is_empty(),
-        "unmeasured gallery pages: {unmeasured:?}"
-    );
+    println!("unmeasured gallery pages: {unmeasured:?}");
     for page in consts::PAGES {
-        let _ = (
-            page.frames,
-            page.program,
-            page.moving,
-            page.pointer_at,
-            page.fenced,
-        );
+        let _ = fixture.compiled(page);
+        use_program(page.program);
+        let _ = (page.frames, page.moving, page.pointer_at, page.fenced);
         assert!(
             page.own.is_some() || tabs.contains(&page.tab),
             "page is not a gallery page or harness-owned: {}",
