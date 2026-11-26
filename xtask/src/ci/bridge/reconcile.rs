@@ -11,13 +11,14 @@ use tracing::{info, warn};
 use super::{
     api::{Github, Gitlab},
     checks,
-    command::BridgeConfig,
+    command::{BridgeConfig, PlanControl},
     git::{GitRepo, Judged},
     ledger::{DefaultBranchStatus, Ledger, LedgerEntry},
     model::{
         Branches, Direction, PipelineObservation, PullRequest, Scope, VerificationState,
         direction_for, validate_sha,
     },
+    plan_control,
 };
 use crate::ci::run::PipelineKind;
 
@@ -31,12 +32,12 @@ pub(super) struct Bridge {
 /// One verification attempt: a pull-request head judged merged with a
 /// default-branch commit, under the bridge configuration that names both
 /// sides and links the pipeline.
-struct VerificationAttempt<'a> {
-    head_sha: &'a str,
-    base_sha: &'a str,
-    attempt: u64,
-    scope: Scope,
-    config: &'a BridgeConfig,
+pub(super) struct VerificationAttempt<'a> {
+    pub(super) head_sha: &'a str,
+    pub(super) base_sha: &'a str,
+    pub(super) attempt: u64,
+    pub(super) scope: Scope,
+    pub(super) config: &'a BridgeConfig,
 }
 
 /// A verification an open pull request stands on: its head, the base it is
@@ -347,6 +348,9 @@ impl Bridge {
                     );
                 }
             };
+            if let Some(control) = &self.config.plan_control {
+                self.publish_plan(control, ledger, &attempt, &entry, &judged, pr_tests)?;
+            }
             self.repo.push_gitlab(&self.gitlab, &judged, &reference)?;
             let discovered =
                 self.gitlab
@@ -400,6 +404,55 @@ impl Bridge {
                 ledger.finish(&pull.head_sha, base_sha, entry.attempt, id, state, detail)
             },
             |id| ledger.release(&pull.head_sha, base_sha, entry.attempt, id),
+        )
+    }
+
+    /// Export the plan view of an attempt before its run is dispatched, so
+    /// the run never starts ahead of the plan that describes it.
+    fn publish_plan(
+        &self,
+        control: &PlanControl,
+        ledger: &Ledger,
+        attempt: &VerificationAttempt<'_>,
+        entry: &LedgerEntry,
+        judged: &str,
+        pr_tests: Option<&str>,
+    ) -> Result<()> {
+        plan_control::publish(
+            attempt,
+            entry.plan.as_ref(),
+            judged,
+            || {
+                let predecessor = self
+                    .github
+                    .latest_statuses(attempt.head_sha)?
+                    .get(&plan_control::context(attempt))
+                    .map(|status| {
+                        status["id"]
+                            .as_u64()
+                            .context("GitHub commit status has no id")
+                    })
+                    .transpose()?;
+                plan_control::seal(
+                    control,
+                    attempt,
+                    pr_tests,
+                    judged,
+                    &self.repo.tree(judged)?,
+                    self.github.repository_id()?,
+                    predecessor,
+                )
+            },
+            |bytes, sha256| self.github.retain_plan_view(bytes, sha256),
+            |seal| {
+                ledger.seal_plan(
+                    attempt.head_sha,
+                    attempt.base_sha,
+                    attempt.attempt,
+                    seal.clone(),
+                )
+            },
+            |status| self.github.report_check_status(attempt.head_sha, status),
         )
     }
 }

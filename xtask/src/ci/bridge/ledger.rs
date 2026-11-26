@@ -23,7 +23,20 @@ pub(super) struct LedgerEntry {
     /// Entries written before drafts were scoped were all full verifications.
     #[serde(default)]
     pub(super) scope: Scope,
+    /// The plan view this attempt sealed, once its bytes were read back.
+    #[serde(default)]
+    pub(super) plan: Option<PlanSeal>,
     updated_at: u64,
+}
+
+/// A sealed plan view: its digest, the retention commit holding its bytes and
+/// the judged commit it describes. It attests the plan, not a verdict.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PlanSeal {
+    pub(super) sha256: String,
+    pub(super) commit: String,
+    pub(super) judged: String,
 }
 
 /// What the bridge last posted on one default-branch commit.
@@ -168,6 +181,7 @@ impl Ledger {
                 announced: false,
                 detail: None,
                 scope,
+                plan: None,
                 updated_at: unix_time()?,
             };
             data.verifications.insert(key, entry.clone());
@@ -231,6 +245,25 @@ impl Ledger {
                 .ok_or_else(|| anyhow::anyhow!("verification {key} has not been reserved"))?
                 .updated_at = unix_time()?;
             self.write(data)
+        })
+    }
+
+    /// Record the plan view an attempt sealed. An attempt seals one view: a
+    /// second would let two plans speak for the same run.
+    pub(super) fn seal_plan(
+        &self,
+        head_sha: &str,
+        base_sha: &str,
+        attempt: u64,
+        seal: PlanSeal,
+    ) -> Result<()> {
+        self.update(head_sha, base_sha, |data, key| {
+            let entry = testing_attempt(data, key, attempt)?;
+            if entry.plan.is_some() {
+                bail!("verification {key} attempt {attempt} already sealed a plan view");
+            }
+            entry.plan = Some(seal);
+            Ok(true)
         })
     }
 
@@ -417,6 +450,7 @@ fn reopen(entry: &mut LedgerEntry) -> Result<()> {
     entry.pipeline_id = None;
     entry.announced = false;
     entry.detail = None;
+    entry.plan = None;
     entry.updated_at = unix_time()?;
     Ok(())
 }
@@ -776,6 +810,34 @@ mod tests {
         assert_eq!(entry.pipeline_id, None);
         assert!(!entry.announced);
         assert_eq!(entry.detail, None);
+    }
+
+    /// An attempt seals one plan view; the next attempt starts unsealed, and a
+    /// stale attempt cannot seal over the current one.
+    #[test]
+    fn a_plan_view_is_sealed_once_per_attempt() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        ledger.reserve("head", "base", Scope::Full).unwrap();
+        let seal = PlanSeal {
+            sha256: "a".repeat(64),
+            commit: "b".repeat(40),
+            judged: "c".repeat(40),
+        };
+
+        ledger.seal_plan("head", "base", 1, seal.clone()).unwrap();
+        assert!(ledger.seal_plan("head", "base", 1, seal.clone()).is_err());
+        let reopened = Ledger::new(directory.path()).unwrap();
+        assert_eq!(
+            reopened.get("head", "base").unwrap().unwrap().plan,
+            Some(seal.clone())
+        );
+
+        ledger.attach("head", "base", 1, 42).unwrap();
+        ledger.release("head", "base", 1, 42).unwrap();
+        assert_eq!(ledger.get("head", "base").unwrap().unwrap().plan, None);
+        assert!(ledger.seal_plan("head", "base", 1, seal.clone()).is_err());
+        ledger.seal_plan("head", "base", 2, seal).unwrap();
     }
 
     #[test]

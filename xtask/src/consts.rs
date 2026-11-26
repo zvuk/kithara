@@ -254,6 +254,9 @@ pub(crate) const GRACE: Duration = Duration::from_secs(10);
 
 pub(crate) const STATUS_CONTEXT: &str = "kithara/gitlab-verification";
 
+/// The branch that keeps every retained plan view reachable. It only grows.
+pub(crate) const PLAN_RETENTION_REF: &str = "heads/ci-plan-control-v3";
+
 /// Bridge-owned plan control status namespaces, matched case-insensitively as
 /// the exact context or a `/`-separated child. They never count as source evidence.
 pub(crate) const PLAN_CONTROL_NAMESPACES: [&str; 3] = [

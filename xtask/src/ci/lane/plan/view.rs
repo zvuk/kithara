@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use kithara_devtools::Ctx;
+use kithara_devtools::{Ctx, common::project::ProjectConfig};
 use serde_json::{Value, json};
 use sha2::Digest as _;
 
@@ -17,8 +17,23 @@ use super::{
 };
 use crate::config::{CiProjectConfig, KitharaExt};
 
+/// Seal the canonical view bytes of one operation, resolved by the protected
+/// `policy` from the public catalog in `checkout`, its clean policy revision.
+pub(crate) fn seal_view(
+    checkout: &Path,
+    policy: &PlanningPolicy,
+    request: PlanRequest,
+    operation: &wire::Operation,
+    consumer_source_pin: &str,
+) -> Result<Vec<u8>> {
+    require_policy_checkout(checkout, &policy.revision)?;
+    let ctx = Ctx::new(checkout.to_path_buf(), ProjectConfig::load(checkout)?);
+    let view = prepare_view(&ctx, request, policy, operation, consumer_source_pin)?;
+    Ok(wire::canonical_json(&view)?)
+}
+
 /// Require `worktree` to be the clean checkout of the operator-bound policy revision.
-pub(super) fn require_policy_checkout(worktree: &Path, revision: &str) -> Result<()> {
+fn require_policy_checkout(worktree: &Path, revision: &str) -> Result<()> {
     let git = |args: &[&str]| -> Result<Vec<u8>> {
         let output = Command::new("git")
             .args(args)
@@ -41,7 +56,7 @@ pub(super) fn require_policy_checkout(worktree: &Path, revision: &str) -> Result
     Ok(())
 }
 
-pub(super) fn prepare_view(
+fn prepare_view(
     ctx: &Ctx,
     request: PlanRequest,
     policy: &PlanningPolicy,
@@ -145,7 +160,7 @@ fn harness(catalog: &Catalog) -> Result<Value> {
     Ok(serde_json::to_value(values)?)
 }
 
-pub(super) fn verify_catalog(
+fn verify_catalog(
     view: &wire::PlanViewV3,
     catalog: &Catalog,
     config: &CiProjectConfig,
@@ -228,10 +243,7 @@ mod tests {
 
     fn produced(trust: &str) -> (Ctx, wire::PlanViewV3) {
         let root = root();
-        let ctx = Ctx::new(
-            root.clone(),
-            kithara_devtools::common::project::ProjectConfig::load(&root).unwrap(),
-        );
+        let ctx = Ctx::new(root.clone(), ProjectConfig::load(&root).unwrap());
         let config = KitharaExt::from_ctx(&ctx).unwrap();
         let catalog = Catalog::load(&root, &config.ci).unwrap();
         let mut request = plan_request(&["linux-lint", "linux-tooling"]);

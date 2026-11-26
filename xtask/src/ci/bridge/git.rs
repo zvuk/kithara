@@ -375,6 +375,11 @@ impl GitRepo {
         Ok(output.status.success())
     }
 
+    /// The tree a judged commit hands its run.
+    pub(super) fn tree(&self, commit: &str) -> Result<String> {
+        self.rev_parse(&format!("{commit}^{{tree}}"))
+    }
+
     fn rev_parse(&self, reference: &str) -> Result<String> {
         let bytes = self.run(&["rev-parse", reference], None)?;
         Ok(String::from_utf8(bytes)
@@ -650,6 +655,7 @@ mod tests {
             gitlab_branch: "develop".into(),
             state_dir: state.to_path_buf(),
             trusted_authors: Vec::new(),
+            plan_control: None,
         }
     }
 

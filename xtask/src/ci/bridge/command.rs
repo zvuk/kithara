@@ -76,6 +76,23 @@ pub(super) struct BridgeConfig {
     /// contributor gets.
     #[serde(default)]
     pub(super) trusted_authors: Vec<String>,
+    /// Plan control publication, which the host enables by naming its
+    /// protected plan inputs. Without them no attempt publishes a plan view.
+    #[serde(default)]
+    pub(super) plan_control: Option<PlanControl>,
+}
+
+/// The host's protected plan inputs, never read from a repository a pull
+/// request can change.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PlanControl {
+    /// The operator's planning policy.
+    pub(super) policy: PathBuf,
+    /// A clean checkout of the policy revision, whose public catalog it resolves.
+    pub(super) checkout: PathBuf,
+    /// The consumer source commit every view pins.
+    pub(super) consumer_source_pin: String,
 }
 
 impl BridgeConfig {
@@ -136,6 +153,13 @@ impl BridgeConfig {
             || self.state_dir.parent() == Some(Path::new("/"))
         {
             bail!("state_dir must be an absolute path below a dedicated directory");
+        }
+        if let Some(plan) = &self.plan_control
+            && (!regular_file(&plan.policy)
+                || !plan.checkout.is_absolute()
+                || !validate_sha(&plan.consumer_source_pin))
+        {
+            bail!("plan_control needs a policy file, an absolute checkout and a full source pin");
         }
         Ok(())
     }
@@ -200,7 +224,7 @@ pub(crate) fn run(args: &BridgeArgs) -> Result<()> {
 mod tests {
     use clap::Parser;
 
-    use super::BridgeConfig;
+    use super::{BridgeConfig, PlanControl};
     use crate::Cli;
 
     fn example() -> String {
@@ -274,6 +298,35 @@ mod tests {
         .unwrap();
 
         assert_eq!(super::secret_files(&config).unwrap(), [github, gitlab]);
+    }
+
+    /// Publication is the host's to enable, and only with protected inputs it
+    /// can name: a missing policy file or an abbreviated pin is refused.
+    #[test]
+    fn plan_control_is_off_by_default_and_refuses_incomplete_inputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = toml::from_str::<BridgeConfig>(&example()).unwrap();
+        assert!(config.plan_control.is_none());
+        let token = directory.path().join("token");
+        let policy = directory.path().join("policy.json");
+        std::fs::write(&token, "token\n").unwrap();
+        config.github_token_file.clone_from(&token);
+        config.gitlab_token_file = token;
+        config.state_dir = directory.path().join("state");
+        config.validate().unwrap();
+
+        config.plan_control = Some(PlanControl {
+            policy: policy.clone(),
+            checkout: directory.path().into(),
+            consumer_source_pin: "a".repeat(40),
+        });
+        assert!(config.validate().is_err(), "a missing policy file");
+        std::fs::write(&policy, "{}").unwrap();
+        config.validate().unwrap();
+        if let Some(plan) = &mut config.plan_control {
+            plan.consumer_source_pin.truncate(12);
+        }
+        assert!(config.validate().is_err(), "an abbreviated pin");
     }
 
     #[test]
