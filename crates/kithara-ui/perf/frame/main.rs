@@ -320,6 +320,31 @@ impl FrameWork {
     }
 }
 
+thread_local! {
+    static BACKENDS: OnceCell<Box<Backend>> = OnceCell::new();
+    static FIXTURES: std::collections::BTreeMap<usize, Box<Fixture>> =
+        std::collections::BTreeMap::new();
+}
+
+fn shared_backend(host: Host) -> &'static Backend {
+    BACKENDS.with(|backend| {
+        backend.get_or_init(|| {
+            Box::new(
+                Backend::try_from(host)
+                    .unwrap_or_else(|error| panic!("no host to measure on: {error}")),
+            )
+        })
+    })
+}
+
+fn shared_fixture(index: usize, scenario: &Scenario) -> &'static Fixture {
+    FIXTURES.with(|fixtures| {
+        fixtures
+            .entry(index)
+            .or_insert_with(|| Box::new(Fixture::new(scenario.control)))
+    })
+}
+
 fn prepare_frame(index: usize) -> FrameWork {
     load_fonts();
     let host = if index < consts::SCENARIOS.len() {
@@ -333,11 +358,8 @@ fn prepare_frame(index: usize) -> FrameWork {
     } else {
         "vello"
     };
-    let backend = Backend::try_from(host)
-        .unwrap_or_else(|error| panic!("{label}: NOT MEASURED, no host to measure it on: {error}"));
-    // A driver borrows its fixture. Keep the one fixture for this case alive
-    // for the rest of the process, outside the measured frame and allocation window.
-    let fixture = Box::leak(Box::new(Fixture::new(scenario.control)));
+    let backend = shared_backend(host);
+    let fixture = shared_fixture(index, scenario);
     let reads = Rc::new(CensusReads::default());
     let rect = laid_out_rect(fixture, &reads, &backend.geometry());
     let mut driver = driver(&backend, fixture, Rc::clone(&reads));

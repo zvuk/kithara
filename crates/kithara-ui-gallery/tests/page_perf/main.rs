@@ -5,7 +5,7 @@ mod immediate;
 mod pages;
 mod retained;
 
-use std::{borrow::Cow, sync::LazyLock};
+use std::{borrow::Cow, cell::OnceCell, sync::LazyLock};
 
 use criterion::{BenchmarkId, Criterion};
 use iced::{Theme, advanced::graphics::text::font_system, theme::Palette};
@@ -575,7 +575,7 @@ impl<'run> GalleryWork<'run> {
         let baseline = match self.run {
             Run::Wheels(count) if count > 0 => {
                 let fixture = Fixture::default();
-                let mut gpu = Gpu::try_from(self.host).expect("baseline GPU");
+                let mut gpu = shared_gpu(self.host);
                 Some(
                     measure(
                         &fixture,
@@ -590,7 +590,7 @@ impl<'run> GalleryWork<'run> {
             }
             Run::Moves(count) if count > 0 => {
                 let fixture = Fixture::default();
-                let mut gpu = Gpu::try_from(self.host).expect("baseline GPU");
+                let mut gpu = shared_gpu(self.host);
                 Some(
                     measure(
                         &fixture,
@@ -609,17 +609,37 @@ impl<'run> GalleryWork<'run> {
     }
 }
 
+thread_local! {
+    static GPUS: OnceCell<Box<Gpu>> = OnceCell::new();
+    static FIXTURES: std::collections::BTreeMap<usize, Box<Fixture>> =
+        std::collections::BTreeMap::new();
+}
+
+fn shared_gpu(host: Host) -> &'static mut Gpu {
+    GPUS.with(|gpu| {
+        gpu.get_or_init(|| {
+            Box::new(
+                Gpu::try_from(host)
+                    .unwrap_or_else(|error| panic!("no host to measure on: {error}")),
+            )
+        })
+    })
+}
+
+fn shared_fixture(index: usize) -> &'static Fixture {
+    FIXTURES.with(|fixtures| {
+        fixtures
+            .entry(index)
+            .or_insert_with(|| Box::new(Fixture::default()))
+    })
+}
+
 fn prepare_gallery(index: usize) -> GalleryWork<'static> {
     load_fonts();
     let (page_index, host, run, fenced) = gallery_case(index);
     let page = &consts::PAGES[page_index];
-    let fixture = Box::leak(Box::new(Fixture::default()));
-    let gpu = Box::leak(Box::new(Gpu::try_from(host).unwrap_or_else(|error| {
-        panic!(
-            "{}: NOT MEASURED, no host to measure it on: {error}",
-            page.name
-        )
-    })));
+    let fixture = shared_fixture(page_index);
+    let gpu = shared_gpu(host);
     let expected = leaves(&fixture.compiled(page));
     let app = PageApp::new(page, run);
     let mut driver: Box<dyn PageHost + 'static> = match &mut *gpu {
