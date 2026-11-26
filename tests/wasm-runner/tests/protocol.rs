@@ -6,10 +6,52 @@
 
 use std::{
     env,
-    process::{Command, Stdio},
+    io::{BufRead, BufReader},
+    path::Path,
+    process::{Child, ChildStdout, Command, Stdio},
 };
 
 use kithara_test_utils::kithara;
+
+struct FixtureServer {
+    child: Child,
+    _stdout: BufReader<ChildStdout>,
+}
+
+impl Drop for FixtureServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn fixture_server() -> FixtureServer {
+    let port = env::var("TEST_SERVER_PORT").unwrap_or_else(|_| "3444".into());
+    let binary = Path::new(env!("CARGO_BIN_EXE_wasm_test_runner"))
+        .parent()
+        .expect("the runner has a parent directory")
+        .join("test_server")
+        .with_extension(env::consts::EXE_EXTENSION);
+    let mut child = Command::new(binary)
+        .env("TEST_SERVER_PORT", &port)
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("the shared fixture server starts");
+    let mut stdout = BufReader::new(child.stdout.take().expect("fixture server stdout"));
+    let mut record = String::new();
+    let read = stdout
+        .read_line(&mut record)
+        .expect("fixture server readiness");
+    assert!(read > 0, "fixture server exited before readiness");
+    assert!(
+        record.starts_with(&format!("test server listening on http://127.0.0.1:{port}")),
+        "unexpected fixture server readiness record: {record}"
+    );
+    FixtureServer {
+        child,
+        _stdout: stdout,
+    }
+}
 
 /// Arguments after the binary, whether the run passes, and the counts its
 /// summary must report.
@@ -79,6 +121,7 @@ fn check(variable: &str, target: &str) {
 /// runs of real test binaries do.
 #[kithara::test(native, timeout(Long))]
 fn each_mode_reports_pass_fail_and_ignored() {
+    let _fixture = fixture_server();
     check("KITHARA_WASM_RUNNER_FIXTURE_BROWSER", "browser");
     check("KITHARA_WASM_RUNNER_FIXTURE_WORKER", "worker");
 }
