@@ -52,7 +52,14 @@ fn run_threaded_get_put(pools: &Pools, threads: usize, iterations: usize) -> usi
 
 fn warm_pools() -> Pools {
     let pools = benchmark_pools();
-    get_u8(&pools, 4 * 1024);
+    for _ in 0..8 {
+        get_u8(&pools, 4 * 1024);
+    }
+    get_u8(&pools, 64 * 1024);
+    let buffer = pools
+        .get_with_len::<f32>(16 * 1024)
+        .expect("warm f32 buffer");
+    std::hint::black_box(buffer.len());
     pools
 }
 
