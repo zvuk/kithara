@@ -223,12 +223,17 @@ always = ["backend-cpal"]
 when_feature = "beat-backend"
 never = ["beat-backend"]
 
-# `beat-nn` scopes this rule to both crates and is invalid without model bytes.
-# Full-int8 cannot be produced on CI runners. CUDA needs a model and is checked
+# `beat-nn` is invalid without model bytes. CUDA needs a model and is checked
 # with each supported model by the product-context recipe.
 [[health.feature_invariants]]
 when_feature = "beat-nn"
-never = ["beat-nn", "beat-nn-full-int8", "beat-cuda"]
+never = ["beat-nn", "beat-cuda"]
+
+# Model-forwarding consumers need not expose the internal `beat-nn` marker.
+# Full-int8 cannot be produced on CI runners.
+[[health.feature_invariants]]
+when_feature = "beat-nn-small"
+never = ["beat-nn-full-int8"]
 mutually_exclusive = [["beat-nn-small", "beat-nn-full"]]
 
 # kithara-beat embeds one model and says so with compile_error!.

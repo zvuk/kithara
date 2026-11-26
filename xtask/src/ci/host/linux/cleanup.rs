@@ -19,9 +19,8 @@ use crate::{
 /// blanket `docker system prune` would take theirs. A live cache stays and is
 /// held to a budget instead: the per-runner build roots under the configured
 /// cache root are trimmed here, `kithara-ci-fixtures` is what this exists to
-/// protect, and Cargo home is never touched. A volume of this project's that
-/// no container is attached to any more is not a cache but a leftover, and it
-/// is reclaimed.
+/// protect, and Cargo home is never touched. Unattached project volumes remain
+/// live while the host declares them; only undeclared leftovers are reclaimed.
 ///
 /// What to keep is named by the caller rather than read from the pins, because
 /// this runs from a timer and the pins move with the repository. Read there,
@@ -49,7 +48,10 @@ pub(super) fn run(process: &Process, host: &LinuxHost, keep: &[String]) -> Resul
             "remove superseded project images",
             reclaim_images(process, keep),
         ),
-        ("remove dead project volumes", reclaim_volumes(process)),
+        (
+            "remove dead project volumes",
+            reclaim_volumes(process, host),
+        ),
         (
             "collect the local compiler stores",
             reclaim_compiler_stores(process, host, image),
@@ -94,7 +96,7 @@ fn reclaim_images(process: &Process, keep: &[String]) -> Result<()> {
 }
 
 /// The volumes no container holds, and Docker's old build cache.
-fn reclaim_volumes(process: &Process) -> Result<()> {
+fn reclaim_volumes(process: &Process, host: &LinuxHost) -> Result<()> {
     let dangling = process.capture(
         "docker",
         &[
@@ -109,7 +111,7 @@ fn reclaim_volumes(process: &Process) -> Result<()> {
         ],
         "list this project's unattached volumes",
     )?;
-    let orphans = orphaned_volumes(&dangling);
+    let orphans = orphaned_volumes(&dangling, host);
     for volume in &orphans {
         process.best_effort("docker", &["volume", "rm", volume], "remove a dead volume");
     }
@@ -245,21 +247,18 @@ fn superseded<'a>(listed: &'a str, keep: &[String]) -> Vec<&'a str> {
         .collect()
 }
 
-/// This project's volumes that no container is attached to any more.
-///
-/// A live cache (`kithara-ci-fixtures`) carries a link and is never listed
-/// here — Docker's own `dangling` filter is the authority on that, not a
-/// name pattern. What this catches is a generation the fleet has moved off:
-/// the single shared `kithara-ci-target` left behind when the runners went to
-/// one volume each held 231 GB on a 1.8 TB disk that was 99% full, and nothing
-/// reclaimed it, because "leave the volumes alone" treated this project's own
-/// corpse as if it belonged to a stack this code does not own. It does not: the
-/// name says whose it is and the link count says it is dead.
-fn orphaned_volumes(listed: &str) -> Vec<&str> {
+/// Unattached project volumes that the current host no longer declares.
+fn orphaned_volumes<'a>(listed: &'a str, host: &LinuxHost) -> Vec<&'a str> {
+    let declared = host
+        .runners
+        .iter()
+        .flat_map(|runner| Container::mounts(host, runner))
+        .filter_map(|(source, _)| (Container::mount_type(&source) == "volume").then_some(source))
+        .collect::<BTreeSet<_>>();
     listed
         .lines()
         .map(str::trim)
-        .filter(|volume| !volume.is_empty())
+        .filter(|volume| !volume.is_empty() && !declared.contains(*volume))
         .collect()
 }
 
@@ -487,27 +486,64 @@ mod tests {
     }
 
     #[test]
-    fn a_volume_no_container_holds_is_reclaimed() {
-        // What `docker volume ls --filter dangling=true` answers: the live
-        // per-runner caches carry a link and never appear, so this list is
-        // already only the dead. Blank lines are what the empty case looks
-        // like on the wire.
+    fn an_idle_native_worker_keeps_declared_fixtures_and_reclaims_only_undeclared_orphans() {
+        use crate::ci::process::Recording;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = super::super::profile::tests::gitlab_fixture();
+        host.cache_root = directory.path().join("cache");
+        host.compiler_cache_root = Some(directory.path().join("compiler"));
+        assert!(host.runners.iter().all(|runner| matches!(
+            runner.target,
+            super::super::profile::RunnerTarget::Gitlab { .. }
+        )));
+        assert!(host.runners.iter().all(|runner| {
+            Container::mounts(&host, runner)
+                .iter()
+                .any(|(source, destination)| {
+                    source == "kithara-ci-fixtures" && *destination == "/cache/fixtures"
+                })
+        }));
+        let process = Process::recording(
+            directory.path(),
+            Recording::default().with_reply(
+                &["docker", "volume", "ls"],
+                "kithara-ci-fixtures\nkithara-ci-target-obsolete\n",
+            ),
+        );
+        run(&process, &host, &keep(&["installed:reviewed"])).unwrap();
+        let recorded = process.recorded().unwrap();
+        let removed = recorded
+            .steps()
+            .iter()
+            .filter(|step| {
+                step.program == "docker"
+                    && step.args.first().is_some_and(|arg| arg == "volume")
+                    && step.args.get(1).is_some_and(|arg| arg == "rm")
+            })
+            .map(|step| step.args[2].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(removed, ["kithara-ci-target-obsolete"]);
+    }
+
+    #[test]
+    fn an_undeclared_volume_no_container_holds_is_reclaimed() {
         let dangling = "kithara-ci-target\n\nkithara-ci-target-gerasim13-99\n";
         assert_eq!(
-            orphaned_volumes(dangling),
+            orphaned_volumes(dangling, &super::super::profile::tests::host_fixture()),
             ["kithara-ci-target", "kithara-ci-target-gerasim13-99"],
-            "every unattached project volume is named for removal"
+            "unattached undeclared project volumes are named for removal"
         );
     }
 
     #[test]
     fn nothing_is_removed_when_every_volume_is_attached() {
         assert!(
-            orphaned_volumes("").is_empty(),
+            orphaned_volumes("", &super::super::profile::tests::host_fixture()).is_empty(),
             "an empty dangling list must not name a single volume"
         );
         assert!(
-            orphaned_volumes("   \n\n").is_empty(),
+            orphaned_volumes("   \n\n", &super::super::profile::tests::host_fixture()).is_empty(),
             "whitespace is not a volume name"
         );
     }
