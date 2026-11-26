@@ -4,9 +4,12 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use super::projection::{Snapshot, check, check_context, check_contexts};
-use crate::ci::bridge::{
-    api::Github,
-    model::{CheckStatus, PullRequest},
+use crate::{
+    ci::bridge::{
+        api::Github,
+        model::{CheckStatus, PullRequest},
+    },
+    consts::PLAN_CONTROL_NAMESPACES,
 };
 
 pub(super) fn observe(github: &Github, pull: &PullRequest) -> Result<Snapshot> {
@@ -228,6 +231,11 @@ fn commit_statuses(statuses: &[Value]) -> Result<Vec<CheckStatus>> {
             "kithara/pr-size" | "kithara/github-ci" | "kithara/gitlab-verification"
         ) || identity.starts_with("github /")
             || identity.starts_with("gitlab /")
+            || PLAN_CONTROL_NAMESPACES.iter().any(|namespace| {
+                identity
+                    .strip_prefix(namespace)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            })
         {
             continue;
         }
@@ -963,6 +971,49 @@ mod tests {
             ),
             "success"
         );
+    }
+
+    #[test]
+    fn plan_control_namespaces_are_never_source_evidence() {
+        let reserved = [
+            "kithara/plan-control",
+            "KITHARA/PLAN-CONTROL/operation-1",
+            "Kithara/Plan-Admission/operation-1",
+            "kithara/plan-request",
+            "kithara/plan-request/run/7",
+        ]
+        .map(|context| status(1, context, "success"));
+        assert_eq!(
+            aggregate(&observe_values(&pull(), &[], &[], &reserved, &[]).unwrap()),
+            "pending"
+        );
+        let foreign = [
+            "kithara/plan-controller",
+            "plan-admission",
+            "ci/plan-request",
+        ];
+        let mixed = [
+            reserved.to_vec(),
+            foreign
+                .map(|context| status(2, context, "success"))
+                .to_vec(),
+        ]
+        .concat();
+        let observed = observe_values(&pull(), &[], &[], &mixed, &[]).unwrap();
+        let contexts: Vec<_> = observed
+            .statuses
+            .iter()
+            .filter(|status| status.context.starts_with("GitHub / status: "))
+            .collect();
+        assert_eq!(contexts.len(), foreign.len());
+        for name in foreign {
+            let prefix = format!("GitHub / status: {name} [");
+            assert!(
+                contexts
+                    .iter()
+                    .any(|status| status.context.starts_with(&prefix))
+            );
+        }
     }
 
     #[test]

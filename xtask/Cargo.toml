@@ -42,7 +42,6 @@ cli = [
     "dep:reqwest",
     "dep:roxmltree",
     "dep:rustdoc-types",
-    "dep:serde",
     "dep:serde_yaml_ng",
     "dep:signal-hook",
     "dep:tiny_http",
@@ -72,7 +71,7 @@ regex = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true, features = ["blocking", "form", "json", "rustls"] }
 roxmltree = { workspace = true, optional = true }
 rustdoc-types = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true, optional = true }
 sha2 = { workspace = true }

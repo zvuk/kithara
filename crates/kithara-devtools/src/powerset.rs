@@ -298,6 +298,39 @@ always = ["codec"]
     }
 
     #[test]
+    fn forwarding_consumers_inherit_the_model_policy_without_internal_markers() -> Result<()> {
+        let manifest = crate::testing::package().join("../../Cargo.toml");
+        let ctx = Ctx::load_from_manifest(&manifest)?;
+        for no_dev_deps in [false, true] {
+            let commands = plan(&ctx, no_dev_deps, Part::Invariants, None)?;
+            for package in ["kithara-analyze", "kithara-analysis", "kithara"] {
+                let command = commands
+                    .iter()
+                    .find(|args| args.windows(2).any(|pair| pair == ["-p", package]))
+                    .expect("model consumer remains in the invariant checks");
+                for required in [
+                    ["--exclude-features", "beat-nn-full-int8"],
+                    [
+                        "--mutually-exclusive-features",
+                        "beat-nn-small,beat-nn-full",
+                    ],
+                ] {
+                    assert!(
+                        command.windows(2).any(|pair| {
+                            pair[0] == required[0]
+                                && required[1]
+                                    .split(',')
+                                    .all(|feature| pair[1].split(',').any(|name| name == feature))
+                        }),
+                        "{package}: {command:?} lacks {required:?}",
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn native_partition_preserves_every_invocation_and_its_invariants() -> Result<()> {
         let (_root, ctx) = workspace()?;
         for part in [Part::Full, Part::Workspace, Part::Invariants] {

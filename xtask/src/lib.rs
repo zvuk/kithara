@@ -4,4 +4,9 @@ pub mod ci {
     pub mod bootstrap;
     pub mod cache_report;
     pub mod github;
+    pub mod lane {
+        pub mod plan {
+            pub mod wire;
+        }
+    }
 }

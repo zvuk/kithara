@@ -175,6 +175,22 @@ mod tests {
     use super::{Cli, Command};
 
     #[test]
+    fn ci_shared_plan_is_a_read_only_command() {
+        assert!(
+            Cli::try_parse_from([
+                "xtask",
+                "ci",
+                "plan",
+                "--request",
+                "request.json",
+                "--policy",
+                "policy.json"
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn agent_hook_uses_payload_without_cli_discriminator() {
         assert!(Cli::try_parse_from(["xtask", "agent-hook"]).is_ok());
         assert!(Cli::try_parse_from(["xtask", "agent-hook", "pre-bash"]).is_err());
