@@ -16,7 +16,7 @@ ignored = ["serde"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
+perf = ["kithara-net/perf"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-net/client-reqwest",
@@ -74,7 +74,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
-hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true }

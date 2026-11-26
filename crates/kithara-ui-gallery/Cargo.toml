@@ -22,7 +22,7 @@ masonry = ["kithara-ui/masonry"]
 # What the suites vary on the demo model that the gallery itself never does.
 mock = []
 # Frame and page timings through hotpath.
-perf = ["dep:hotpath", "hotpath/hotpath", "kithara-ui/perf"]
+perf = ["kithara-ui/perf"]
 
 [dependencies]
 kithara-key = { workspace = true }
@@ -36,7 +36,6 @@ clap = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
-hotpath = { workspace = true, optional = true }
 iced = { workspace = true }
 kurbo = { workspace = true }
 num-traits = { workspace = true }

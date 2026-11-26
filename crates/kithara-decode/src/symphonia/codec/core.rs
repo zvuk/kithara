@@ -4,7 +4,6 @@ use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
-use kithara_test_utils::kithara;
 use symphonia::core::{
     audio::{Channels, GenericAudioBufferRef},
     codecs::{
@@ -305,7 +304,7 @@ fn copy_decoded(
     }
 
     out.ensure_len(num_samples)?;
-    kithara::measure_block!("symphonia::output::copy_interleaved", {
+    ({
         decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
     });
     out.truncate(num_samples);
@@ -315,7 +314,6 @@ fn copy_decoded(
 }
 
 impl FrameCodec for SymphoniaCodec {
-    #[kithara::measure(label = "decode.symphonia.codec")]
     fn decode_frame(
         &mut self,
         frame: crate::demuxer::Frame<'_>,
@@ -341,23 +339,7 @@ impl FrameCodec for SymphoniaCodec {
             frame.data,
         );
 
-        let decoded = match kithara::measure_block!(
-            match self.codec {
-                Some(AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2) => {
-                    "symphonia::decoder::aac"
-                }
-                Some(AudioCodec::Mp3) => "symphonia::decoder::mp3",
-                Some(AudioCodec::Flac) => "symphonia::decoder::flac",
-                Some(AudioCodec::Vorbis) => "symphonia::decoder::vorbis",
-                Some(AudioCodec::Opus) => "symphonia::decoder::opus",
-                Some(AudioCodec::Alac) => "symphonia::decoder::alac",
-                Some(AudioCodec::Pcm) => "symphonia::decoder::pcm",
-                Some(AudioCodec::Adpcm) => "symphonia::decoder::adpcm",
-                Some(AudioCodec::Ape) => "symphonia::decoder::ape",
-                None => "symphonia::decoder::native",
-            },
-            self.decoder.decode_ref(&packet_ref)
-        ) {
+        let decoded = match self.decoder.decode_ref(&packet_ref) {
             Ok(d) => d,
             Err(error) => return self.handle_decode_error(error, out, metadata),
         };
@@ -526,7 +508,6 @@ const fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<Code
 #[cfg(test)]
 mod tests {
     use kithara_stream::AudioCodec;
-    use kithara_test_utils::kithara;
 
     use super::SymphoniaCodec;
     use crate::{
@@ -561,7 +542,7 @@ mod tests {
     /// A zero sample rate in `TrackInfo` must be rejected with
     /// `DecodeError::InvalidSampleRate` instead of silently building a
     /// `AudioSpec { sample_rate: 0 }`.
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn open_with_config_zero_rate_returns_invalid_sample_rate() {
         match SymphoniaCodec::open_with_config(&zero_rate_track(), &SymphoniaConfig::default()) {
             Err(DecodeError::InvalidSampleRate { .. }) => {}
@@ -573,7 +554,7 @@ mod tests {
     /// An HE-AAC track whose media rate is the 24 kHz core declares its trim
     /// in core frames; the codec decodes SBR to 48 kHz and trims output frames.
     #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn declared_trim_is_scaled_from_the_media_rate_to_the_output_rate() {
         let track = TrackInfo {
             codec: AudioCodec::AacHe,
@@ -597,7 +578,7 @@ mod tests {
     }
 
     #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn declared_trim_follows_implicit_sbr_pcm_geometry_across_reset() {
         use kithara_test_fixtures::assets::he_aac_v1;
 
@@ -680,7 +661,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn symphonia_priming_warms_aac_and_defaults_elsewhere() {
         let codec = SymphoniaCodec::open_with_config(&mp3_track(), &SymphoniaConfig::default())
             .expect("BUG: MP3 codec open");
