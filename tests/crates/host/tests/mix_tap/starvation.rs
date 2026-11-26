@@ -1,12 +1,13 @@
 use kithara::{
     abr::AbrMode,
     assets::AssetStore,
+    decode::DecoderBackend,
     download::{Downloader, DownloaderConfig},
     events::TrackId,
     net::NetOptions,
     platform::{
         CancelToken,
-        time::{Duration, WallInstant},
+        time::Duration,
         tokio::{
             runtime::Handle,
             sync::broadcast::{Receiver, error::TryRecvError},
@@ -24,7 +25,7 @@ use kithara_integration_tests::{
     test_defaults::packaged_content_frames,
     usdt_trace,
 };
-use kithara_render::bridge::{DeckEvent, DeckSnapshot, Slot, SlotState};
+use kithara_render::bridge::{DeckEvent, DeckSnapshot, Slot, SlotSnapshot, SlotState};
 use kithara_test_fixtures::hls_fixtures::frame_samples;
 use kithara_test_utils::{cancel_token, wait_until};
 use num_traits::ToPrimitive;
@@ -97,49 +98,37 @@ fn assert_active(
     (field.program(), field.authority())
 }
 
-/// Drive the three withheld-segment starvation windows on `harness`, issuing a
-/// deck program on a window when `on_window` returns one for it, then verify
-/// recovery, pause/play and seek on the same item.
+/// Drive the three withheld-segment starvation windows on `harness`, one per
+/// `(segment index, gate)` in `withheld`, issuing a deck program on a window
+/// when `on_window` returns one for it, then verify recovery, pause/play and
+/// seek on the same item.
 pub(crate) async fn run_withheld_windows<F>(
     harness: &OfflinePlayer,
     item: TrackId,
-    gates: &[SegmentGateHandle],
+    withheld: &[(usize, SegmentGateHandle)],
     events: &mut Receiver<DeckEvent>,
     raw: &mut Underruns,
     mut on_window: F,
 ) where
     F: FnMut(&OfflinePlayer, usize) -> Option<ProgramPlan>,
 {
-    let diagnostic_start = WallInstant::now();
-    eprintln!("withheld phase: begin");
+    let producer = usdt_trace::scope();
     let mut edges = Vec::new();
     let mut origin = None;
     let mut active: Option<ActiveProgram> = None;
-    for (index, gate) in gates.iter().enumerate() {
+    for (index, (segment, gate)) in withheld.iter().enumerate() {
         let expected = u64::try_from(index + 1).expect("three windows");
-        eprintln!(
-            "withheld phase: starve begin index={index} elapsed={:?}",
-            diagnostic_start.elapsed()
-        );
         starve_window(
             harness,
             item,
-            gate,
+            (*segment, gate),
             index,
             &mut on_window,
             &mut active,
             (events, &mut edges, &mut origin),
         )
         .await;
-        eprintln!(
-            "withheld phase: starve end index={index} elapsed={:?}",
-            diagnostic_start.elapsed()
-        );
         recover_window(harness, item, gate, expected, active).await;
-        eprintln!(
-            "withheld phase: recover end index={index} elapsed={:?}",
-            diagnostic_start.elapsed()
-        );
         drain_edges(events, &mut edges);
         assert_eq!(
             edges
@@ -156,15 +145,8 @@ pub(crate) async fn run_withheld_windows<F>(
             index + 1
         );
     }
-    eprintln!(
-        "withheld phase: transport begin elapsed={:?}",
-        diagnostic_start.elapsed()
-    );
+    drop(producer);
     verify_transport(harness, item, events, &mut edges, raw).await;
-    eprintln!(
-        "withheld phase: transport end elapsed={:?}",
-        diagnostic_start.elapsed()
-    );
 }
 
 /// The endpoint and owner of the program a window issued, carried across the
@@ -175,49 +157,107 @@ struct ActiveProgram {
     owner: (Option<Seq>, Option<Seq>),
 }
 
-fn required_packaged_position(index: usize) -> Duration {
+/// The raw source frame where the default decoder starves on the withheld
+/// packaged `segment`: the segment's first frame, less the output Symphonia's
+/// AAC decoder holds two access units behind its input until the next packet
+/// arrives.
+fn withheld_boundary(segment: usize) -> usize {
     let frame_samples = frame_samples(AudioCodec::AacLc).expect("AAC encoder frame geometry");
-    let segment_frames = packaged_content_frames(2 * 44_100, frame_samples, 1)
-        .expect("packet-aligned starvation segment");
-    let segment = index * 2 + 1;
-    let frames = (segment_frames * segment)
-        .to_f64()
-        .expect("packaged starvation position fits f64");
-    Duration::from_secs_f64(frames / f64::from(44_100_u32))
+    let holdback = if DecoderBackend::default() == DecoderBackend::Symphonia {
+        2 * frame_samples
+    } else {
+        0
+    };
+    packaged_content_frames(2 * 44_100, frame_samples, 1)
+        .expect("packet-aligned starvation segment")
+        * segment
+        - holdback
 }
 
-async fn wait_for_callback_or_withheld_boundary(
-    harness: &OfflinePlayer,
-    item: TrackId,
-    gate: &SegmentGateHandle,
-    required: Duration,
-    expected: u64,
-) {
+fn frames_to_duration(frames: usize) -> Duration {
+    Duration::from_secs_f64(
+        frames
+            .to_f64()
+            .expect("packaged starvation position fits f64")
+            / 44_100.0,
+    )
+}
+
+/// Decoded frames ahead of the slot's read cursor, and whether they run through
+/// the raw `boundary` frame. The snapshot's frontier is the port as of the last
+/// render; admissions since then come from the live usdt scope.
+fn ready_frames(slot: &SlotSnapshot, boundary: usize) -> (usize, bool) {
+    let published = ((slot.frontier - slot.position) * 44_100.0)
+        .round()
+        .to_usize()
+        .expect("the frontier never trails the position");
+    let admitted = slot
+        .mark
+        .zip(usdt_trace::last("chunk_admitted"))
+        .filter(|(mark, chunk)| chunk.field("segment") == Some(mark.lane.segment.get()))
+        .and_then(|(mark, chunk)| {
+            let end = chunk.field("lane_frame")? + chunk.field("frames")?;
+            usize::try_from(end.saturating_sub(mark.lane.frame)).ok()
+        })
+        .unwrap_or(0);
+    let ready = published.max(admitted);
+    let through = slot.mark.is_some_and(|mark| {
+        (mark.position.as_secs_f64() * 44_100.0)
+            .round()
+            .to_usize()
+            .is_some_and(|raw| raw + ready >= boundary)
+    });
+    (ready, through)
+}
+
+/// The next render that cannot outrun the producer: the decoded PCM ahead of
+/// the item in whole callbacks, or one callback while the item is unbound or
+/// once the decoded PCM runs through the withheld `boundary`.
+async fn next_render(harness: &OfflinePlayer, item: TrackId, boundary: usize) -> usize {
+    let mut next = CALLBACK_FRAMES;
     wait_until(
         Duration::from_secs(10),
         "withheld segment producer readiness",
         || {
-            if harness.metrics().underruns() == expected || gate.requested() == 0 {
-                return true;
-            }
-            let required = required.as_secs_f64();
-            let callback =
-                f64::from(u32::try_from(CALLBACK_FRAMES).expect("callback frames fit u32"))
-                    / 44_100.0;
-            harness
+            let ready = harness
                 .deck_snapshot()
                 .slots
                 .iter()
                 .find(|slot| slot.binding.is_some_and(|binding| binding.item() == item))
-                .is_none_or(|slot| {
-                    slot.position >= required
-                        || slot.frontier >= required
-                        || slot.frontier - slot.position >= callback
-                })
+                .map(|slot| ready_frames(slot, boundary));
+            match ready {
+                Some((frames, _)) if frames >= CALLBACK_FRAMES => {
+                    next = frames - frames % CALLBACK_FRAMES;
+                    true
+                }
+                Some((_, through)) => {
+                    next = CALLBACK_FRAMES;
+                    through
+                }
+                None => {
+                    next = CALLBACK_FRAMES;
+                    true
+                }
+            }
         },
     )
     .await
     .unwrap_or_else(|error| panic!("withheld segment producer readiness: {error}"));
+    next
+}
+
+/// Render until the deck reports window `expected`'s underrun, never past the
+/// decoded PCM before the withheld `boundary`, so unpaced rendering cannot
+/// starve on producer lag.
+async fn exhaust_ready_pcm(harness: &OfflinePlayer, item: TrackId, boundary: usize, expected: u64) {
+    for _ in 0..1024 * 512 / CALLBACK_FRAMES {
+        let frames = next_render(harness, item, boundary).await;
+        let _ = harness.render(frames).await;
+        if harness.metrics().underruns() == expected {
+            return;
+        }
+    }
+    panic!("the withheld segment must exhaust ready PCM");
 }
 
 #[derive(Clone, Copy)]
@@ -318,7 +358,8 @@ fn require_starvation_boundary(
             witness.raw_position
         ));
     }
-    if raw < required {
+    let frames = |at: Duration| (at.as_secs_f64() * 44_100.0).round();
+    if frames(raw) < frames(required) {
         return Err(format!(
             "window {index} underrun precedes its withheld packaged boundary: raw={raw:?}, required={required:?}, origin={:?}",
             witness.origin
@@ -345,7 +386,7 @@ fn require_starvation_boundary(
 async fn starve_window<F>(
     harness: &OfflinePlayer,
     item: TrackId,
-    gate: &SegmentGateHandle,
+    (segment, gate): (usize, &SegmentGateHandle),
     index: usize,
     on_window: &mut F,
     active: &mut Option<ActiveProgram>,
@@ -358,77 +399,71 @@ async fn starve_window<F>(
     F: FnMut(&OfflinePlayer, usize) -> Option<ProgramPlan>,
 {
     let expected = u64::try_from(index + 1).expect("three windows");
-    let required = required_packaged_position(index);
     let (events, edges, origin) = observation;
-    for _ in 0..1024 {
-        for _ in 0..512 / CALLBACK_FRAMES {
-            wait_for_callback_or_withheld_boundary(harness, item, gate, required, expected).await;
-            let _ = harness.render(CALLBACK_FRAMES).await;
-            if harness.metrics().underruns() == expected {
-                break;
-            }
-        }
-        if harness.metrics().underruns() == expected {
-            assert!(
-                gate.requested() > 0,
-                "the withheld input owns this starvation window"
-            );
-            drain_edges(events, edges);
-            source_witness(&harness.deck_snapshot(), item)
-                .and_then(|witness| {
-                    require_starvation_boundary(
-                        edges, witness, origin, item, expected, index, required,
-                    )
-                })
-                .unwrap_or_else(|error| panic!("gate-owned starvation precondition: {error}"));
-            eprintln!("withheld phase: callback begin index={index}");
-            let trace = usdt_trace::scope();
-            if let Some(plan) = on_window(harness, index) {
-                let ProgramPlan {
-                    program,
-                    parameter,
-                    endpoint,
-                } = plan;
-                harness
-                    .with_queue(move |queue| queue.deck_programs(vec![program]))
-                    .await
-                    .expect(
-                        "the deck-program callback returns while the segment gate is still closed",
-                    );
-                empty_callback(harness).await;
-                let owner = assert_active(harness, parameter, endpoint);
-                *active = Some(ActiveProgram {
-                    endpoint: (parameter, endpoint),
-                    owner,
-                });
-            } else {
-                empty_callback(harness).await;
-            }
-            eprintln!("withheld phase: callback end index={index}");
-            let pcm_wait_started = trace.events_of("pcm_wait_started");
-            let pcm_wait_finished = trace.events_of("pcm_wait_finished");
-            let truncated = usdt_trace::recorded().1;
-            drop(trace);
-            assert!(
-                pcm_wait_started.is_empty(),
-                "the empty callback returns without waiting for PCM to start"
-            );
-            assert!(
-                pcm_wait_finished.is_empty(),
-                "the empty callback returns without waiting for PCM to finish"
-            );
-            assert!(!truncated, "the zero-wait trace is complete, not truncated");
-            let slot = harness
-                .deck_snapshot()
-                .slots
-                .into_iter()
-                .find(|slot| slot.binding.is_some_and(|binding| binding.item() == item))
-                .expect("the item keeps its native slot");
-            assert_eq!(slot.state, SlotState::Playing);
-            return;
-        }
+    let boundary = withheld_boundary(segment);
+    exhaust_ready_pcm(harness, item, boundary, expected).await;
+    assert!(
+        gate.requested() > 0,
+        "the withheld input owns this starvation window"
+    );
+    drain_edges(events, edges);
+    source_witness(&harness.deck_snapshot(), item)
+        .and_then(|witness| {
+            require_starvation_boundary(
+                edges,
+                witness,
+                origin,
+                item,
+                expected,
+                index,
+                frames_to_duration(boundary),
+            )
+        })
+        .unwrap_or_else(|error| panic!("gate-owned starvation precondition: {error}"));
+    let waits = || {
+        (
+            usdt_trace::count("pcm_wait_started"),
+            usdt_trace::count("pcm_wait_finished"),
+        )
+    };
+    let before = waits();
+    if let Some(plan) = on_window(harness, index) {
+        let ProgramPlan {
+            program,
+            parameter,
+            endpoint,
+        } = plan;
+        harness
+            .with_queue(move |queue| queue.deck_programs(vec![program]))
+            .await
+            .expect("the deck-program callback returns while the segment gate is still closed");
+        empty_callback(harness).await;
+        let owner = assert_active(harness, parameter, endpoint);
+        *active = Some(ActiveProgram {
+            endpoint: (parameter, endpoint),
+            owner,
+        });
+    } else {
+        empty_callback(harness).await;
     }
-    panic!("the withheld segment must exhaust ready PCM");
+    let (started, finished) = waits();
+    let truncated = usdt_trace::recorded().1;
+    assert_eq!(
+        started, before.0,
+        "the empty callback returns without waiting for PCM to start"
+    );
+    assert_eq!(
+        finished, before.1,
+        "the empty callback returns without waiting for PCM to finish"
+    );
+    assert!(!truncated, "the zero-wait trace is complete, not truncated");
+    let slot = harness
+        .deck_snapshot()
+        .slots
+        .into_iter()
+        .find(|slot| slot.binding.is_some_and(|binding| binding.item() == item))
+        .expect("the item keeps its native slot");
+    assert_eq!(slot.state, SlotState::Playing);
 }
 
 /// Release the segment gate and assert recovery: audible output resumes, the
@@ -492,7 +527,6 @@ async fn verify_transport(
         true,
         "three forced starvation windows recovered",
     );
-    eprintln!("withheld phase: pause");
     harness.with_queue(QueueControl::pause).await;
     let paused = render_unpaced_window(harness, 2048).await;
     assert!(
@@ -501,7 +535,6 @@ async fn verify_transport(
             .all(|sample| *sample == 0.0)
     );
     raw.checkpoint(harness.metrics(), true, "after pause");
-    eprintln!("withheld phase: play");
     harness.with_queue(QueueControl::play).await;
     let resumed = render_unpaced_window(harness, 4096).await;
     assert!(resumed.iter().any(|sample| sample.abs() > 0.01));
@@ -511,7 +544,6 @@ async fn verify_transport(
         3,
         "only the three withheld segments starve before seek"
     );
-    eprintln!("withheld phase: seek");
     harness.seek(0.5).await;
     let sought = render_unpaced_window(harness, 4096).await;
     assert!(sought.iter().any(|sample| sample.abs() > 0.01));
@@ -650,7 +682,12 @@ async fn a_queue_item_recovers_from_three_withheld_segments_and_keeps_its_transp
         )
         .await
         .expect("packaged audio source");
-    let gates = [1, 3, 5].map(|segment| server.register_segment_gate(hls.token(), 0, segment));
+    let withheld = [1, 3, 5].map(|segment| {
+        (
+            segment,
+            server.register_segment_gate(hls.token(), 0, segment),
+        )
+    });
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(false)
@@ -675,7 +712,10 @@ async fn a_queue_item_recovers_from_three_withheld_segments_and_keeps_its_transp
     let mut events = harness.subscribe_underruns();
     let item = harness.load_config(config).await;
     let mut raw = Underruns::new(&harness);
-    run_withheld_windows(&harness, item, &gates, &mut events, &mut raw, |_, _| None).await;
+    run_withheld_windows(&harness, item, &withheld, &mut events, &mut raw, |_, _| {
+        None
+    })
+    .await;
     harness.close().await;
 }
 

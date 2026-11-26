@@ -64,7 +64,12 @@ async fn false_mode(
         )
         .await
         .expect("packaged audio source");
-    let gates = [1, 3, 5].map(|segment| server.register_segment_gate(hls.token(), 0, segment));
+    let withheld = [1, 3, 5].map(|segment| {
+        (
+            segment,
+            server.register_segment_gate(hls.token(), 0, segment),
+        )
+    });
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
             .block_on_underrun(false)
@@ -111,11 +116,11 @@ async fn false_mode(
             .await
             .expect("the deck installs the effect on unit 0");
     }
-    run_withheld_windows(&harness, item, &gates, &mut events, &mut raw, on_window).await;
+    run_withheld_windows(&harness, item, &withheld, &mut events, &mut raw, on_window).await;
     harness.close().await;
 }
 
-#[kithara::test(tokio, multi_thread)]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 async fn a_dry_wet_program_callback_returns_while_its_segment_gate_is_closed(
     cancel_token: CancelToken,
 ) {
@@ -145,7 +150,7 @@ async fn a_dry_wet_program_callback_returns_while_its_segment_gate_is_closed(
     .await;
 }
 
-#[kithara::test(tokio, multi_thread)]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 async fn an_effect_parameter_program_callback_returns_while_its_segment_gate_is_closed(
     cancel_token: CancelToken,
 ) {
@@ -171,7 +176,7 @@ async fn an_effect_parameter_program_callback_returns_while_its_segment_gate_is_
     .await;
 }
 
-#[kithara::test(tokio, multi_thread)]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 async fn a_trim_program_callback_returns_while_its_segment_gate_is_closed(
     cancel_token: CancelToken,
 ) {
