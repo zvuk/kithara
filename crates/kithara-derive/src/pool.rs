@@ -68,8 +68,8 @@ fn owner_path_for(
     let facade = facade.map_err(|error| resolver_error(consts::FACADE, &error))?;
     let pool = pool.map_err(|error| resolver_error(consts::POOL, &error))?;
     match (facade, pool) {
-        // The facade crate owns the pool module it re-exports.
-        (Some(FoundCrate::Itself), _) => Ok(quote!(crate::bufpool)),
+        // Canonical self-aliases also resolve from separate rustdoc crates.
+        (Some(FoundCrate::Itself), _) => Ok(quote!(::kithara::bufpool)),
         // The pool crate names itself through its canonical path, which the
         // owner aliases so the same path works inside it and in its doctests.
         (_, Some(FoundCrate::Itself)) => {
@@ -250,7 +250,7 @@ fn slot_key(ty: &Type) -> Result<&Type> {
 mod tests {
     use std::{fs, path::PathBuf, process::Command};
 
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{TestTempDir, kithara};
     use proc_macro_crate::{Error as ResolverError, FoundCrate};
     use proc_macro2::TokenStream as TokenStream2;
     use quote::quote;
@@ -318,7 +318,7 @@ mod tests {
             owner_path_for(Ok(Some(FoundCrate::Itself)), Ok(None))
                 .expect("the facade names the pool owner")
                 .to_string(),
-            "crate :: bufpool"
+            ":: kithara :: bufpool"
         );
         assert_eq!(
             owner_path_for(Ok(None), Ok(Some(FoundCrate::Itself)))
@@ -370,19 +370,23 @@ mod tests {
         );
     }
 
-    /// A schema that names a slot type the derive accepts, so the only
-    /// diagnostic a probe reports is the one the resolver raises.
     const PROBE_SOURCE: &str = "\
+struct PoolSlot<K>(core::marker::PhantomData<K>);
+
 #[derive(kithara_derive::Pool)]
 pub struct ProbePools {
     bytes: PoolSlot<u8>,
 }
 ";
 
-    /// A manifest whose dependencies only have to be *named*: the resolver
-    /// reads identities from the manifest, so the paths are never opened.
     fn manifest(dependencies: &str) -> String {
-        format!("[package]\nname = \"owner-probe\"\nversion = \"0.0.0\"\n\n{dependencies}")
+        let derive_path = env!("CARGO_MANIFEST_DIR");
+        format!(
+            "[package]\nname = \"owner-probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
+             {dependencies}\n\
+             [dependencies.kithara-derive]\npath = {derive_path:?}\n\
+             default-features = false\nfeatures = [\"pool\"]\n\n[workspace]\n"
+        )
     }
 
     /// The directory holding the compiled test binary and the derive dylibs.
@@ -394,70 +398,32 @@ pub struct ProbePools {
             .to_path_buf()
     }
 
-    /// The derive dylibs the probe can load, newest first.
-    ///
-    /// The newest one is the build under test; an older dylib from an earlier
-    /// build would answer for code that no longer exists.
-    fn derive_dylibs() -> Vec<PathBuf> {
-        let mut found: Vec<(std::time::SystemTime, PathBuf)> = fs::read_dir(deps_dir())
-            .expect("dependencies directory")
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                let name = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_default();
-                name.starts_with("libkithara_derive-")
-                    && (name.ends_with(".so") || name.ends_with(".dylib") || name.ends_with(".dll"))
-            })
-            .filter_map(|path| {
-                let modified = fs::metadata(&path).ok()?.modified().ok()?;
-                Some((modified, path))
-            })
-            .collect();
-        found.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-        found.into_iter().map(|(_, path)| path).collect()
-    }
-
-    /// Compile a probe schema against `manifest` and return rustc's output.
-    ///
-    /// The probe runs the compiler with the derive macro's own dylib and the
-    /// manifest under test, so the resolver reads that manifest exactly as it
-    /// reads a consumer's.
+    /// Cargo builds the current derive source, never a cached dylib selected by age.
     fn compile_probe(name: &str, manifest: &str) -> String {
-        let dir =
-            std::env::temp_dir().join(format!("kithara-pool-owner-{}-{name}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("probe directory");
-        fs::write(dir.join("Cargo.toml"), manifest).expect("write probe manifest");
-        fs::write(dir.join("probe.rs"), PROBE_SOURCE).expect("write probe source");
-
-        let deps = deps_dir();
-        let mut diagnostics = String::new();
-        for dylib in derive_dylibs() {
-            let output = Command::new("rustc")
-                .args(["--edition", "2024", "--crate-type", "lib"])
-                .arg(dir.join("probe.rs"))
-                .arg("--extern")
-                .arg(format!("kithara_derive={}", dylib.display()))
-                .arg("-L")
-                .arg(format!("dependency={}", deps.display()))
-                .args(["--emit=metadata", "-o"])
-                .arg(dir.join("probe.rmeta"))
-                .env("CARGO_MANIFEST_DIR", &dir)
-                .output()
-                .expect("run rustc");
-            diagnostics = String::from_utf8_lossy(&output.stderr).into_owned();
-            if output.status.success() {
-                diagnostics.push_str("\nthe probe compiled\n");
-            }
-            // A dylib built without the `pool` feature has no `Pool` derive.
-            if !diagnostics.contains("cannot find derive macro") {
-                break;
-            }
+        let temp = TestTempDir::new();
+        for package in ["kithara", "kithara-bufpool"] {
+            let root = temp.path().join(package);
+            fs::create_dir_all(root.join("src")).expect("stub package directory");
+            fs::write(
+                root.join("Cargo.toml"),
+                format!("[package]\nname = {package:?}\nversion = \"0.0.0\"\n"),
+            )
+            .expect("stub package manifest");
+            fs::write(root.join("src/lib.rs"), "").expect("stub package source");
         }
-        let _ = fs::remove_dir_all(&dir);
+        let dir = temp.path().join(name);
+        fs::create_dir_all(dir.join("src")).expect("probe directory");
+        fs::write(dir.join("Cargo.toml"), manifest).expect("probe manifest");
+        fs::write(dir.join("src/lib.rs"), PROBE_SOURCE).expect("probe source");
+
+        let output = Command::new(env!("CARGO"))
+            .current_dir(&dir)
+            .args(["check", "--offline", "--jobs=1", "--target-dir"])
+            .arg(deps_dir().join("pool-owner-probes"))
+            .output()
+            .expect("run cargo check");
+        let diagnostics = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert!(!output.status.success(), "probe unexpectedly compiled");
         diagnostics
     }
 
@@ -529,7 +495,7 @@ pub struct ProbePools {
 
     #[kithara::test(native)]
     fn a_manifest_without_a_pool_owner_fails_to_compile() {
-        let diagnostics = compile_probe("no-owner", &manifest("[dependencies]\nserde = \"1\"\n"));
+        let diagnostics = compile_probe("no-owner", &manifest(""));
         assert!(
             diagnostics.contains("needs the `kithara-bufpool` crate or the `kithara` facade"),
             "{diagnostics}"

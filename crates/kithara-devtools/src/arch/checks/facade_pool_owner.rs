@@ -144,9 +144,16 @@ fn named_package(key: &str, value: &Value, workspace: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use cargo_metadata::MetadataCommand;
     use toml::Value;
 
-    use super::{named_owners, named_package};
+    use super::{Check, Context, FacadePoolOwner, consts, named_owners, named_package};
+    use crate::{
+        arch::config::ArchConfig,
+        common::{scope::Scope, violation::Severity},
+    };
 
     fn parse(src: &str) -> Value {
         toml::from_str(src).expect("toml")
@@ -263,5 +270,79 @@ mod tests {
             &Value::Table(toml::map::Map::new()),
         );
         assert_eq!(package, "kithara");
+    }
+
+    #[test]
+    fn run_reports_dual_owners_and_honors_the_facade_exemption() {
+        let dir = tempfile::tempdir().expect("temporary workspace");
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"consumer\", \"facade\", \"pool\"]\n\
+             exclude = [\"previous\"]\nresolver = \"2\"\n\n\
+             [workspace.dependencies]\n\
+             engine = { package = \"kithara\", path = \"facade\" }\n\
+             buffers = { package = \"kithara-bufpool\", path = \"pool\" }\n",
+        )
+        .expect("workspace manifest");
+        for (folder, package, version, dependencies) in [
+            (
+                "consumer",
+                "consumer",
+                "0.0.0",
+                "[dependencies]\nengine.workspace = true\nbuffers.workspace = true\n",
+            ),
+            (
+                "facade",
+                "kithara",
+                "0.1.0",
+                "[dependencies]\n\
+                 previous = { package = \"kithara\", path = \"../previous\" }\n\
+                 buffers = { package = \"kithara-bufpool\", path = \"../pool\" }\n",
+            ),
+            ("previous", "kithara", "0.0.0", ""),
+            ("pool", "kithara-bufpool", "0.0.0", ""),
+        ] {
+            let root = dir.path().join(folder);
+            fs::create_dir_all(root.join("src")).expect("package directory");
+            fs::write(
+                root.join("Cargo.toml"),
+                format!(
+                    "[package]\nname = {package:?}\nversion = {version:?}\n\
+                     edition = \"2024\"\n\n{dependencies}"
+                ),
+            )
+            .expect("package manifest");
+            fs::write(root.join("src/lib.rs"), "").expect("package source");
+        }
+        let metadata = MetadataCommand::new()
+            .manifest_path(dir.path().join("Cargo.toml"))
+            .no_deps()
+            .other_options(vec!["--offline".into()])
+            .exec()
+            .expect("fixture metadata");
+        let mut config = ArchConfig::default();
+        config.thresholds.facade_pool_owner.exempt_crates = vec!["kithara".into()];
+        let scope = Scope::default();
+        let violations = FacadePoolOwner
+            .run(&Context::new(&config, &metadata, dir.path(), &scope))
+            .expect("check pool owners");
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].check, consts::ID);
+        assert_eq!(violations[0].key, "consumer::kithara+kithara-bufpool");
+        assert_eq!(violations[0].severity, Severity::Deny);
+
+        config.thresholds.facade_pool_owner.exempt_crates.clear();
+        let unexempted = FacadePoolOwner
+            .run(&Context::new(&config, &metadata, dir.path(), &scope))
+            .expect("check without the facade exemption");
+        let mut keys: Vec<&str> = unexempted.iter().map(|v| v.key.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "consumer::kithara+kithara-bufpool",
+                "kithara::kithara+kithara-bufpool",
+            ]
+        );
     }
 }

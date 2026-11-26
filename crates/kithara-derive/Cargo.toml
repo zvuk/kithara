@@ -38,7 +38,7 @@ syn = { workspace = true, features = ["extra-traits", "visit"] }
 
 [dev-dependencies]
 kithara-config = { workspace = true }
-kithara-test-utils = { features = ["test"], workspace = true }
+kithara-test-utils = { features = ["test", "temp-dir"], workspace = true }
 
 serde = { workspace = true, features = ["derive"] }
 serde_yaml_ng = { workspace = true }

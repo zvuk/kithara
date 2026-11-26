@@ -6,6 +6,8 @@
 //! common `AudioReader` read/seek interface; `ReadOutcome` distinguishes frames,
 //! pending work and end of input.
 
+extern crate self as kithara;
+
 #[cfg(feature = "audio")]
 pub mod audio {
     pub use kithara_audio::*;
@@ -33,6 +35,22 @@ pub mod broadcast {
 }
 
 #[cfg(feature = "bufpool")]
+/// Typed buffer pools with one shared region budget.
+///
+/// ```
+/// use kithara::bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
+///
+/// #[derive(Pool)]
+/// struct Pools {
+///     bytes: PoolSlot<u8>,
+/// }
+///
+/// let pools = Pools::builder(OverallBudget(1024))
+///     .bytes(PoolConfig::builder().max_buffers(32).build())
+///     .build()
+///     .unwrap();
+/// assert_eq!(pools.get_with_len::<u8>(4).unwrap().len(), 4);
+/// ```
 pub mod bufpool {
     pub use kithara_bufpool::*;
 }
