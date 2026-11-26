@@ -587,7 +587,6 @@ mod declaration_shapes {
         #[cfg(any())]
         absent: PoolSlot<UndeclaredKey>,
         r#type: PoolSlot<Type>,
-        #[cfg(all())]
         samples: PoolSlot<f32>,
     }
 

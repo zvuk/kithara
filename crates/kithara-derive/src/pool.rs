@@ -10,8 +10,10 @@ use syn::{
     Type, Visibility, ext::IdentExt, parse_macro_input, spanned::Spanned,
 };
 
-/// Names the generated builder already owns; a field with one would shadow it.
-const RESERVED: [&str; 4] = ["builder", "build", "__build_region", "overall_budget"];
+mod consts {
+    /// Names the generated builder already owns; a field with one would shadow it.
+    pub(super) const RESERVED: [&str; 4] = ["builder", "build", "__build_region", "overall_budget"];
+}
 
 struct Slot<'a> {
     docs: Vec<&'a Attribute>,
@@ -66,7 +68,7 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
                 ));
             }
             let unraw = ident.unraw().to_string();
-            if RESERVED.contains(&unraw.as_str()) {
+            if consts::RESERVED.contains(&unraw.as_str()) {
                 return Err(Error::new_spanned(
                     ident,
                     format!("pool slot `{unraw}` collides with a generated builder name"),
