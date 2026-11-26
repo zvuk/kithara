@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use criterion::{BatchSize, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use firewheel::{
     clock::InstantSamples,
     dsp::{buffer::ConstSequentialBuffer, declick::DeclickValues},
@@ -70,7 +70,7 @@ fn assert_pcm(actual: &[f32], expected: &[f32]) {
     assert_eq!(mismatch, None, "complete PCM must match the scalar law");
 }
 
-struct DeckFixture {
+pub(crate) struct DeckFixture {
     mixer: DeckMixer<TestSessionInbox>,
     extra: ProcExtra,
     ends: TestEnds,
@@ -137,7 +137,7 @@ impl DeckFixture {
             ScopedReceipt::Scope(_, reply) if reply.seq() == seq && matches!(reply.outcome(), Outcome::Applied { at: frame, .. } if *frame == SessionFrame::new(at)))));
     }
 
-    fn render(&mut self, frames: usize) -> [Vec<f32>; 2] {
+    pub(crate) fn render(&mut self, frames: usize) -> [Vec<f32>; 2] {
         self.extra
             .store
             .try_get_mut::<TestSessionInbox>()
@@ -211,7 +211,7 @@ fn seeded(shapes: &[(SegmentId, usize, f32)]) -> DeckFixture {
     fixture
 }
 
-fn adopt_fixture() -> DeckFixture {
+pub(crate) fn adopt_fixture() -> DeckFixture {
     let mut fixture = seeded(&[
         (SegmentId::FIRST, SEED + 7, 0.5),
         (SegmentId::FIRST.next(), 257, 0.25),
@@ -223,7 +223,7 @@ fn adopt_fixture() -> DeckFixture {
     fixture
 }
 
-fn check_adopt(fixture: &mut DeckFixture, output: &[Vec<f32>; 2]) {
+pub(crate) fn check_adopt(fixture: &mut DeckFixture, output: &[Vec<f32>; 2]) {
     let requested = DeckMixerConfig::default().declick_frames(rate()).get();
     assert!(requested > 7);
     let expected: Vec<_> = (0..257)
@@ -254,7 +254,7 @@ fn check_adopt(fixture: &mut DeckFixture, output: &[Vec<f32>; 2]) {
     );
 }
 
-fn refill_fixture() -> (DeckFixture, f32) {
+pub(crate) fn refill_fixture() -> (DeckFixture, f32) {
     let mut fixture = seeded(&[(SegmentId::FIRST, SEED + 7, 0.5)]);
     let pcm = fixture.pcm(&[(SegmentId::FIRST, 14, 0.25)]);
     let seq = fixture.command(vec![
@@ -281,7 +281,7 @@ fn refill_fixture() -> (DeckFixture, f32) {
     (fixture, gain)
 }
 
-fn check_refill(fixture: &mut DeckFixture, gain: f32, output: &[Vec<f32>; 2]) {
+pub(crate) fn check_refill(fixture: &mut DeckFixture, gain: f32, output: &[Vec<f32>; 2]) {
     let requested = DeckMixerConfig::default().declick_frames(rate()).get();
     let expected: Vec<_> = (0..16)
         .map(|frame| {
@@ -314,7 +314,7 @@ fn check_refill(fixture: &mut DeckFixture, gain: f32, output: &[Vec<f32>; 2]) {
     }
 }
 
-struct JumpFixture {
+pub(crate) struct JumpFixture {
     receiver: PcmReceiver,
     lane: Box<dyn LaneTask + Send>,
     sender: kithara_command::Sender<LaneProtocol>,
@@ -323,7 +323,7 @@ struct JumpFixture {
     _source: PcmDeck,
 }
 
-async fn jump_fixture() -> JumpFixture {
+pub(crate) async fn jump_fixture() -> JumpFixture {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let source = PcmDeck::new(Box::new(TestPcmReader::with_pcm(
         spec(),
@@ -381,7 +381,7 @@ async fn jump_fixture() -> JumpFixture {
 }
 
 impl JumpFixture {
-    fn run(&mut self) -> Vec<kithara::signal::AudioChunk> {
+    pub(crate) fn run(&mut self) -> Vec<kithara::signal::AudioChunk> {
         let mut output = Vec::new();
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         for _ in 0..16 {
@@ -402,7 +402,7 @@ impl JumpFixture {
     }
 }
 
-fn check_jump(fixture: &mut JumpFixture, output: &[kithara::signal::AudioChunk]) {
+pub(crate) fn check_jump(fixture: &mut JumpFixture, output: &[kithara::signal::AudioChunk]) {
     assert_eq!(output.len(), 2);
     assert!(
         fixture
@@ -433,7 +433,7 @@ fn check_jump(fixture: &mut JumpFixture, output: &[kithara::signal::AudioChunk])
     }
 }
 
-async fn prepare_duck(player: &OfflinePlayer) {
+pub(crate) async fn prepare_duck(player: &OfflinePlayer) {
     let lead = usize::try_from(player.host().max_block_frames().get()).expect("host quantum");
     let start = player.host().position() + u64::try_from(lead).expect("delivery frames");
     for (offset, mode) in [
@@ -456,7 +456,7 @@ async fn prepare_duck(player: &OfflinePlayer) {
     assert_eq!(player.host().position(), start);
 }
 
-fn check_duck(output: &[f32]) {
+pub(crate) fn check_duck(output: &[f32]) {
     assert_eq!(output.len(), 513 * 2);
     let mut gain = SmoothedParam::new(
         1.0,
@@ -489,7 +489,7 @@ pub(super) fn bench(c: &mut Criterion) {
     let mut adopt = adopt_fixture();
     let output = adopt.render(257);
     check_adopt(&mut adopt, &output);
-    group.bench_function("adopt_partial_tail/257", |b| {
+    group.bench_function(BenchmarkId::new("case", "adopt_partial_tail_257"), |b| {
         b.iter_batched_ref(
             adopt_fixture,
             |fixture| fixture.render(257),
@@ -499,7 +499,7 @@ pub(super) fn bench(c: &mut Criterion) {
     let (mut refill, gain) = refill_fixture();
     let output = refill.render(16);
     check_refill(&mut refill, gain, &output);
-    group.bench_function("slot_refill/16", |b| {
+    group.bench_function(BenchmarkId::new("case", "slot_refill_16"), |b| {
         b.iter_batched_ref(
             refill_fixture,
             |(fixture, _)| fixture.render(16),
@@ -509,7 +509,7 @@ pub(super) fn bench(c: &mut Criterion) {
     let mut jump = runtime.block_on(jump_fixture());
     let output = jump.run();
     check_jump(&mut jump, &output);
-    group.bench_function("jump/240", |b| {
+    group.bench_function(BenchmarkId::new("case", "jump_240"), |b| {
         b.iter_batched_ref(
             || runtime.block_on(jump_fixture()),
             JumpFixture::run,
@@ -523,7 +523,7 @@ pub(super) fn bench(c: &mut Criterion) {
     });
     runtime.block_on(player.close());
     let player = runtime.block_on(super::render_player(SessionDuckingMode::Off));
-    group.bench_function("duck_spans/513", |b| {
+    group.bench_function(BenchmarkId::new("case", "duck_spans_513"), |b| {
         b.iter_batched(
             || runtime.block_on(prepare_duck(&player)),
             |()| runtime.block_on(player.render(513)),
