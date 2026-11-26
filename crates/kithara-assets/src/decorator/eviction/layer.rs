@@ -213,17 +213,12 @@ where
 
     /// Record bytes without changing recency: per-segment touches would skew eviction order.
     /// Unknown or concurrently evicted roots are ignored.
-    ///
-    /// # Errors
-    /// Propagates LRU persistence errors; the [`ByteRecorder`] adapter logs them as warnings.
-    pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
+    pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) {
         if !self.is_active() {
-            return Ok(());
+            return;
         }
         tracing::debug!(asset_root = %asset_root, bytes, "Recording asset bytes");
-        self.lru.update_bytes(asset_root, bytes)?;
-        tracing::debug!(asset_root = %asset_root, bytes, "Asset bytes recorded");
-        Ok(())
+        self.lru.update_bytes(asset_root, bytes);
     }
 
     fn touch_and_maybe_evict(&self, asset_root: &str, bytes_hint: Option<u64>) {
@@ -297,7 +292,7 @@ where
     S: HasPool<u8> + Send + Sync + 'static,
 {
     fn record_bytes(&self, asset_root: &str, bytes: u64) {
-        let _ = self.record_asset_bytes(asset_root, bytes);
+        self.record_asset_bytes(asset_root, bytes);
         self.check_and_evict_if_over_limit();
     }
 }
