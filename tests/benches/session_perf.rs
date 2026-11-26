@@ -218,6 +218,8 @@ fn pool_threads(pools: &Pools, threads: usize, iterations: usize) {
 }
 
 fn prepare_pool(index: usize) -> Work {
+    let warm = pools();
+    pool_threads(&warm, 8, 1);
     match index {
         0 => {
             let pools = pools();

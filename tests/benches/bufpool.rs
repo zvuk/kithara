@@ -75,10 +75,9 @@ struct MultiWork {
 }
 
 fn multi_prepare() -> MultiWork {
-    MultiWork {
-        pools: warm_pools(),
-        joined: 0,
-    }
+    let pools = warm_pools();
+    run_threaded_get_put(&pools, 8, 1);
+    MultiWork { pools, joined: 0 }
 }
 
 fn get_u8(pools: &Pools, bytes: usize) {
