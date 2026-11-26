@@ -1219,7 +1219,7 @@ cargo.packages = ["kithara-hls-tests"]
 cargo.profile = "test-release"
 cargo.tests = ["hls"]
 runner.nextest.filter = "test(/(hls_variant_playlists_concurrent::variant_media_playlists_load_concurrently|flac_swallow_fixture)/)"
-default_features = ["kithara-hls-tests/usdt"]
+default_features = ["kithara-hls-tests/flash", "kithara-hls-tests/usdt"]
 default_flash = false
 
 [test.lanes.usdt-hls-stress]
