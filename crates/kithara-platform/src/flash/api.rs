@@ -15,9 +15,6 @@ use super::{
 };
 pub use crate::common::time::Duration;
 
-/// Whether this platform backend provides the native Flash clock.
-pub const ENABLED: bool = true;
-
 /// RAII bracket for ONE real I/O operation in flight (a socket send / response
 /// or body-chunk await in `kithara-net`). While at least one scope is live the
 /// virtual clock is PACED: it may not advance beyond the real time elapsed

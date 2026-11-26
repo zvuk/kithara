@@ -14,9 +14,9 @@ pub enum TestBudget {
 }
 
 impl TestBudget {
-    /// Resolve the selected mode without consulting thread-local clock state.
+    /// Resolve the wall-time allowance for the compiled execution mode.
     #[must_use]
-    pub const fn timeout(self, flash: bool) -> Duration {
+    pub const fn timeout(self) -> Duration {
         let seconds = match self {
             Self::Quick => 1,
             Self::Short => 2,
@@ -30,7 +30,7 @@ impl TestBudget {
                 _ => seconds * 60,
             })
         } else {
-            Duration::from_secs(if flash { 1 } else { seconds })
+            Duration::from_secs(seconds)
         }
     }
 }
@@ -42,16 +42,10 @@ mod tests {
 
     #[kithara::test]
     fn budgets_are_available_in_constants() {
-        const REAL: Duration = TestBudget::Medium.timeout(false);
-        const FLASH: Duration = TestBudget::Medium.timeout(true);
+        const MEDIUM: Duration = TestBudget::Medium.timeout();
 
-        if cfg!(miri) {
-            assert_eq!(REAL, Duration::from_secs(300));
-            assert_eq!(FLASH, REAL);
-        } else {
-            assert_eq!(REAL, Duration::from_secs(5));
-            assert_eq!(FLASH, Duration::from_secs(1));
-        }
+        let expected = if cfg!(miri) { 300 } else { 5 };
+        assert_eq!(MEDIUM, Duration::from_secs(expected));
     }
 
     #[kithara::test]
@@ -64,11 +58,7 @@ mod tests {
             (TestBudget::Network, 600, 480),
         ] {
             let expected = if cfg!(miri) { miri } else { real };
-            assert_eq!(budget.timeout(false), Duration::from_secs(expected));
-            assert_eq!(
-                budget.timeout(true),
-                Duration::from_secs(if cfg!(miri) { miri } else { 1 }),
-            );
+            assert_eq!(budget.timeout(), Duration::from_secs(expected));
         }
         assert_eq!(TestBudget::default(), TestBudget::Quick);
     }

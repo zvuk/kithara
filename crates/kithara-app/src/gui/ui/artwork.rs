@@ -136,7 +136,7 @@ mod tests {
             );
             if let Some(next) = next {
                 wait_until(
-                    kithara_test_utils::TestBudget::Quick.timeout(false),
+                    kithara_test_utils::TestBudget::Quick.timeout(),
                     "new cover finishes",
                     || {
                         cache.refresh(Some(next), &runtime);
@@ -159,7 +159,7 @@ mod tests {
         let mut cache = Artwork::default();
         cache.refresh(Some(&bytes), &runtime);
         wait_until(
-            kithara_test_utils::TestBudget::Quick.timeout(false),
+            kithara_test_utils::TestBudget::Quick.timeout(),
             "invalid cover finishes",
             || {
                 cache.refresh(Some(&bytes), &runtime);

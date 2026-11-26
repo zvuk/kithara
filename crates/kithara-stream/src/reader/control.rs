@@ -176,7 +176,7 @@ mod tests {
                 }
             });
             wait_until_blocking(
-                kithara_test_utils::TestBudget::Quick.timeout(false),
+                kithara_test_utils::TestBudget::Quick.timeout(),
                 "reader cancellation",
                 || control.is_cancelled(),
             )

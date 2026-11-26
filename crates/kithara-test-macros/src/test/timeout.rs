@@ -1,25 +1,15 @@
 use kithara_test_args::TestArgs;
-use syn::{Expr, Ident, parse_quote};
+use syn::{Expr, parse_quote};
 
 pub(crate) fn resolve(args: &TestArgs) -> Expr {
-    let flash = args.flash().unwrap_or(true);
     let budget = args
         .timeout()
         .as_ref()
         .cloned()
         .unwrap_or_else(|| parse_quote!(Quick));
-    named(&budget, flash)
-}
-
-fn named(budget: &Ident, flash: bool) -> Expr {
-    let flash: Expr = if flash {
-        parse_quote!(::kithara_test_utils::kithara_platform::flash::ENABLED)
-    } else {
-        parse_quote!(false)
-    };
     parse_quote!({
         const __TIMEOUT: ::std::time::Duration =
-            ::kithara_test_utils::TestBudget::#budget.timeout(#flash);
+            ::kithara_test_utils::TestBudget::#budget.timeout();
         __TIMEOUT
     })
 }
@@ -67,18 +57,17 @@ mod tests {
         let args = syn::parse_str::<TestArgs>("")?;
         let expanded = resolve(&args).to_token_stream().to_string();
         assert!(expanded.contains("const __TIMEOUT"));
-        assert!(expanded.contains("TestBudget :: Quick . timeout"));
-        assert!(expanded.contains("kithara_platform :: flash :: ENABLED"));
+        assert!(expanded.contains("TestBudget :: Quick . timeout ()"));
         Ok(())
     }
 
     #[test]
-    fn named_budgets_keep_the_explicit_clock_and_compiled_feature() -> syn::Result<()> {
-        let args = syn::parse_str::<TestArgs>("flash(false), timeout(Medium)")?;
-        let expanded = resolve(&args).to_token_stream().to_string();
-        assert!(expanded.contains("TestBudget :: Medium . timeout"));
-        assert!(expanded.contains("timeout (false)"));
-        assert!(!expanded.contains("flash :: ENABLED"));
+    fn the_clock_mode_does_not_change_a_named_budget() -> syn::Result<()> {
+        let real = syn::parse_str::<TestArgs>("flash(false), timeout(Medium)")?;
+        let flash = syn::parse_str::<TestArgs>("timeout(Medium)")?;
+        let real = resolve(&real).to_token_stream().to_string();
+        assert!(real.contains("TestBudget :: Medium . timeout ()"));
+        assert_eq!(real, resolve(&flash).to_token_stream().to_string());
         Ok(())
     }
 

@@ -45,10 +45,10 @@ Probe sites compile to no-ops unless the emitting crate's `usdt` feature is
 enabled. On macOS, `usdt` emits native DTrace probes; on other targets, it
 emits the same probe records through `tracing`.
 
-`TestBudget` resolves named wall-time allowances for real, Flash and Miri execution.
+`TestBudget` resolves named wall-time allowances for native and Miri execution.
 The levels are `Quick` (1 s), `Short` (2 s), `Medium` (5 s), `Long` (10 s) and
-`Network` (600 s, live-network and hand-run tests only) of real time. Under Flash
-every level is 1 s; under Miri `Quick` is 1 min, `Long` and `Network` are 8 min,
+`Network` (600 s, live-network and hand-run tests only) of wall time, with or
+without Flash; under Miri `Quick` is 1 min, `Long` and `Network` are 8 min,
 and the other levels scale by 60. Tests default to `Quick`; `timeout(...)` accepts only one of these tier names.
 Duration expressions and aliases are rejected by the attribute parser. With
 defaults disabled, enable `test` for these APIs.

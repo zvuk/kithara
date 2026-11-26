@@ -426,7 +426,7 @@ mod tests {
         let mut cache = ViewCache::default();
         let runtime = Handle::current();
         wait_until(
-            kithara_test_utils::TestBudget::Quick.timeout(false),
+            kithara_test_utils::TestBudget::Quick.timeout(),
             "fixture artwork is decoded",
             || {
                 cache.refresh(&snapshot, &runtime);

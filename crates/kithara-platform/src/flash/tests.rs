@@ -1584,7 +1584,7 @@ fn a_joined_blocking_closure_holds_the_clock_until_its_joiner_wakes() {
                 thread::yield_now();
             }
         });
-        crate::time::timeout(kithara_test_utils::TestBudget::Quick.timeout(false), handle).await
+        crate::time::timeout(kithara_test_utils::TestBudget::Quick.timeout(), handle).await
     });
     assert!(matches!(joined, Ok(Ok(()))), "{joined:?}");
     assert_eq!(
@@ -1604,7 +1604,7 @@ fn a_joined_task_holds_the_clock_until_its_joiner_wakes() {
     let _f = enter_dynamic(true);
     let (joined, took) = on_virtual_clock(async {
         let handle = crate::tokio::task::spawn(async {});
-        crate::time::timeout(kithara_test_utils::TestBudget::Quick.timeout(false), handle).await
+        crate::time::timeout(kithara_test_utils::TestBudget::Quick.timeout(), handle).await
     });
     assert!(matches!(joined, Ok(Ok(()))), "{joined:?}");
     assert_eq!(
