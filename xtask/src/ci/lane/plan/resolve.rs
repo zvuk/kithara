@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use super::{
     catalog::{Catalog, commands, digest, normalize_kind},
     request::{PlacementMode, PlanRequest, PlanningPolicy, Platform, Purpose},
+    wire,
 };
 use crate::{
     ci::lane::{declared, select::Fleet},
@@ -14,35 +15,41 @@ use crate::{
 };
 
 #[derive(Serialize)]
-struct Check {
-    id: String,
-    definition: String,
-    purpose: Purpose,
-    platform: Platform,
-    expected_tree: String,
-    timeout_minutes: u32,
-    needs: BTreeSet<String>,
-    contract: Value,
-    digest: String,
+pub(super) struct Check {
+    #[serde(flatten)]
+    pub(super) metadata: CheckMetadata,
+    pub(super) contract: Value,
+    pub(super) digest: String,
 }
 
 #[derive(Serialize)]
-struct Admission {
-    check: String,
-    pool: String,
+pub(super) struct CheckMetadata {
+    pub(super) id: String,
+    pub(super) definition: String,
+    pub(super) purpose: Purpose,
+    pub(super) platform: Platform,
+    pub(super) expected_tree: String,
+    pub(super) timeout_minutes: u32,
+    pub(super) needs: BTreeSet<String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct Admission {
+    pub(super) check: String,
+    pub(super) pool: String,
 }
 
 #[derive(Serialize)]
 pub(super) struct Plan {
     schema: u32,
-    request: PlanRequest,
-    catalog_digest: String,
-    contract_digest: String,
-    generation: String,
-    checks: BTreeMap<String, Check>,
+    pub(super) request: PlanRequest,
+    pub(super) catalog_digest: String,
+    pub(super) contract_digest: String,
+    pub(super) generation: String,
+    pub(super) checks: BTreeMap<String, Check>,
     graph: Value,
     availability: Value,
-    providers: BTreeMap<Fleet, Vec<Admission>>,
+    pub(super) providers: BTreeMap<Fleet, Vec<Admission>>,
 }
 
 pub(super) fn resolve(
@@ -57,7 +64,7 @@ pub(super) fn resolve(
     validate_acyclic(catalog.checks.iter().map(|(id, check)| (id, &check.needs)))?;
     let selected = select_checks(catalog, config, &request)?;
     let checks = instantiate_checks(catalog, config, &request, policy, &selected)?;
-    validate_acyclic(checks.iter().map(|(id, check)| (id, &check.needs)))?;
+    validate_acyclic(checks.iter().map(|(id, check)| (id, &check.metadata.needs)))?;
     ensure!(
         policy
             .qualification
@@ -253,22 +260,14 @@ fn instantiate_checks(
         }) {
             for (purpose, tree) in &request.identity.expected_trees {
                 let key = check_id(id, *purpose, platform);
-                let mut contract = definition.contract.clone();
-                if let Some(lane) = config.lanes.get(id) {
-                    contract["steps"] = commands(lane, normalize_kind(request.kind.name()));
-                }
-                let contract = json!({"definition":contract,"parameters":request.parameters.get(id),"verification":request.identity,"context":request.kind,"test_and_build":catalog.build_and_test,"pins":catalog.pins,"selection":{"narrow":request.narrow,"draft_tests":request.draft_tests},"job_retries":0,"timeout_minutes":timeout_minutes,"purpose":purpose,"platform":platform,"tree":tree});
-                let needs = definition.needs.intersection(selected).cloned().collect();
-                let check = Check {
+                let check = CheckMetadata {
                     id: key.clone(),
                     definition: id.clone(),
                     purpose: *purpose,
                     platform: platform.clone(),
                     expected_tree: tree.clone(),
                     timeout_minutes,
-                    needs,
-                    digest: digest(&serde_json::to_vec(&contract)?),
-                    contract,
+                    needs: BTreeSet::new(),
                 };
                 checks.insert(key, check);
             }
@@ -284,20 +283,54 @@ fn instantiate_checks(
             let needs = checks
                 .iter()
                 .filter(|(_, producer)| {
-                    check.needs.contains(&producer.definition) && producer.purpose == check.purpose
+                    catalog.checks[&check.definition]
+                        .needs
+                        .contains(&producer.definition)
+                        && producer.purpose == check.purpose
                 })
                 .map(|(id, _)| id.clone())
                 .collect();
             (id.clone(), needs)
         })
         .collect();
+    let mut resolved = BTreeMap::new();
     for (id, needs) in dependencies {
         let check = checks.get_mut(&id).context("planned check")?;
         check.needs = needs;
-        check.contract["selected_dependencies"] = serde_json::to_value(&check.needs)?;
-        check.digest = digest(&serde_json::to_vec(&check.contract)?);
     }
-    Ok(checks)
+    for (id, metadata) in checks {
+        let contract = source_contract(catalog, config, request, &metadata)?;
+        let digest = digest(&serde_json::to_vec(&contract)?);
+        resolved.insert(
+            id,
+            Check {
+                metadata,
+                contract,
+                digest,
+            },
+        );
+    }
+    Ok(resolved)
+}
+
+pub(super) fn source_contract(
+    catalog: &Catalog,
+    config: &CiProjectConfig,
+    request: &PlanRequest,
+    check: &CheckMetadata,
+) -> Result<Value> {
+    let mut definition = catalog
+        .checks
+        .get(&check.definition)
+        .context("source definition")?
+        .contract
+        .clone();
+    if let Some(lane) = config.lanes.get(&check.definition) {
+        definition["steps"] = commands(lane, normalize_kind(request.kind.name()));
+    }
+    Ok(
+        json!({"definition":definition,"parameters":request.parameters.get(&check.definition),"verification":request.identity,"context":request.kind,"test_and_build":catalog.build_and_test,"pins":catalog.pins,"selection":{"narrow":request.narrow,"draft_tests":request.draft_tests},"job_retries":0,"timeout_minutes":check.timeout_minutes,"purpose":check.purpose,"platform":check.platform,"tree":check.expected_tree,"selected_dependencies":check.needs}),
+    )
 }
 
 fn admit_checks(
@@ -307,6 +340,7 @@ fn admit_checks(
 ) -> Result<BTreeMap<Fleet, Vec<Admission>>> {
     let mut providers = BTreeMap::from([(Fleet::Github, Vec::new()), (Fleet::Gitlab, Vec::new())]);
     for (id, check) in checks {
+        let check = &check.metadata;
         let pools = policy
             .assignments
             .get(id)
@@ -369,20 +403,8 @@ fn check_id(id: &str, purpose: Purpose, platform: &Platform) -> String {
 fn validate_acyclic<'a>(
     dependencies: impl Iterator<Item = (&'a String, &'a BTreeSet<String>)>,
 ) -> Result<()> {
-    let checks: BTreeMap<_, _> = dependencies
-        .map(|(id, needs)| (id.clone(), needs))
-        .collect();
-    let mut remaining: BTreeSet<_> = checks.keys().cloned().collect();
-    while !remaining.is_empty() {
-        let ready: Vec<_> = remaining
-            .iter()
-            .filter(|id| checks[*id].iter().all(|need| !remaining.contains(need)))
-            .cloned()
-            .collect();
-        ensure!(!ready.is_empty(), "plan contains a dependency cycle");
-        for id in ready {
-            remaining.remove(&id);
-        }
-    }
+    wire::validate_acyclic(
+        dependencies.map(|(id, needs)| (id.as_str(), needs.iter().map(String::as_str).collect())),
+    )?;
     Ok(())
 }

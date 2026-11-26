@@ -254,6 +254,14 @@ pub(crate) const GRACE: Duration = Duration::from_secs(10);
 
 pub(crate) const STATUS_CONTEXT: &str = "kithara/gitlab-verification";
 
+/// Bridge-owned plan control status namespaces, matched case-insensitively as
+/// the exact context or a `/`-separated child. They never count as source evidence.
+pub(crate) const PLAN_CONTROL_NAMESPACES: [&str; 3] = [
+    "kithara/plan-control",
+    "kithara/plan-admission",
+    "kithara/plan-request",
+];
+
 pub(crate) const EPOCH: &str = "1970-01-01T00:00:00Z";
 
 /// Paths that define the trusted `GitLab` judge. Pull-request product content is

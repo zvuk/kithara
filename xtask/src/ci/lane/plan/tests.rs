@@ -15,7 +15,7 @@ use crate::{
     testing::workspace::root,
 };
 
-fn plan_request(only: &[&str]) -> PlanRequest {
+pub(super) fn plan_request(only: &[&str]) -> PlanRequest {
     PlanRequest {
         identity: VerificationIdentity {
             repository: "source/project".to_owned(),
@@ -34,7 +34,7 @@ fn plan_request(only: &[&str]) -> PlanRequest {
     }
 }
 
-fn policy(catalog: &Catalog, request: &PlanRequest) -> PlanningPolicy {
+pub(super) fn policy(catalog: &Catalog, request: &PlanRequest) -> PlanningPolicy {
     let platforms = BTreeSet::from([
         Platform {
             os: "linux".to_owned(),
