@@ -475,7 +475,6 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
 /// the unmeasured ones are printed rather than asserted away; what is asserted
 /// is that every measured page is one the gallery really has, or the harness's
 /// own, and that it compiles.
-#[kithara::test]
 fn the_page_table_is_pinned_to_the_gallery() {
     let fixture = Fixture::default();
     let tabs = sections::pages();

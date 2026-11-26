@@ -555,7 +555,7 @@ fn criterion_benchmarks(c: &mut Criterion) {
         } else {
             "vello"
         };
-        let scenario = &consts::SCENARIOS[index % 40];
+        let scenario = &consts::SCENARIOS[index % consts::SCENARIOS.len()];
         group.bench_function(
             BenchmarkId::new(
                 "case",
