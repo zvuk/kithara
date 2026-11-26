@@ -158,6 +158,11 @@ name = "masonry_host"
 required-features = ["masonry"]
 test = true
 
+[[test]]
+name = "frame_perf_oracle"
+path = "perf/frame/oracle.rs"
+required-features = ["perf", "iced", "masonry"]
+
 [[bench]]
 name = "frame_perf"
 path = "perf/frame/main.rs"

@@ -56,9 +56,9 @@ fn create_wav_decoder(wav_data: &'static [u8]) -> Box<dyn Decoder> {
 }
 
 fn prepare_decoder(index: usize) -> Work {
-    match index {
-        0 => Work::new(|| {
-            let mut decoder = create_wav_decoder(audio_wav_44100());
+    if index == 0 {
+        let mut decoder = create_wav_decoder(audio_wav_44100());
+        return Work::new(move || {
             let mut chunks = 0;
             while let Ok(outcome) = decoder.next_chunk() {
                 let Ok(chunk) = AudioChunk::try_from(outcome) else {
@@ -68,8 +68,10 @@ fn prepare_decoder(index: usize) -> Work {
                 chunks += 1;
             }
             assert!(chunks > 0);
-        }),
-        1 => Work::new(|| {
+        });
+    }
+    if index == 1 {
+        return Work::new(|| {
             for _ in 0..10 {
                 let cursor = Cursor::new(audio_wav_44100().to_vec());
                 let decoder =
@@ -77,31 +79,32 @@ fn prepare_decoder(index: usize) -> Work {
                         .expect("probe decoder");
                 std::hint::black_box(decoder);
             }
-        }),
-        2 => Work::new(|| {
-            let mut decoder = create_wav_decoder(audio_wav_44100());
-            let mut samples = 0;
-            while let Ok(outcome) = decoder.next_chunk() {
-                let Ok(chunk) = AudioChunk::try_from(outcome) else {
-                    break;
-                };
-                samples += chunk.samples.len();
-            }
-            assert!(samples > 0);
-        }),
-        3 => Work::new(|| {
-            let mut decoder = create_wav_decoder(perf_wav());
-            let mut samples = 0;
-            while let Ok(outcome) = decoder.next_chunk() {
-                let Ok(chunk) = AudioChunk::try_from(outcome) else {
-                    break;
-                };
-                samples += chunk.samples.len();
-            }
-            assert!(samples > 0);
-        }),
-        _ => unreachable!(),
+        });
     }
+    if index == 2 {
+        let mut decoder = create_wav_decoder(audio_wav_44100());
+        return Work::new(move || {
+            let mut samples = 0;
+            while let Ok(outcome) = decoder.next_chunk() {
+                let Ok(chunk) = AudioChunk::try_from(outcome) else {
+                    break;
+                };
+                samples += chunk.samples.len();
+            }
+            assert!(samples > 0);
+        });
+    }
+    let mut decoder = create_wav_decoder(perf_wav());
+    Work::new(move || {
+        let mut samples = 0;
+        while let Ok(outcome) = decoder.next_chunk() {
+            let Ok(chunk) = AudioChunk::try_from(outcome) else {
+                break;
+            };
+            samples += chunk.samples.len();
+        }
+        assert!(samples > 0);
+    })
 }
 
 #[metabench::benchmark(SESSION_DECODER, "session_decoder", "case", gungraun_setup = prepare_decoder)]
@@ -109,8 +112,9 @@ fn prepare_decoder(index: usize) -> Work {
 #[bench::decoder_probe(1_usize)]
 #[bench::decoder_f32_conversion(2_usize)]
 #[bench::decoder_throughput(3_usize)]
-fn native_decoder(mut work: Work) {
+fn native_decoder(mut work: Work) -> Work {
     work.run();
+    work
 }
 
 fn variants() -> Vec<VariantInfo> {
@@ -184,8 +188,9 @@ fn prepare_abr(index: usize) -> Work {
 #[bench::abr_decision(1_usize)]
 #[bench::abr_pure_decision(2_usize)]
 #[bench::abr_estimator_loop(3_usize)]
-fn native_abr(mut work: Work) {
+fn native_abr(mut work: Work) -> Work {
     work.run();
+    work
 }
 
 fn pool_cycle(pools: &Pools) {
@@ -214,22 +219,30 @@ fn pool_threads(pools: &Pools, threads: usize, iterations: usize) {
 
 fn prepare_pool(index: usize) -> Work {
     match index {
-        0 => Work::new(|| {
+        0 => {
             let pools = pools();
-            for _ in 0..10_000 {
-                pool_cycle(&pools);
-            }
-        }),
-        1 => Work::new(|| pool_threads(&pools(), 8, 1_000)),
-        2 => Work::new(|| {
+            Work::new(move || {
+                for _ in 0..10_000 {
+                    pool_cycle(&pools);
+                }
+            })
+        }
+        1 => {
             let pools = pools();
-            for _ in 0..1_000 {
-                pool_cycle(&pools);
-            }
-        }),
+            Work::new(move || pool_threads(&pools, 8, 1_000))
+        }
+        2 => {
+            let pools = pools();
+            Work::new(move || {
+                for _ in 0..1_000 {
+                    pool_cycle(&pools);
+                }
+            })
+        }
         3..=7 => {
             let threads = [1, 2, 4, 8, 16][index - 3];
-            Work::new(move || pool_threads(&pools(), threads, 1_000))
+            let pools = pools();
+            Work::new(move || pool_threads(&pools, threads, 1_000))
         }
         _ => unreachable!(),
     }
@@ -244,8 +257,9 @@ fn prepare_pool(index: usize) -> Work {
 #[bench::pool_scalability_4(5_usize)]
 #[bench::pool_scalability_8(6_usize)]
 #[bench::pool_scalability_16(7_usize)]
-fn native_pool(mut work: Work) {
+fn native_pool(mut work: Work) -> Work {
     work.run();
+    work
 }
 
 fn build_resampler(
@@ -287,21 +301,21 @@ fn process_stereo(
 
 fn prepare_resampler(index: usize) -> Work {
     if index == 4 {
-        return Work::new(|| {
-            let mut resampler = build_resampler(44_100, 44_100, ResamplerQuality::Good, 2048);
-            let input = [
-                perf_planar()[0][..2048].to_vec(),
-                perf_planar()[1][..2048].to_vec(),
-            ];
-            let mut output = [vec![0.0; 4096], vec![0.0; 4096]];
+        let mut resampler = build_resampler(44_100, 44_100, ResamplerQuality::Good, 2048);
+        let input = [
+            perf_planar()[0][..2048].to_vec(),
+            perf_planar()[1][..2048].to_vec(),
+        ];
+        let mut output = [vec![0.0; 4096], vec![0.0; 4096]];
+        return Work::new(move || {
             for _ in 0..1_000 {
                 std::hint::black_box(process_stereo(&mut *resampler, &input, &mut output));
             }
         });
     }
     if index == 8 {
-        return Work::new(|| {
-            let interleaved = perf_interleaved();
+        let interleaved = perf_interleaved();
+        return Work::new(move || {
             for _ in 0..1_000 {
                 let mut planar: [Vec<f32>; 2] = [Vec::new(), Vec::new()];
                 for (channel, buffer) in planar.iter_mut().enumerate() {
@@ -357,8 +371,9 @@ fn prepare_resampler(index: usize) -> Work {
 #[bench::resampler_breakdown_4096(7_usize)]
 #[bench::resampler_deinterleave(8_usize)]
 #[bench::resampler_breakdown_2048(9_usize)]
-fn native_resampler(mut work: Work) {
+fn native_resampler(mut work: Work) -> Work {
     work.run();
+    work
 }
 
 fn create_test_storage(size: usize) -> (MmapResource, NamedTempFile) {
@@ -422,8 +437,9 @@ fn prepare_storage(index: usize) -> Work {
 #[bench::storage_write_65536(6_usize)]
 #[bench::storage_random_read(7_usize)]
 #[bench::storage_wait_range(8_usize)]
-fn native_storage(mut work: Work) {
+fn native_storage(mut work: Work) -> Work {
     work.run();
+    work
 }
 
 fn criterion_case(name: &str, id: &str, b: &mut criterion::Bencher) {

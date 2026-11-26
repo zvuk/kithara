@@ -1086,7 +1086,7 @@ cargo.packages = ["kithara-ui", "kithara-ui-gallery"]
 cargo.profile = "test-release"
 runner.nextest.test_threads = 1
 runner.nextest.ignore_default_filter = true
-runner.nextest.filter = "binary(frame_perf) | binary(page_perf)"
+runner.nextest.filter = "binary(frame_perf_oracle)"
 
 [test.lanes.ui-doc]
 default_backend = "none"

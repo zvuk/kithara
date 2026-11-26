@@ -53,6 +53,16 @@ on:
       bench_base_ref:
         type: string
         default: ""
+      bench_mode:
+        description: Benchmark engine mode.
+        type: choice
+        options: [timing, allocation]
+        default: timing
+      bench_allocator_policy:
+        description: Allocator installed by the selected benchmark artifact.
+        type: choice
+        options: [system, alloc-disabler, counting]
+        default: system
       bench_preflight:
         type: string
         default: ""
@@ -74,7 +84,7 @@ on:
 # whole night per push for the fleet. Another selection, or the other cadence,
 # is another question and keeps its run.
 concurrency:
-  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.narrow || '' }}-${{ inputs.mutants || false }}-${{ inputs.bench_target }}-${{ inputs.bench_filter }}-${{ inputs.bench_ref }}-${{ inputs.bench_base_ref }}${{ (inputs.bench_preflight || '') != '' && '-preflight' || '' }}
+  group: dispatch-${{ github.ref }}-${{ inputs.kind || (github.event.schedule == '17 8 * * 6' && 'weekly' || github.event.schedule == '17 3 1 * *' && 'monthly' || 'nightly') }}-${{ inputs.only || '' }}-${{ inputs.narrow || '' }}-${{ inputs.mutants || false }}-${{ inputs.bench_target }}-${{ inputs.bench_filter }}-${{ inputs.bench_ref }}-${{ inputs.bench_base_ref }}-${{ inputs.bench_mode }}-${{ inputs.bench_allocator_policy }}${{ (inputs.bench_preflight || '') != '' && '-preflight' || '' }}
   cancel-in-progress: ${{ (inputs.bench_preflight || '') == '' }}
 
 jobs:
@@ -119,6 +129,8 @@ jobs:
       bench_filter: ${{ inputs.bench_filter || '' }}
       bench_ref: ${{ inputs.bench_ref || '' }}
       bench_base_ref: ${{ inputs.bench_base_ref || '' }}
+      bench_mode: ${{ inputs.bench_mode || 'timing' }}
+      bench_allocator_policy: ${{ inputs.bench_allocator_policy || 'system' }}
       bench_preflight: ${{ inputs.bench_preflight || '' }}
 
   # Never on a schedule: `mutants` runs every suite, and `only` runs the lanes

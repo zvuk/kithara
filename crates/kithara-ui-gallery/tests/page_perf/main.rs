@@ -729,6 +729,7 @@ fn native_gallery(mut work: GalleryWork) -> GalleryWork {
 }
 
 fn criterion_benchmarks(c: &mut Criterion) {
+    the_page_table_is_pinned_to_the_gallery();
     let mut group = c.benchmark_group("gallery");
     group.sample_size(10);
     for index in 0..80 {

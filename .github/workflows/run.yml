@@ -61,6 +61,12 @@ on:
       bench_base_ref:
         type: string
         default: ""
+      bench_mode:
+        type: string
+        default: timing
+      bench_allocator_policy:
+        type: string
+        default: system
       bench_preflight:
         type: string
         default: ""
@@ -175,6 +181,8 @@ jobs:
       bench_filter: ${{ inputs.bench_filter }}
       bench_ref: ${{ inputs.bench_ref }}
       bench_base_ref: ${{ inputs.bench_base_ref }}
+      bench_mode: ${{ inputs.bench_mode }}
+      bench_allocator_policy: ${{ inputs.bench_allocator_policy }}
       bench_preflight: ${{ inputs.bench_preflight }}
       pr-tests: ${{ inputs.pr-tests }}
 
