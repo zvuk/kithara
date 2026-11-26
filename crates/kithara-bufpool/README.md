@@ -95,8 +95,11 @@ fn build() -> Result<(), PoolError> {
 ## Integration
 
 The app and FFI composition roots own concrete schemas. A crate deriving
-`Pool` depends on `kithara-bufpool` directly, because the expansion names
-`::kithara_bufpool` paths. Lower layers are
+`Pool` names the pool owner the way it already reaches it: through the facade's
+`kithara::bufpool` module when it depends on `kithara`, and through
+`kithara_bufpool` when it depends on the pool crate directly. A manifest that
+names both owners is refused, because the facade's `bufpool` module is
+optional and such a crate cannot say which owner it means. Lower layers are
 generic over only the `HasPool<u8>` and `HasPool<f32>` capabilities they use.
 Acquisition and return stay lock-free; every capacity increase is checked
 against the region limit.

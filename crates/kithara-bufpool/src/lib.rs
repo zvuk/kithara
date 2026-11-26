@@ -2,6 +2,11 @@
 
 #![forbid(unsafe_code)]
 
+// The `Pool` derive names the owner by its canonical path, so the owner has to
+// be able to name itself that way too. The alias is what makes the expansion
+// resolve inside this crate and in the doctests it derives a schema in.
+extern crate self as kithara_bufpool;
+
 #[doc(hidden)]
 pub mod __private;
 mod budget;

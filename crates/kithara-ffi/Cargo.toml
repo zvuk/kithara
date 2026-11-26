@@ -127,7 +127,6 @@ kithara = { workspace = true, default-features = false, features = [
     "stream",
 ] }
 kithara-audio = { workspace = true }
-kithara-bufpool = { workspace = true }
 kithara-command = { workspace = true }
 kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["mirror"] }

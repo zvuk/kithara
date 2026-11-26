@@ -1,9 +1,9 @@
 use kithara::{
     assets::AssetStore,
+    bufpool::{OverallBudget, Pool, PoolConfig, PoolError, PoolRegion, PoolSlot},
     play::{PlayWorker, PlaybackResamplerBackend, ResourceConfig},
     queue::{Queue, QueueControl, TrackSource},
 };
-use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolError, PoolRegion, PoolSlot};
 
 use crate::consts;
 

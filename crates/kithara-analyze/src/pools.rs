@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolRegion, PoolSlot};
+use kithara::bufpool::{OverallBudget, Pool, PoolConfig, PoolRegion, PoolSlot};
 
 use crate::RunError;
 

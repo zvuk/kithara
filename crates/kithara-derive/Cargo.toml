@@ -31,6 +31,7 @@ skin-walk = []
 variants = []
 
 [dependencies]
+proc-macro-crate = { workspace = true }
 proc-macro2 = { workspace = true }
 quote = { workspace = true }
 syn = { workspace = true, features = ["extra-traits", "visit"] }

@@ -31,12 +31,12 @@ the same name (`kithara::hls`, `kithara::play`, `kithara::queue`, ...).
 ## Usage
 
 Play a list of tracks on the default audio device (features `queue` and the
-defaults). The pool schema derive emits `::kithara_bufpool` paths, so the
-crate declaring it depends on `kithara-bufpool` directly; engine types still
-come from the facade:
+defaults). The pool schema derive names the crate that owns the pool types, so
+a crate that depends on the facade declares its schema against
+`kithara::bufpool`:
 
 ```rust
-use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
+use kithara::bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
 use kithara::host::{Host, HostConfig};
 use kithara::play::{PlayWorker, PlayWorkerConfig, ResourcePrep};
 use kithara::queue::{Queue, QueueConfig};

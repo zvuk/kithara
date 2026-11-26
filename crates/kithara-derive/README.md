@@ -131,10 +131,12 @@ let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
 ```
 
 `kithara-bufpool` re-exports the derive beside `PoolSlot`. The expansion names
-`::kithara_bufpool` paths, so the declaring crate needs a direct
-`kithara-bufpool` dependency; the facade's `kithara::bufpool` re-export is not
-enough. A repeated key, including one reached through two type aliases, fails
-to compile.
+the pool owner the way the declaring crate reaches it: through the facade's
+`kithara::bufpool` module when the crate depends on `kithara`, and through
+`kithara_bufpool` when it depends on the pool crate directly. A manifest that
+names both owners is refused, because the facade's `bufpool` module is
+optional and such a crate cannot say which owner it means. A repeated key,
+including one reached through two type aliases, fails to compile.
 
 ## Key Types
 

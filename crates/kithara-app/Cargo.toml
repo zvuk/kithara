@@ -98,7 +98,6 @@ kithara-app-document = { workspace = true }
 kithara-app-library = { workspace = true }
 kithara-app-zvuk = { workspace = true, optional = true }
 kithara-assets = { workspace = true }
-kithara-bufpool = { workspace = true }
 kithara-command = { workspace = true }
 kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
