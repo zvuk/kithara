@@ -34,11 +34,13 @@ const CASES: [(&[&str], bool, &str); 4] = [
 ];
 
 fn run(wasm: &str, args: &[String]) -> (bool, String) {
+    eprintln!("wasm protocol child begin: {wasm} {args:?}");
     let output = Command::new(env!("CARGO_BIN_EXE_wasm_test_runner"))
         .arg(wasm)
         .args(args)
         .output()
         .expect("the runner starts");
+    eprintln!("wasm protocol child end: {} {args:?}", output.status);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr);
     (
