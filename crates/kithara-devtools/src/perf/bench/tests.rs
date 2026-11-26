@@ -20,6 +20,83 @@ fn command(root: &Path, program: &str, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
+const KERNEL_SOURCE: &str = r#"
+use std::{env, fs::{self, OpenOptions}, io::Write};
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let ids = include_str!("../ids");
+    assert!(
+        args.iter().any(|arg| arg == "--criterion" || arg == "--allocations"),
+        "fixture requires an explicit Metabench engine selector"
+    );
+    let mut filter = String::new();
+    let mut first = true;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--criterion-arg" && index + 1 < args.len() {
+            if first {
+                filter = args[index + 1].clone();
+                first = false;
+            }
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    let list = args.iter().any(|arg| arg == "--list");
+    let test = args.iter().any(|arg| arg == "--test");
+    if matches!(filter.as_str(), "paired" | "head-only") && (list || test) {
+        let invoked = env::args_os().next().unwrap();
+        assert_eq!(
+            fs::canonicalize(&invoked).unwrap(),
+            fs::canonicalize(env::current_exe().unwrap()).unwrap()
+        );
+        let mode = if test { "--test" } else { "--list" };
+        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+        writeln!(events, "{mode}:{filter}:{}", invoked.to_str().unwrap()).unwrap();
+        let mut selected: Vec<_> = ids.lines()
+            .filter(|id| filter != "paired" || !id.starts_with("forms/"))
+            .collect();
+        if test && selected.contains(&"group/reverse") {
+            selected.reverse();
+        }
+        for id in selected {
+            match mode {
+                "--list" => println!("{id}: benchmark"),
+                "--test" => {
+                    println!("Testing {id}");
+                    match id {
+                        "group/exit" => std::process::exit(2),
+                        "group/no-success" => return,
+                        "group/duplicate" => println!("Success\nTesting {id}"),
+                        "group/artifact" => {
+                            let home = env::var("CRITERION_HOME").unwrap();
+                            fs::write(std::path::Path::new(&home).join("sample.json"), "{}").unwrap();
+                        }
+                        _ => {}
+                    }
+                    println!("Success");
+                }
+                _ => unreachable!(),
+            }
+        }
+        return;
+    }
+    if matches!(filter.as_str(), "paired" | "head-only") {
+        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+        writeln!(events, "timing").unwrap();
+        std::process::exit(4);
+    }
+    if list {
+        for id in ids.lines() { println!("{id}: benchmark"); }
+        return;
+    }
+    let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+    writeln!(events, "run:{}", include_str!("../arm").trim()).unwrap();
+    println!("{args:?}");
+}
+"#;
+
 fn fixture(base_ids: &str, head_ids: &str) -> (TempDir, Ctx, String) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("repository");
@@ -51,63 +128,7 @@ required-features = ["spectrum", "portable"]
     .unwrap();
     fs::write(
         root.join("benches/kernel.rs"),
-        r#"
-use std::{env, fs::{self, OpenOptions}, io::Write};
-fn main() {
-    let args: Vec<_> = env::args().skip(1).collect();
-    let args: Vec<_> = args.iter().map(String::as_str).collect();
-    let ids = include_str!("../ids");
-    if let ["--bench", mode, filter @ ("paired" | "head-only")] = args.as_slice() {
-        let invoked = env::args_os().next().unwrap();
-        assert_eq!(
-            fs::canonicalize(&invoked).unwrap(),
-            fs::canonicalize(env::current_exe().unwrap()).unwrap()
-        );
-        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
-        writeln!(events, "{mode}:{filter}:{}", invoked.to_str().unwrap()).unwrap();
-        let mut selected: Vec<_> = ids.lines()
-            .filter(|id| *filter != "paired" || !id.starts_with("forms/"))
-            .collect();
-        if *mode == "--test" && selected.contains(&"group/reverse") {
-            selected.reverse();
-        }
-        for id in selected {
-            match *mode {
-                "--list" => println!("{id}: benchmark"),
-                "--test" => {
-                    println!("Testing {id}");
-                    match id {
-                        "group/exit" => std::process::exit(2),
-                        "group/no-success" => return,
-                        "group/duplicate" => println!("Success\nTesting {id}"),
-                        "group/artifact" => {
-                            let home = env::var("CRITERION_HOME").unwrap();
-                            fs::write(std::path::Path::new(&home).join("sample.json"), "{}").unwrap();
-                        }
-                        _ => {}
-                    }
-                    println!("Success");
-                }
-                _ => std::process::exit(3),
-            }
-        }
-        return;
-    }
-    if args.iter().any(|arg| matches!(*arg, "paired" | "head-only")) {
-        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
-        writeln!(events, "timing").unwrap();
-        std::process::exit(4);
-    }
-    if args.contains(&"--list") {
-        for id in ids.lines() { println!("{id}: benchmark"); }
-        return;
-    }
-    let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
-    writeln!(events, "run:{}", include_str!("../arm").trim()).unwrap();
-    println!("{args:?}");
-}
-"#
-        .replace("EVENTS", &events),
+        KERNEL_SOURCE.replace("EVENTS", &events),
     )
     .unwrap();
     let config = "[tools.critcmp]\nprogram = 'missing-benchmark-comparison-tool'\n";
