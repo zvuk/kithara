@@ -1693,19 +1693,19 @@ mod tests {
         }
     }
 
-    /// `kinds` is GitLab's membership and `kinds_github` is GitHub's, so a
+    /// `kinds_gitlab` is GitLab's membership and `kinds_github` is GitHub's, so a
     /// lane claiming a pipeline kind here is claiming a GitLab job runs it.
     #[test]
     fn a_lane_that_claims_a_pipeline_kind_has_a_pipeline_job() {
         let scheduled = scheduled_lanes();
         for (name, lane) in declared_lanes() {
-            if lane.kinds.is_empty() {
+            if lane.kinds_gitlab.is_empty() {
                 continue;
             }
             assert!(
                 scheduled.contains(&name),
                 "the {name} lane claims {:?}, but no pipeline job runs it",
-                lane.kinds
+                lane.kinds_gitlab
             );
         }
     }
@@ -1719,10 +1719,7 @@ mod tests {
         for (name, lane) in declared_lanes() {
             assert!(
                 scheduled.contains(&name)
-                    || lane
-                        .kinds_github
-                        .as_ref()
-                        .is_some_and(|kinds| !kinds.is_empty())
+                    || !lane.kinds_github.is_empty()
                     || consts::BY_NAME_ONLY.contains(&name.as_str()),
                 "nothing reaches the {name} lane: no pipeline job runs it, it claims no \
                  GitHub pipeline kind, and it is not named as reachable by name alone"

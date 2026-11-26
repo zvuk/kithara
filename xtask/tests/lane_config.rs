@@ -30,7 +30,7 @@ fn publication_is_a_verified_gate_for_review_main_and_dispatch() {
             "{kind}"
         );
     }
-    assert_eq!(strings(&lane["kinds"]), ["weekly"]);
+    assert_eq!(strings(&lane["kinds_gitlab"]), ["weekly"]);
     let steps = lane["steps"].as_array().expect("publication steps");
     assert_eq!(steps.len(), 1);
     let args: Vec<_> = steps[0]["args"]
@@ -423,7 +423,7 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
             roles.contains(&role.to_owned()),
             "lane `{name}` has unknown role `{role}`"
         );
-        for field in ["kinds", "kinds_github"] {
+        for field in ["kinds_gitlab", "kinds_github"] {
             let Some(listed) = lane.get(field).and_then(toml::Value::as_array) else {
                 continue;
             };
@@ -438,17 +438,10 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
     }
 }
 
-/// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
-/// where it is declared, the shared `kinds` otherwise, and none at all for a lane
-/// that cannot run on Linux, because that fan-out has only Linux machines.
+/// The kinds a lane enters the GitHub fan-out under. GitHub reads its own
+/// list alone; a missing list is an empty one.
 fn github_membership(lane: &toml::Value) -> Vec<&str> {
-    let os = lane.get("os").map_or_else(Vec::new, strings);
-    if !os.contains(&"linux") {
-        return Vec::new();
-    }
-    lane.get("kinds_github")
-        .or_else(|| lane.get("kinds"))
-        .map_or_else(Vec::new, strings)
+    lane.get("kinds_github").map_or_else(Vec::new, strings)
 }
 
 fn strings(value: &toml::Value) -> Vec<&str> {
@@ -640,31 +633,13 @@ fn every_own_configuration_suite_is_a_lane_of_every_reviewed_kind() {
             );
         }
         let mut kinds = github_membership(lane);
-        kinds.extend(lane.get("kinds").map_or_else(Vec::new, strings));
+        kinds.extend(lane.get("kinds_gitlab").map_or_else(Vec::new, strings));
         for kind in ["branch", "merge-request", "main"] {
             assert!(
                 kinds.contains(&kind),
                 "lane `{name}` does not run `{suite}` on `{kind}`"
             );
         }
-    }
-}
-
-#[test]
-fn github_membership_keeps_an_explicit_empty_list_distinct_from_absence() {
-    for (declaration, expected) in [
-        ("", vec!["weekly"]),
-        ("kinds_github = []", Vec::new()),
-        (
-            "kinds_github = [\"main\", \"nightly\"]",
-            vec!["main", "nightly"],
-        ),
-    ] {
-        let lane: toml::Value = toml::from_str(&format!(
-            "os = \"linux\"\nkinds = [\"weekly\"]\n{declaration}\n"
-        ))
-        .expect("the membership fixture parses");
-        assert_eq!(github_membership(&lane), expected);
     }
 }
 

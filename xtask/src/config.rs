@@ -121,8 +121,8 @@ pub(crate) struct CiLaneConfig {
     pub(crate) cache_group: String,
     /// How the lane names itself when it refuses a platform.
     pub(crate) label: String,
-    /// Every operating system the lane runs on. GitHub fan-out requires Linux;
-    /// lanes needing a dedicated pool opt out through `kinds_github`.
+    /// Every operating system the lane runs on. Either provider runs it on a
+    /// pool of that system, when the provider has one enabled.
     #[serde(deserialize_with = "one_or_many")]
     pub(crate) os: Vec<String>,
     pub(crate) tools: Vec<String>,
@@ -145,14 +145,13 @@ pub(crate) struct CiLaneConfig {
     /// a workflow each, because five workflows differing by one string is the
     /// duplication this catalog exists to remove.
     pub(crate) role: String,
-    /// Pipeline kinds this lane runs in. Empty means the lane is reachable
+    /// Pipeline kinds GitLab runs this lane in. Every lane has a job on both
+    /// providers; these two lists decide which of them runs it, so load is
+    /// split between their pools. Empty on both means the lane is reachable
     /// only by name, through a dispatch that asks for it.
-    pub(crate) kinds: Vec<String>,
-    /// The GitHub fleet's answer where it honestly differs from `kinds`: 25
-    /// runners on one host buy a check per push that a single Mac mini can
-    /// only afford weekly. Omission uses `kinds`; an empty list leaves the
-    /// lane to its dedicated workflow.
-    pub(crate) kinds_github: Option<Vec<String>>,
+    pub(crate) kinds_gitlab: Vec<String>,
+    /// Pipeline kinds GitHub runs this lane in. Empty turns the GitHub copy off.
+    pub(crate) kinds_github: Vec<String>,
     /// Changed paths that schedule this lane in a narrowing pipeline. Full
     /// pipeline kinds and explicit lane requests ignore this filter.
     pub(crate) path_globs: Vec<String>,
@@ -179,13 +178,6 @@ pub(crate) struct CiLaneConfig {
     /// Lanes whose artifacts this one consumes. A lane with needs runs after
     /// them and only when at least one of them was selected.
     pub(crate) needs: Vec<String>,
-}
-
-impl CiLaneConfig {
-    /// Whether the shared Linux fan-out can carry the lane.
-    pub(crate) fn runs_on_linux(&self) -> bool {
-        self.os.iter().any(|os| os == "linux")
-    }
 }
 
 fn one_or_many<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -363,22 +355,6 @@ impl CiProjectConfig {
             {
                 bail!("ext.ci.lanes.{name}.os must be linux, macos or windows, got `{os}`");
             }
-            // `kinds_github` is a statement that GitHub schedules this lane, and
-            // GitHub's fan-out reaches one pool. A lane excluding Linux
-            // would be refused at selection and never run, which is a lane
-            // declared into a schedule it cannot reach - the failure this
-            // catalog exists to make impossible, not one to restate quietly.
-            if lane
-                .kinds_github
-                .as_ref()
-                .is_some_and(|kinds| !kinds.is_empty())
-                && !lane.runs_on_linux()
-            {
-                bail!(
-                    "ext.ci.lanes.{name}.kinds_github schedules a `{}` lane, and the GitHub fleet is Linux",
-                    lane.os.join(" or ")
-                );
-            }
             if lane.github_runner.as_deref().is_some_and(str::is_empty) {
                 bail!("ext.ci.lanes.{name}.github_runner must not be empty");
             }
@@ -429,11 +405,8 @@ impl CiProjectConfig {
                 );
             }
             for (field, listed) in [
-                ("kinds", lane.kinds.as_slice()),
-                (
-                    "kinds_github",
-                    lane.kinds_github.as_deref().unwrap_or_default(),
-                ),
+                ("kinds_gitlab", lane.kinds_gitlab.as_slice()),
+                ("kinds_github", lane.kinds_github.as_slice()),
             ] {
                 for kind in listed {
                     if !consts::PIPELINE_KINDS.contains(&kind.as_str()) {
@@ -491,10 +464,10 @@ impl CiProjectConfig {
 fn validate_artifact(name: &str, lane: &CiLaneConfig, artifact: &CiLaneArtifact) -> Result<()> {
     match (&artifact.path, artifact.report) {
         (Some(path), None) if !path.is_empty() => Ok(()),
-        (None, Some(_)) if lane.kinds.is_empty() => Ok(()),
+        (None, Some(_)) if lane.kinds_gitlab.is_empty() => Ok(()),
         (None, Some(_)) => bail!(
             "ext.ci.lanes.{name}.artifact.report reaches a later step only in a GitHub job, and \
-             GitLab does not run one; the lane must leave `kinds` empty"
+             GitLab does not run one; the lane must leave `kinds_gitlab` empty"
         ),
         _ => bail!("ext.ci.lanes.{name}.artifact must name either a non-empty path or a report"),
     }
@@ -1100,7 +1073,7 @@ timeout_minutes = 30
                 "either a non-empty path or a report",
             ),
             (
-                "kinds = [\"main\"]\nartifact = { name = \"driver\", report = \"chromium\" }",
+                "kinds_gitlab = [\"main\"]\nartifact = { name = \"driver\", report = \"chromium\" }",
                 "GitLab does not run",
             ),
         ] {
@@ -1214,11 +1187,10 @@ steps = ["nightly_retained"]
         assert_eq!(nightly.steps, vec![PublishStep::NightlyRetained]);
     }
 
-    // A lane that names a machine and then declares GitHub schedules it is two
-    // statements that cannot both be true. Selection refuses the lane silently,
-    // so the catalog says the lane runs nightly and nothing ever runs it.
+    // Both providers carry every lane, so a macOS lane may name GitHub kinds:
+    // GitHub runs it once it has an enabled macOS pool.
     #[test]
-    fn a_lane_off_the_github_fleet_may_not_declare_a_github_schedule() {
+    fn a_macos_lane_may_declare_a_github_schedule() {
         let ctx = ctx_from_config(
             r#"
 [ext.ci]
@@ -1231,21 +1203,17 @@ os = "macos"
 program = "just"
 steps = [{ args = ["test"], label = "suite" }]
 role = "platforms"
-kinds = ["nightly"]
+kinds_gitlab = ["nightly"]
 kinds_github = ["nightly"]
 timeout_minutes = 30
 "#,
         );
 
-        let error = KitharaExt::from_ctx(&ctx)
+        KitharaExt::from_ctx(&ctx)
             .expect("parse kithara extension")
             .ci
             .validate()
-            .expect_err("a macOS lane may not claim a GitHub schedule");
-        assert!(
-            error.to_string().contains("the GitHub fleet is Linux"),
-            "the error must name the fleet: {error}"
-        );
+            .expect("a macOS lane may name GitHub kinds");
     }
 
     #[test]
@@ -1322,7 +1290,7 @@ os = ["macos", "linux"]
 program = "just"
 steps = [{ args = ["test"], label = "suite" }]
 role = "platforms"
-kinds = ["nightly"]
+kinds_gitlab = ["nightly"]
 timeout_minutes = 30
 "#,
         );
@@ -1332,7 +1300,7 @@ timeout_minutes = 30
             .ci;
         ci.validate().expect("a lane may run on two machines");
         assert_eq!(ci.lanes["device"].os, ["macos", "linux"]);
-        assert!(ci.lanes["device"].runs_on_linux());
+        assert!(ci.lanes["device"].os.iter().any(|os| os == "linux"));
     }
 
     /// The compiler cache keys every compilation on each `CARGO_*` value, so a
@@ -1681,21 +1649,21 @@ lane_unit_window_hours = 0
     }
 
     #[test]
-    fn github_membership_parsing_keeps_absence_empty_and_nonempty_distinct() {
+    fn each_provider_reads_only_its_own_membership() {
         for (declaration, expected) in [
-            ("", None),
-            ("kinds_github = []", Some(Vec::new())),
+            ("", Vec::new()),
+            ("kinds_github = []", Vec::new()),
             (
                 "kinds_github = [\"main\", \"nightly\"]",
-                Some(vec!["main".to_owned(), "nightly".to_owned()]),
+                vec!["main".to_owned(), "nightly".to_owned()],
             ),
         ] {
             let lane: super::CiLaneConfig = toml::from_str(&format!(
-                "kinds = [\"weekly\"]\nhistory = true\n{declaration}\n"
+                "kinds_gitlab = [\"weekly\"]\nhistory = true\n{declaration}\n"
             ))
             .expect("the lane parses");
             assert_eq!(lane.kinds_github, expected);
-            assert_eq!(lane.kinds, ["weekly"]);
+            assert_eq!(lane.kinds_gitlab, ["weekly"]);
             assert!(lane.history);
         }
     }
@@ -1714,7 +1682,7 @@ os = "macos"
 program = "just"
 steps = [{ args = ["test"], label = "suite" }]
 role = "platforms"
-kinds = ["weekly"]
+kinds_gitlab = ["weekly"]
 kinds_github = []
 timeout_minutes = 30
 history = true
@@ -1724,7 +1692,7 @@ history = true
             .expect("parse kithara extension")
             .ci;
         ci.validate().expect("GitLab owns the macOS schedule");
-        assert_eq!(ci.lanes["apple-thing"].kinds_github, Some(Vec::new()));
+        assert!(ci.lanes["apple-thing"].kinds_github.is_empty());
         assert!(ci.lanes["apple-thing"].history);
     }
 
@@ -1742,7 +1710,7 @@ os = "linux"
 program = "just"
 steps = [{ args = ["test"], label = "suite" }]
 role = "gate"
-kinds = ["weekly"]
+kinds_gitlab = ["weekly"]
 kinds_github = ["unknown"]
 timeout_minutes = 30
 "#,

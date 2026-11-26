@@ -1758,46 +1758,55 @@
   <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-broadcast / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --lane=broadcast
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-broadcast / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-broadcast / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-broadcast / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-broadcast / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-broadcast / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-broadcast / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-broadcast / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=broadcast
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-check / bench
   <require os> linux
   <require tools> cargo just sccache kache
@@ -1893,217 +1902,262 @@
   <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-doc / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --lane=doc
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-doc / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-doc / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-doc / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-doc / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-doc / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-doc / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-doc / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-fixtures / bench
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
 # linux-fixtures / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
   just test run --draft -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
 # linux-fixtures / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
 # linux-fixtures / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
 # linux-fixtures / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
 # linux-fixtures / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
 # linux-fixtures / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
 # linux-fixtures / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
 # linux-fixtures / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=fixtures
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
   just test run -E package(kithara-test-fixtures) | test(sync_fixture_census)
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
     RTEN_NUM_THREADS=1
 # linux-harness / bench
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-harness / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --lane=harness
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-harness / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-harness / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-harness / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-harness / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-harness / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-harness / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-harness / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=harness
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-integration-regressions / bench
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-integration-regressions / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-integration-regressions / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-integration-regressions / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-integration-regressions / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-integration-regressions / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-integration-regressions / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-integration-regressions / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-integration-regressions / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-lint / bench
   <require os> linux
   <require tools> cargo just
@@ -2145,46 +2199,55 @@
   <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-loom / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --lane=loom
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-loom / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-loom / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-loom / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-loom / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-loom / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-loom / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-loom / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-msrv / bench
   <require os> linux
   <require tools> cargo just
@@ -2235,46 +2298,55 @@
   <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-net-host / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --lane=net-host
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-net-host / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-net-host / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-net-host / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-net-host / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-net-host / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-net-host / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-net-host / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=net-host
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-perf-memory / bench
   <require os> linux
   <require tools> cargo just
@@ -2352,46 +2424,55 @@
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-selenium-firefox / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-selenium-firefox / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-selenium-firefox / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-selenium-firefox / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-selenium-firefox / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-selenium-firefox / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-selenium-firefox / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-selenium-firefox / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-test-real-clock / bench
   <require os> linux
   <require tools> cargo just sccache kache
@@ -2640,118 +2721,163 @@
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / branch
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --draft --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --draft --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --draft --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --draft --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --draft --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / platforms
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / merge-request
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / quarantine
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / main
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / nightly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / weekly
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-usdt / release
   <require os> linux
   <require tools> cargo just sccache kache
   just test run --lane=usdt-warp --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-render-scheduler --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-hls-stress --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
   just test run --lane=usdt-queue --profile ci
     CARGO_BUILD_JOBS=2
+    KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # linux-wasm / bench
   <require os> linux
   <require tools> cargo just sccache kache

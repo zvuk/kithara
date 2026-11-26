@@ -27,3 +27,515 @@ linux:tooling:
     paths:
       - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/hang/
+
+# GitHub runs these lanes. Each keeps its job here, so the whole set can run
+# on GitLab: `KITHARA_CI_PROFILE=gitlab-only` admits a lane for the kinds its
+# GitHub membership names, and a `platforms` run is the manual full run.
+# Placing a lane on GitLab for good is a change to its `kinds` instead.
+.gitlab-only-main-nightly:
+  rules:
+    - !reference [.linux-pool, rules]
+    - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(main|nightly|platforms)$/
+      interruptible: false
+
+.gitlab-only-branch-main-merge-request:
+  rules:
+    - !reference [.linux-pool, rules]
+    - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(branch|merge-request|quarantine)$/
+    - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(main|platforms)$/
+      interruptible: false
+
+.gitlab-only-nightly:
+  rules:
+    - !reference [.linux-pool, rules]
+    - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(nightly|platforms)$/
+      interruptible: false
+
+.gitlab-only-branch-main-merge-request-nightly:
+  rules:
+    - !reference [.linux-pool, rules]
+    - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(branch|merge-request|quarantine)$/
+    - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(main|nightly|platforms)$/
+      interruptible: false
+
+.gitlab-only-weekly:
+  rules:
+    - !reference [.linux-pool, rules]
+    - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(weekly|platforms)$/
+      interruptible: false
+
+.gitlab-only-nightly-weekly:
+  rules:
+    - !reference [.linux-pool, rules]
+    - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(nightly|weekly|platforms)$/
+      interruptible: false
+
+linux:deps-features-workspace:
+  extends: [.linux-lane, .gitlab-only-main-nightly]
+  timeout: 60 minutes
+  script:
+    - just ci lane deps-features-workspace --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:deps-features-invariants:
+  extends: [.linux-lane, .gitlab-only-main-nightly]
+  timeout: 60 minutes
+  script:
+    - just ci lane deps-features-invariants --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:deps-features-invariants-rest:
+  extends: [.linux-lane, .gitlab-only-main-nightly]
+  timeout: 60 minutes
+  script:
+    - just ci lane deps-features-invariants-rest --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:web-chromium:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 60 minutes
+  script:
+    - just ci lane web-chromium --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:web-firefox:
+  extends: [.linux-lane, .gitlab-only-nightly]
+  timeout: 60 minutes
+  script:
+    - just ci lane web-firefox --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:web-size:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 30 minutes
+  script:
+    - just ci lane web-size --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/wasm-slim-result.json
+
+linux:deep-rtsan-fast:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request-nightly]
+  timeout: 120 minutes
+  script:
+    - just ci lane deep-rtsan-fast --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/nextest/rtsan/junit.xml
+
+linux:deep-rtsan-file:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request-nightly]
+  timeout: 120 minutes
+  script:
+    - just ci lane deep-rtsan-file --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/nextest/rtsan/junit.xml
+
+linux:deep-rtsan-hls:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request-nightly]
+  timeout: 120 minutes
+  script:
+    - just ci lane deep-rtsan-hls --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/nextest/rtsan/junit.xml
+
+linux:deep-miri:
+  extends: [.linux-lane, .gitlab-only-weekly]
+  timeout: 60 minutes
+  script:
+    - just ci lane deep-miri --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/nextest/miri/junit.xml
+
+linux:deep-fuzz:
+  extends: [.linux-lane, .gitlab-only-nightly-weekly]
+  timeout: 90 minutes
+  script:
+    - just ci lane deep-fuzz --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:deep-mutants-stream:
+  extends: [.linux-lane, .gitlab-only-weekly]
+  timeout: 60 minutes
+  script:
+    - just ci lane deep-mutants-stream --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/mutants-ci
+
+linux:deep-mutants-playback:
+  extends: [.linux-lane, .gitlab-only-weekly]
+  timeout: 90 minutes
+  script:
+    - just ci lane deep-mutants-playback --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/mutants-ci
+
+linux:deep-mutants-analysis:
+  extends: [.linux-lane, .gitlab-only-weekly]
+  timeout: 60 minutes
+  script:
+    - just ci lane deep-mutants-analysis --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/mutants-ci
+
+linux:deep-mutants-ui:
+  extends: [.linux-lane, .gitlab-only-weekly]
+  timeout: 360 minutes
+  script:
+    - just ci lane deep-mutants-ui --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/mutants-ci
+
+linux:secrets:
+  extends: [.linux-lane, .gitlab-only-main-nightly]
+  timeout: 15 minutes
+  script:
+    - just ci lane linux-secrets --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:check:
+  extends: [.linux-lane, .gitlab-only-main-nightly]
+  timeout: 60 minutes
+  script:
+    - just ci lane linux-check --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:wasm:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 60 minutes
+  script:
+    - just ci lane linux-wasm --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:test-simulated-clock:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 120 minutes
+  script:
+    - just ci lane linux-test-simulated-clock --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - .ci-artifacts/hang/
+
+linux:doc:
+  extends: [.linux-lane, .gitlab-only-nightly]
+  timeout: 180 minutes
+  script:
+    - just ci lane linux-doc --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/hang/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:loom:
+  extends: [.linux-lane, .gitlab-only-nightly]
+  timeout: 180 minutes
+  script:
+    - just ci lane linux-loom --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/hang/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:harness:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request-nightly]
+  timeout: 180 minutes
+  script:
+    - just ci lane linux-harness --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/hang/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:fixtures:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request-nightly]
+  timeout: 180 minutes
+  script:
+    - just ci lane linux-fixtures --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/hang/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:broadcast:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request-nightly]
+  timeout: 180 minutes
+  script:
+    - just ci lane linux-broadcast --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/hang/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:net-host:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 60 minutes
+  script:
+    - just ci lane linux-net-host --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/hang/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:integration-regressions:
+  extends: [.linux-lane, .gitlab-only-nightly]
+  timeout: 180 minutes
+  script:
+    - just ci lane linux-integration-regressions --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/hang/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:selenium-firefox:
+  extends: [.linux-lane, .gitlab-only-nightly]
+  timeout: 180 minutes
+  script:
+    - just ci lane linux-selenium-firefox --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/hang/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:coverage:
+  extends: [.linux-lane, .gitlab-only-nightly]
+  timeout: 90 minutes
+  script:
+    - just ci lane linux-coverage --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:arch:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 30 minutes
+  script:
+    - just ci lane linux-arch --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:msrv:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 60 minutes
+  script:
+    - just ci lane linux-msrv --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:perf-memory:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 60 minutes
+  script:
+    - just ci lane linux-perf-memory --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:test-real-clock:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 120 minutes
+  script:
+    - just ci lane linux-test-real-clock --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - .ci-artifacts/hang/
+
+linux:usdt:
+  extends: [.linux-lane, .gitlab-only-branch-main-merge-request]
+  timeout: 60 minutes
+  script:
+    - just ci lane linux-usdt --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/hang/
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+
+linux:quality-assess:
+  extends: [.linux-lane, .gitlab-only-nightly-weekly]
+  timeout: 360 minutes
+  script:
+    - just ci lane quality-assess --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/quality-assessment/
+      - target/quality-report/
+      - target/quality-lab/
+
+linux:quality-similarity:
+  extends: [.linux-lane, .gitlab-only-nightly-weekly]
+  timeout: 120 minutes
+  script:
+    - just ci lane quality-similarity --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/similarity
+
+linux:quality-architecture:
+  extends: [.linux-lane, .gitlab-only-nightly-weekly]
+  timeout: 120 minutes
+  script:
+    - just ci lane quality-architecture --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/architecture
+
+linux:quality-coverage-risk:
+  extends: [.linux-lane, .gitlab-only-nightly-weekly]
+  timeout: 240 minutes
+  script:
+    - just ci lane quality-coverage-risk --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/quality-lab/
+      - coverage/
+
+linux:quality-health:
+  extends: [.linux-lane, .gitlab-only-nightly-weekly]
+  timeout: 120 minutes
+  script:
+    - just ci lane quality-health --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/health-report.md
+      - target/health-logs/
+
+linux:quality-report:
+  extends: [.linux-lane, .gitlab-only-nightly-weekly]
+  timeout: 30 minutes
+  needs:
+    - job: linux:quality-assess
+      artifacts: true
+    - job: linux:quality-similarity
+      artifacts: true
+    - job: linux:quality-architecture
+      artifacts: true
+    - job: linux:quality-coverage-risk
+      artifacts: true
+    - job: linux:quality-health
+      artifacts: true
+  script:
+    - just ci lane quality-report --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - target/consolidated-quality-report.md

@@ -97,11 +97,24 @@ impl GitlabConfig {
     /// `!reference` to wherever the rules actually live.
     fn admitted_kinds(&self, job: &str) -> BTreeSet<String> {
         self.rules_owner(job).map_or_else(BTreeSet::new, |owner| {
-            self.admitted_kinds_inner(&owner, &mut Vec::new())
+            self.admitted_kinds_inner(&owner, false, &mut Vec::new())
         })
     }
 
-    fn admitted_kinds_inner(&self, owner: &str, stack: &mut Vec<String>) -> BTreeSet<String> {
+    /// The kinds a job admits when `KITHARA_CI_PROFILE` gives GitLab the
+    /// whole catalog.
+    fn admitted_kinds_alone(&self, job: &str) -> BTreeSet<String> {
+        self.rules_owner(job).map_or_else(BTreeSet::new, |owner| {
+            self.admitted_kinds_inner(&owner, true, &mut Vec::new())
+        })
+    }
+
+    fn admitted_kinds_inner(
+        &self,
+        owner: &str,
+        alone: bool,
+        stack: &mut Vec<String>,
+    ) -> BTreeSet<String> {
         assert!(
             !stack.iter().any(|seen| seen == owner),
             "GitLab rule cycle through `{owner}`"
@@ -121,17 +134,11 @@ impl GitlabConfig {
                 // a platform filter, the release-lane switch - admits no kind of
                 // its own. It only ever refuses one the referenced sets admit.
                 Value::Mapping(rule) => {
-                    let Some(kind) = rule
-                        .get("if")
-                        .and_then(Value::as_str)
-                        .and_then(declared_kind)
-                    else {
-                        continue;
-                    };
                     if rule.get("when").and_then(Value::as_str) == Some("never") {
                         continue;
                     }
-                    kinds.insert(kind.to_owned());
+                    let condition = rule.get("if").and_then(Value::as_str).unwrap_or_default();
+                    kinds.extend(rule_kinds(condition, alone).into_iter().map(str::to_owned));
                 }
                 Value::Tagged(reference) => {
                     assert!(reference.tag == "reference", "unknown GitLab YAML tag");
@@ -144,7 +151,7 @@ impl GitlabConfig {
                     let target = target[0]
                         .as_str()
                         .expect("GitLab reference owner is a string");
-                    kinds.extend(self.admitted_kinds_inner(target, stack));
+                    kinds.extend(self.admitted_kinds_inner(target, alone, stack));
                 }
                 _ => panic!("`{owner}` has an invalid rule"),
             }
@@ -377,6 +384,28 @@ fn pipeline_kind<'a>(condition: &'a Value, owner: &str) -> &'a str {
         .unwrap_or_else(|| panic!("`{owner}` has an unknown rule condition"))
 }
 
+/// The kinds a rule condition admits. A rule guarded by the GitLab-only
+/// profile admits its kinds only when that profile is asked about.
+fn rule_kinds(condition: &str, alone: bool) -> Vec<&str> {
+    if let Some(kind) = declared_kind(condition) {
+        return vec![kind];
+    }
+    let Some(rest) = condition
+        .strip_prefix("$KITHARA_CI_PROFILE == \"gitlab-only\" && ")
+        .filter(|_| alone)
+    else {
+        return Vec::new();
+    };
+    declared_kind(rest).map_or_else(
+        || {
+            rest.strip_prefix("$KITHARA_PIPELINE_KIND =~ /^(")
+                .and_then(|kinds| kinds.strip_suffix(")$/"))
+                .map_or_else(Vec::new, |kinds| kinds.split('|').collect())
+        },
+        |kind| vec![kind],
+    )
+}
+
 /// The pipeline kind a rule condition names, when it names one at all.
 fn declared_kind(condition: &str) -> Option<&str> {
     condition
@@ -397,7 +426,7 @@ fn lane_catalog(root: &Path) -> toml::Table {
 }
 
 fn declared_kinds(lane: &toml::Value) -> BTreeSet<String> {
-    lane.get("kinds")
+    lane.get("kinds_gitlab")
         .and_then(toml::Value::as_array)
         .map(|kinds| {
             kinds
@@ -1212,6 +1241,39 @@ fn every_lane_that_names_a_gitlab_pipeline_has_a_job_that_runs_it() {
     }
 }
 
+/// Both providers carry every lane. Under `KITHARA_CI_PROFILE=gitlab-only`
+/// GitLab takes the whole catalog, so a job here must admit every kind either
+/// provider's list names; a lane GitHub runs that no job here can take would
+/// stop running the day GitHub loses its runners.
+#[test]
+fn the_gitlab_only_profile_runs_every_kind_either_provider_names() {
+    let root = workspace_root();
+    let config = GitlabConfig::load(&root);
+    let jobs = config.lane_jobs();
+    for (name, lane) in lane_catalog(&root) {
+        let wanted: BTreeSet<String> = ["kinds_gitlab", "kinds_github"]
+            .into_iter()
+            .filter_map(|field| lane.get(field).and_then(toml::Value::as_array))
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        if wanted.is_empty() {
+            continue;
+        }
+        let admitted: BTreeSet<String> = jobs
+            .iter()
+            .filter(|(_, job_lane)| *job_lane == name)
+            .flat_map(|(job, _)| config.admitted_kinds_alone(job))
+            .collect();
+        let missing: Vec<&String> = wanted.difference(&admitted).collect();
+        assert!(
+            missing.is_empty(),
+            "lane `{name}` has no GitLab job for {missing:?} under the gitlab-only profile"
+        );
+    }
+}
+
 /// `GIT_CONFIG_COUNT` is the git binary's protocol and libgit2 does not read
 /// it, so pinning the HTTP version alone leaves Cargo's own fetch on the
 /// stalling one: `deps:deny` spent twenty-five minutes listing the `boringssl`
@@ -1572,7 +1634,7 @@ fn linux_lanes_run_on_the_native_pool_behind_its_switch() {
     assert_eq!(switch.len(), 1, "the pool switch only refuses");
     assert_exact_rule(
         switch[0].as_mapping().expect("the pool switch is a rule"),
-        "$KITHARA_LINUX_POOL == \"off\"",
+        "$KITHARA_LINUX_POOL == \"off\" || $KITHARA_CI_PROFILE == \"github-only\"",
         Some("never"),
     );
 

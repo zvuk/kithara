@@ -121,7 +121,7 @@ fn inventory_classifies_every_native_entrypoint_and_existing_lane_owner() {
     let catalog = Catalog::load(&root(), &ext.ci).unwrap();
     assert_eq!(ext.ci.lanes.len(), 67);
     assert_eq!(ext.ci.planning.residuals.len(), 8);
-    assert_eq!(catalog.bindings.len(), 82);
+    assert_eq!(catalog.bindings.len(), 121);
     assert_eq!(catalog.checks.len(), 90);
     for id in [
         "network",

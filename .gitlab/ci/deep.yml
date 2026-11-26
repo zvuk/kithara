@@ -147,12 +147,22 @@ deps:unused:
 
 deps:publish:
   extends: .deps-job
+  # GitHub runs it on the other kinds; a GitLab-only profile takes those too.
+  rules:
+    - !reference [.linux-pool, rules]
+    - !reference [.rules-weekly, rules]
+    - !reference [.gitlab-only-branch-main-merge-request-nightly, rules]
   timeout: 60 minutes
   script:
     - just ci lane crates-publish --kind "$KITHARA_PIPELINE_KIND"
 
 deps:shear:
   extends: .deps-job
+  # GitHub runs it on the other kinds; a GitLab-only profile takes those too.
+  rules:
+    - !reference [.linux-pool, rules]
+    - !reference [.rules-weekly, rules]
+    - !reference [.gitlab-only-nightly, rules]
   timeout: 30 minutes
   script:
     - just ci lane deps-shear --kind "$KITHARA_PIPELINE_KIND"

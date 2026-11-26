@@ -28,6 +28,18 @@ pub(crate) enum Fleet {
     Gitlab,
 }
 
+/// Which provider runs the catalog. `split` gives each lane to the providers
+/// its own lists name, so load is spread over every pool. The other two give
+/// one provider every lane either list names and the other none, for when a
+/// provider has lost its executors.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub(crate) enum Profile {
+    #[default]
+    Split,
+    GitlabOnly,
+    GithubOnly,
+}
+
 #[derive(Clone, Debug, Args)]
 pub(crate) struct LanesArgs {
     /// The role whose lanes to render.
@@ -43,6 +55,17 @@ pub(crate) struct LanesArgs {
     pub(crate) only: Vec<String>,
     #[arg(long, value_enum, default_value_t = Fleet::Github)]
     pub(crate) fleet: Fleet,
+    #[arg(long, value_enum, env = "KITHARA_CI_PROFILE", default_value_t = Profile::Split)]
+    pub(crate) profile: Profile,
+    /// Operating systems this provider has an enabled pool for, in the order
+    /// it prefers them. A lane on no listed system is not rendered, rather
+    /// than queued for a runner that is not there.
+    #[arg(
+        long = "pool",
+        value_delimiter = ',',
+        default_values_t = ["linux", "macos", "windows"].map(String::from)
+    )]
+    pub(crate) pools: Vec<String>,
     /// Print one member of the selection rather than the whole object. The CI
     /// image has no `jq`, and a workflow that parses JSON in shell is logic in
     /// YAML.
@@ -71,6 +94,8 @@ pub(crate) struct Entry {
     pub(crate) queue: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) runner: Option<String>,
+    /// The enabled pool the lane runs on.
+    pub(crate) os: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,6 +108,7 @@ pub(crate) struct Dependent {
     pub(crate) artifact: Option<CiLaneArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) runner: Option<String>,
+    pub(crate) os: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,19 +117,32 @@ pub(crate) struct Selection {
     pub(crate) dependent: Vec<Dependent>,
 }
 
-/// The kinds this fleet reads: its declared answer, including an explicit
-/// empty GitHub list, or the shared answer when no GitHub list is declared.
-fn membership(lane: &CiLaneConfig, fleet: Fleet) -> &[String] {
-    if fleet == Fleet::Github {
-        return lane.kinds_github.as_deref().unwrap_or(&lane.kinds);
+/// The kinds this fleet runs the lane in under the profile: its own list
+/// when the providers split the catalog, both lists for the provider that
+/// runs it alone, and none for the other.
+fn membership(lane: &CiLaneConfig, fleet: Fleet, profile: Profile) -> BTreeSet<&str> {
+    let (own, other) = match fleet {
+        Fleet::Github => (&lane.kinds_github, &lane.kinds_gitlab),
+        Fleet::Gitlab => (&lane.kinds_gitlab, &lane.kinds_github),
+    };
+    let alone = match fleet {
+        Fleet::Github => Profile::GithubOnly,
+        Fleet::Gitlab => Profile::GitlabOnly,
+    };
+    match profile {
+        Profile::Split => own.iter().map(String::as_str).collect(),
+        profile if profile == alone => own.iter().chain(other).map(String::as_str).collect(),
+        _ => BTreeSet::new(),
     }
-    &lane.kinds
 }
 
-/// GitHub's shared fan-out runs Linux. Portable lanes can run there too;
-/// dedicated device workflows opt out through their empty GitHub membership.
-fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
-    fleet != Fleet::Github || lane.runs_on_linux()
+/// The enabled pool a lane runs on: the first system the provider lists a
+/// pool for that the lane runs on. None means the provider has no pool for it.
+fn pool<'a>(lane: &CiLaneConfig, pools: &'a [String]) -> Option<&'a str> {
+    pools
+        .iter()
+        .map(String::as_str)
+        .find(|pool| lane.os.iter().any(|os| os == pool))
 }
 
 /// A lane with the asked-for role that this pipeline kind schedules, or that
@@ -112,10 +151,10 @@ fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
 /// full lanes run whole. A lane with no membership belongs to a dedicated
 /// workflow and never enters this fleet's fan-out, even by name.
 fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -> Result<bool> {
-    if lane.role != args.role || !reachable(lane, args.fleet) {
+    if lane.role != args.role || pool(lane, &args.pools).is_none() {
         return Ok(false);
     }
-    let membership = membership(lane, args.fleet);
+    let membership = membership(lane, args.fleet, args.profile);
     if membership.is_empty() {
         return Ok(false);
     }
@@ -123,9 +162,9 @@ fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -
         return Ok(args
             .only
             .iter()
-            .any(|only| only == name || (only == "all" && a_full_run_schedules(membership))));
+            .any(|only| only == name || (only == "all" && a_full_run_schedules(&membership))));
     }
-    if !membership.iter().any(|entry| entry == kind) {
+    if !membership.contains(kind) {
         return Ok(false);
     }
     if lane.path_globs.is_empty() || args.kind.is_full() {
@@ -148,11 +187,11 @@ fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -
 }
 
 /// Whether some full pipeline kind schedules a lane with this membership.
-fn a_full_run_schedules(membership: &[String]) -> bool {
+fn a_full_run_schedules(membership: &BTreeSet<&str>) -> bool {
     PipelineKind::value_variants()
         .iter()
         .filter(|kind| kind.is_full())
-        .any(|kind| membership.iter().any(|entry| entry == kind.name()))
+        .any(|kind| membership.contains(kind.name()))
 }
 
 pub(crate) fn render(
@@ -178,7 +217,10 @@ pub(crate) fn render(
 
     let mut matrix = Vec::new();
     for (name, lane) in lanes {
-        if lane.needs.is_empty() && is_asked_for(lane, name, kind, args)? {
+        if !lane.needs.is_empty() || !is_asked_for(lane, name, kind, args)? {
+            continue;
+        }
+        if let Some(os) = pool(lane, &args.pools) {
             matrix.push(Entry {
                 lane: name.clone(),
                 timeout: lane.timeout_minutes,
@@ -186,6 +228,7 @@ pub(crate) fn render(
                 artifact: lane.artifact.clone(),
                 queue: lane.queue.clone(),
                 runner: github_runner(lane, args.kind),
+                os: os.to_owned(),
             });
         }
     }
@@ -199,27 +242,23 @@ pub(crate) fn render(
     // would, or a producer this fleet never runs would drag in a consumer it
     // never asked for either. By name (`--only` naming the producer), the
     // consumer's own membership does not gate it, because that is the whole
-    // point of asking for one lane by name. An explicit empty GitHub list
-    // still excludes the consumer from that fleet.
+    // point of asking for one lane by name. An empty membership still
+    // excludes the consumer from that fleet.
     let present: BTreeSet<&str> = matrix.iter().map(|entry| entry.lane.as_str()).collect();
     let dependent: Vec<Dependent> = lanes
         .iter()
-        .filter(|(_, lane)| {
-            lane.role == args.role && !lane.needs.is_empty() && reachable(lane, args.fleet)
-        })
+        .filter(|(_, lane)| lane.role == args.role && !lane.needs.is_empty())
         .filter(|(_, lane)| {
             lane.needs
                 .iter()
                 .any(|need| present.contains(need.as_str()))
         })
         .filter(|(_, lane)| {
-            !(args.fleet == Fleet::Github && lane.kinds_github.as_ref().is_some_and(Vec::is_empty))
-                && (!args.only.is_empty()
-                    || membership(lane, args.fleet)
-                        .iter()
-                        .any(|entry| entry == kind))
+            let membership = membership(lane, args.fleet, args.profile);
+            !membership.is_empty() && (!args.only.is_empty() || membership.contains(kind))
         })
-        .map(|(name, lane)| Dependent {
+        .filter_map(|(name, lane)| pool(lane, &args.pools).map(|os| (name, lane, os)))
+        .map(|(name, lane, os)| Dependent {
             lane: name.clone(),
             timeout: lane.timeout_minutes,
             history: lane.history,
@@ -232,6 +271,7 @@ pub(crate) fn render(
                 .collect(),
             artifact: lane.artifact.clone(),
             runner: github_runner(lane, args.kind),
+            os: os.to_owned(),
         })
         .collect();
 
@@ -255,7 +295,7 @@ pub(crate) fn render(
         .filter(|name| *name != "all")
         .filter(|name| !landed.contains(name))
         .filter(|name| lanes[*name].role == args.role)
-        .filter(|name| !membership(&lanes[*name], args.fleet).is_empty())
+        .filter(|name| !membership(&lanes[*name], args.fleet, args.profile).is_empty())
         .collect();
     if !missing.is_empty() {
         bail!(
@@ -341,7 +381,8 @@ mod tests {
     fn lane(role: &str, kinds: &[&str], needs: &[&str]) -> CiLaneConfig {
         CiLaneConfig {
             role: role.to_owned(),
-            kinds: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
+            kinds_gitlab: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
+            kinds_github: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
             needs: needs.iter().map(|need| (*need).to_owned()).collect(),
             timeout_minutes: 30,
             cache_group: "linux".to_owned(),
@@ -369,6 +410,8 @@ mod tests {
             kind,
             only: only.iter().map(|name| (*name).to_owned()).collect(),
             fleet: Fleet::Github,
+            profile: Profile::Split,
+            pools: vec!["linux".to_owned()],
             field: None,
             base: None,
             changed_paths: None,
@@ -485,7 +528,7 @@ mod tests {
         assert_eq!(dependent, ["deep-stress-report"]);
         assert_eq!(
             field(&selection, Some(Field::Dependent)).expect("the dependent field renders"),
-            r#"[{"lane":"deep-stress-report","timeout":30,"history":false,"needs":["deep-stress"],"download":["stress-evidence"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"}}]"#
+            r#"[{"lane":"deep-stress-report","timeout":30,"history":false,"needs":["deep-stress"],"download":["stress-evidence"],"artifact":{"name":"quality-report","path":"target/consolidated-quality-report.md","when":"failure"},"os":"linux"}]"#
         );
     }
 
@@ -670,8 +713,8 @@ mod tests {
         let deny = lanes
             .get_mut("linux-lint")
             .expect("the lint lane is in the catalog");
-        deny.kinds = vec!["weekly".to_owned()];
-        deny.kinds_github = Some(vec!["main".to_owned()]);
+        deny.kinds_gitlab = vec!["weekly".to_owned()];
+        deny.kinds_github = vec!["main".to_owned()];
 
         let github = render(&lanes, &args("gate", PipelineKind::Main, &[]))
             .expect("the GitHub fleet renders");
@@ -691,7 +734,7 @@ mod tests {
         lanes.insert("deps-deny".to_owned(), portable);
         let mut device = lane("gate", &["main"], &[]);
         device.os = vec!["macos".to_owned(), "linux".to_owned()];
-        device.kinds_github = Some(Vec::new());
+        device.kinds_github = Vec::new();
         lanes.insert("android-test".to_owned(), device);
         let github = render(&lanes, &args("gate", PipelineKind::Main, &[])).unwrap();
         let names: Vec<&str> = github
@@ -703,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn the_github_fleet_never_schedules_a_lane_from_another_operating_system() {
+    fn a_provider_without_a_pool_for_the_system_does_not_schedule_the_lane() {
         let mut lanes = catalog();
         let mut elsewhere = lane("gate", &["main"], &[]);
         elsewhere.os = vec!["macos".to_owned()];
@@ -720,11 +763,66 @@ mod tests {
 
         let mut gitlab = args("gate", PipelineKind::Main, &[]);
         gitlab.fleet = Fleet::Gitlab;
+        gitlab.pools = vec!["linux".to_owned(), "macos".to_owned()];
         let gitlab = render(&lanes, &gitlab).expect("the GitLab fleet renders");
         assert!(
-            gitlab.matrix.iter().any(|entry| entry.lane == "deep-rtsan"),
+            gitlab
+                .matrix
+                .iter()
+                .any(|entry| entry.lane == "deep-rtsan" && entry.os == "macos"),
             "GitLab has the machine and still schedules the lane"
         );
+    }
+
+    #[test]
+    fn a_github_macos_pool_runs_the_lane_its_own_membership_names() {
+        let mut lanes = catalog();
+        let mut apple = lane("gate", &["main"], &[]);
+        apple.os = vec!["macos".to_owned()];
+        lanes.insert("apple-lint".to_owned(), apple);
+        let mut asked = args("gate", PipelineKind::Main, &[]);
+        asked.pools = vec!["linux".to_owned(), "macos".to_owned()];
+
+        let github = render(&lanes, &asked).expect("the GitHub fleet renders");
+        let placed: Vec<(&str, &str)> = github
+            .matrix
+            .iter()
+            .map(|entry| (entry.lane.as_str(), entry.os.as_str()))
+            .collect();
+        assert_eq!(placed, [("apple-lint", "macos"), ("linux-lint", "linux")]);
+    }
+
+    /// Split spreads the catalog by each provider's own list; a provider that
+    /// runs alone takes every lane either list names, and the other renders
+    /// nothing, so a switch of profile never drops or doubles a lane.
+    #[test]
+    fn a_profile_moves_every_lane_to_one_provider_without_dropping_any() -> Result<()> {
+        let mut gitlab_only = lane("gate", &[], &[]);
+        gitlab_only.kinds_gitlab = vec!["main".to_owned()];
+        let mut github_only = lane("gate", &[], &[]);
+        github_only.kinds_github = vec!["main".to_owned()];
+        let catalog = BTreeMap::from([
+            ("on-gitlab".to_owned(), gitlab_only),
+            ("on-github".to_owned(), github_only),
+        ]);
+        let names = |fleet: Fleet, profile: Profile| -> Result<Vec<String>> {
+            let mut asked = args("gate", PipelineKind::Main, &[]);
+            asked.fleet = fleet;
+            asked.profile = profile;
+            Ok(render(&catalog, &asked)?
+                .matrix
+                .into_iter()
+                .map(|entry| entry.lane)
+                .collect())
+        };
+        let both = ["on-github", "on-gitlab"];
+        assert_eq!(names(Fleet::Github, Profile::Split)?, ["on-github"]);
+        assert_eq!(names(Fleet::Gitlab, Profile::Split)?, ["on-gitlab"]);
+        assert_eq!(names(Fleet::Github, Profile::GithubOnly)?, both);
+        assert!(names(Fleet::Gitlab, Profile::GithubOnly)?.is_empty());
+        assert_eq!(names(Fleet::Gitlab, Profile::GitlabOnly)?, both);
+        assert!(names(Fleet::Github, Profile::GitlabOnly)?.is_empty());
+        Ok(())
     }
 
     /// `--only all` stands for a full run. A lane only narrowing pipelines
@@ -801,7 +899,8 @@ mod tests {
             .lanes
             .values()
             .filter(|lane| {
-                reachable(lane, Fleet::Github) && !membership(lane, Fleet::Github).is_empty()
+                lane.os.iter().any(|os| os == "linux")
+                    && !membership(lane, Fleet::Github, Profile::Split).is_empty()
             })
             .flat_map(|lane| &lane.steps)
             .flat_map(|step| step.args.iter().chain(step.args_by_kind.values().flatten()))
@@ -828,13 +927,13 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         let parts = feature_lanes
             .iter()
-            .filter(|(_, lane)| lane.kinds.is_empty())
+            .filter(|(_, lane)| lane.kinds_gitlab.is_empty())
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(parts.len(), 3);
         let full = feature_lanes
             .iter()
-            .filter(|(_, lane)| !lane.kinds.is_empty())
+            .filter(|(_, lane)| !lane.kinds_gitlab.is_empty())
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(full.len(), 1);
@@ -895,11 +994,11 @@ mod tests {
     }
 
     #[test]
-    fn github_membership_distinguishes_inheritance_exclusion_and_override() -> Result<()> {
+    fn github_membership_is_read_from_its_own_list_alone() -> Result<()> {
         for (own, main_default, weekly_default, full, named) in [
-            (None, 0, 1, 1, true),
-            (Some(Vec::new()), 0, 0, 0, false),
-            (Some(vec!["main".to_owned()]), 1, 0, 1, true),
+            (vec!["weekly".to_owned()], 0, 1, 1, true),
+            (Vec::new(), 0, 0, 0, false),
+            (vec!["main".to_owned()], 1, 0, 1, true),
         ] {
             let mut configured = lane("gate", &["weekly"], &[]);
             configured.kinds_github = own;
@@ -934,11 +1033,11 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_github_exclusion_cannot_follow_a_selected_producer() -> Result<()> {
+    fn an_empty_github_list_cannot_follow_a_selected_producer() -> Result<()> {
         for (own, main_default, weekly_default, requested) in [
-            (None, 0, 1, 1),
-            (Some(Vec::new()), 0, 0, 0),
-            (Some(vec!["main".to_owned()]), 1, 0, 1),
+            (vec!["weekly".to_owned()], 0, 1, 1),
+            (Vec::new(), 0, 0, 0),
+            (vec!["main".to_owned()], 1, 0, 1),
         ] {
             let mut dependent = lane("deep", &["weekly"], &["producer"]);
             dependent.kinds_github = own;
