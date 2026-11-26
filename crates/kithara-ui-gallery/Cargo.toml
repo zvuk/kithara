@@ -84,6 +84,7 @@ required-features = ["masonry"]
 [[test]]
 name = "page_perf_oracle"
 path = "tests/page_perf_oracle.rs"
+required-features = ["perf", "masonry"]
 
 [[bench]]
 name = "page_perf"

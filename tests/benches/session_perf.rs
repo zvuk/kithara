@@ -509,7 +509,10 @@ fn criterion_case(name: &str, id: &str, b: &mut criterion::Bencher) {
         "session_decoder" => {
             b.iter_batched(
                 || prepare_decoder(index),
-                |mut work| work.run(),
+                |mut work| {
+                    work.run();
+                    work
+                },
                 BatchSize::SmallInput,
             );
         }
