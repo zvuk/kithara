@@ -169,12 +169,13 @@ async fn wait_for_callback_or_withheld_boundary(
     item: TrackId,
     gate: &SegmentGateHandle,
     required: Duration,
+    expected: u64,
 ) {
     wait_until(
         Duration::from_secs(10),
         "withheld segment producer readiness",
         || {
-            if gate.requested() == 0 {
+            if harness.metrics().underruns() == expected || gate.requested() == 0 {
                 return true;
             }
             let required = required.as_secs_f64();
@@ -339,8 +340,11 @@ async fn starve_window<F>(
     let (events, edges, origin) = observation;
     for _ in 0..1024 {
         for _ in 0..512 / CALLBACK_FRAMES {
-            wait_for_callback_or_withheld_boundary(harness, item, gate, required).await;
+            wait_for_callback_or_withheld_boundary(harness, item, gate, required, expected).await;
             let _ = harness.render(CALLBACK_FRAMES).await;
+            if harness.metrics().underruns() == expected {
+                break;
+            }
         }
         if harness.metrics().underruns() == expected {
             assert!(
