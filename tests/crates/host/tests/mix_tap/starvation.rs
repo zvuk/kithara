@@ -6,7 +6,7 @@ use kithara::{
     net::NetOptions,
     platform::{
         CancelToken,
-        time::Duration,
+        time::{Duration, WallInstant},
         tokio::{
             runtime::Handle,
             sync::broadcast::{Receiver, error::TryRecvError},
@@ -110,11 +110,17 @@ pub(crate) async fn run_withheld_windows<F>(
 ) where
     F: FnMut(&OfflinePlayer, usize) -> Option<ProgramPlan>,
 {
+    let diagnostic_start = WallInstant::now();
+    eprintln!("withheld phase: begin");
     let mut edges = Vec::new();
     let mut origin = None;
     let mut active: Option<ActiveProgram> = None;
     for (index, gate) in gates.iter().enumerate() {
         let expected = u64::try_from(index + 1).expect("three windows");
+        eprintln!(
+            "withheld phase: starve begin index={index} elapsed={:?}",
+            diagnostic_start.elapsed()
+        );
         starve_window(
             harness,
             item,
@@ -125,7 +131,15 @@ pub(crate) async fn run_withheld_windows<F>(
             (events, &mut edges, &mut origin),
         )
         .await;
+        eprintln!(
+            "withheld phase: starve end index={index} elapsed={:?}",
+            diagnostic_start.elapsed()
+        );
         recover_window(harness, item, gate, expected, active).await;
+        eprintln!(
+            "withheld phase: recover end index={index} elapsed={:?}",
+            diagnostic_start.elapsed()
+        );
         drain_edges(events, &mut edges);
         assert_eq!(
             edges
@@ -142,7 +156,15 @@ pub(crate) async fn run_withheld_windows<F>(
             index + 1
         );
     }
+    eprintln!(
+        "withheld phase: transport begin elapsed={:?}",
+        diagnostic_start.elapsed()
+    );
     verify_transport(harness, item, events, &mut edges, raw).await;
+    eprintln!(
+        "withheld phase: transport end elapsed={:?}",
+        diagnostic_start.elapsed()
+    );
 }
 
 /// The endpoint and owner of the program a window issued, carried across the
@@ -359,6 +381,7 @@ async fn starve_window<F>(
                     )
                 })
                 .unwrap_or_else(|error| panic!("gate-owned starvation precondition: {error}"));
+            eprintln!("withheld phase: callback begin index={index}");
             let trace = usdt_trace::scope();
             if let Some(plan) = on_window(harness, index) {
                 let ProgramPlan {
@@ -381,6 +404,7 @@ async fn starve_window<F>(
             } else {
                 empty_callback(harness).await;
             }
+            eprintln!("withheld phase: callback end index={index}");
             let pcm_wait_started = trace.events_of("pcm_wait_started");
             let pcm_wait_finished = trace.events_of("pcm_wait_finished");
             let truncated = usdt_trace::recorded().1;
@@ -468,6 +492,7 @@ async fn verify_transport(
         true,
         "three forced starvation windows recovered",
     );
+    eprintln!("withheld phase: pause");
     harness.with_queue(QueueControl::pause).await;
     let paused = render_unpaced_window(harness, 2048).await;
     assert!(
@@ -476,6 +501,7 @@ async fn verify_transport(
             .all(|sample| *sample == 0.0)
     );
     raw.checkpoint(harness.metrics(), true, "after pause");
+    eprintln!("withheld phase: play");
     harness.with_queue(QueueControl::play).await;
     let resumed = render_unpaced_window(harness, 4096).await;
     assert!(resumed.iter().any(|sample| sample.abs() > 0.01));
@@ -485,6 +511,7 @@ async fn verify_transport(
         3,
         "only the three withheld segments starve before seek"
     );
+    eprintln!("withheld phase: seek");
     harness.seek(0.5).await;
     let sought = render_unpaced_window(harness, 4096).await;
     assert!(sought.iter().any(|sample| sample.abs() > 0.01));
