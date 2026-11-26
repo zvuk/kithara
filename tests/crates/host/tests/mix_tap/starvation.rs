@@ -26,10 +26,12 @@ use kithara_integration_tests::{
 };
 use kithara_render::bridge::{DeckEvent, DeckSnapshot, Slot, SlotState};
 use kithara_test_fixtures::hls_fixtures::frame_samples;
-use kithara_test_utils::cancel_token;
+use kithara_test_utils::{cancel_token, wait_until};
 use num_traits::ToPrimitive;
 
 use crate::underrun::Underruns;
+
+const CALLBACK_FRAMES: usize = 64;
 
 /// One deck program a false-mode starvation window issues while its segment
 /// gate is still closed: the program to admit, the parameter it addresses,
@@ -42,8 +44,8 @@ pub(crate) struct ProgramPlan {
 
 async fn render_unpaced_window(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
     let mut output = Vec::with_capacity(frames * 2);
-    for start in (0..frames).step_by(64) {
-        let block = 64.min(frames - start);
+    for start in (0..frames).step_by(CALLBACK_FRAMES) {
+        let block = CALLBACK_FRAMES.min(frames - start);
         output.extend_from_slice(&harness.render(block).await);
     }
     output
@@ -160,6 +162,39 @@ fn required_packaged_position(index: usize) -> Duration {
         .to_f64()
         .expect("packaged starvation position fits f64");
     Duration::from_secs_f64(frames / f64::from(44_100_u32))
+}
+
+async fn wait_for_callback_or_withheld_boundary(
+    harness: &OfflinePlayer,
+    item: TrackId,
+    gate: &SegmentGateHandle,
+    required: Duration,
+) {
+    wait_until(
+        Duration::from_secs(10),
+        "withheld segment producer readiness",
+        || {
+            if gate.requested() == 0 {
+                return true;
+            }
+            let required = required.as_secs_f64();
+            let callback =
+                f64::from(u32::try_from(CALLBACK_FRAMES).expect("callback frames fit u32"))
+                    / 44_100.0;
+            harness
+                .deck_snapshot()
+                .slots
+                .iter()
+                .find(|slot| slot.binding.is_some_and(|binding| binding.item() == item))
+                .is_none_or(|slot| {
+                    slot.position >= required
+                        || slot.frontier >= required
+                        || slot.frontier - slot.position >= callback
+                })
+        },
+    )
+    .await
+    .unwrap_or_else(|error| panic!("withheld segment producer readiness: {error}"));
 }
 
 #[derive(Clone, Copy)]
@@ -300,9 +335,13 @@ async fn starve_window<F>(
     F: FnMut(&OfflinePlayer, usize) -> Option<ProgramPlan>,
 {
     let expected = u64::try_from(index + 1).expect("three windows");
+    let required = required_packaged_position(index);
     let (events, edges, origin) = observation;
     for _ in 0..1024 {
-        let _ = render_unpaced_window(harness, 512).await;
+        for _ in 0..512 / CALLBACK_FRAMES {
+            wait_for_callback_or_withheld_boundary(harness, item, gate, required).await;
+            let _ = harness.render(CALLBACK_FRAMES).await;
+        }
         if harness.metrics().underruns() == expected {
             assert!(
                 gate.requested() > 0,
@@ -312,13 +351,7 @@ async fn starve_window<F>(
             source_witness(&harness.deck_snapshot(), item)
                 .and_then(|witness| {
                     require_starvation_boundary(
-                        edges,
-                        witness,
-                        origin,
-                        item,
-                        expected,
-                        index,
-                        required_packaged_position(index),
+                        edges, witness, origin, item, expected, index, required,
                     )
                 })
                 .unwrap_or_else(|error| panic!("gate-owned starvation precondition: {error}"));
