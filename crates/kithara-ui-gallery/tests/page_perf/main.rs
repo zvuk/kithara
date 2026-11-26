@@ -10,7 +10,6 @@ use std::{borrow::Cow, sync::LazyLock};
 use criterion::{BenchmarkId, Criterion};
 use iced::{Theme, advanced::graphics::text::font_system, theme::Palette};
 use kithara_platform::time::WallInstant as WallClock;
-use kithara_test_utils::kithara;
 use kithara_ui::{
     app::Ui,
     draw::Pt,

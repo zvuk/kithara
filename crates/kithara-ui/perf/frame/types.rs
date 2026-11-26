@@ -52,7 +52,7 @@ pub(crate) fn inside(rect: Rect, (x, y): (f32, f32)) -> Pt {
 
 /// One control, mounted alone, and the interaction its frame is driven by.
 pub(crate) struct Scenario {
-    control: &'static str,
-    name: &'static str,
-    interaction: Interaction,
+    pub(crate) control: &'static str,
+    pub(crate) name: &'static str,
+    pub(crate) interaction: Interaction,
 }

@@ -81,6 +81,10 @@ name = "ui_buffers"
 path = "tests/ui_buffers/main.rs"
 required-features = ["masonry"]
 
+[[test]]
+name = "page_perf_oracle"
+path = "tests/page_perf_oracle.rs"
+
 [[bench]]
 name = "page_perf"
 path = "tests/page_perf/main.rs"

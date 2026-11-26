@@ -278,11 +278,7 @@ fn run_tempo(work: &mut TempoWork) {
     }
 }
 
-fn teardown_tempo(mut work: TempoWork) {
-    work.teardown();
-}
-
-#[metabench::benchmark(TEMPO_WORKER, "tempo_worker", "case", gungraun_setup = prepare_tempo, gungraun_teardown = teardown_tempo)]
+#[metabench::benchmark(TEMPO_WORKER, "tempo_worker", "case", gungraun_setup = prepare_tempo)]
 #[bench::constant_keylock(0_usize)]
 #[bench::approach_keylock(1_usize)]
 #[bench::retarget_keylock(2_usize)]
@@ -322,7 +318,10 @@ fn criterion_benchmarks(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("case", id), |b| {
             b.iter_batched(
                 || prepare_tempo(index),
-                |mut work| run_tempo(&mut work),
+                |mut work| {
+                    run_tempo(&mut work);
+                    work
+                },
                 BatchSize::SmallInput,
             );
         });

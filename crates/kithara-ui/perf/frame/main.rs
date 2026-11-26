@@ -225,7 +225,6 @@ fn unnamed_by_the_document() -> Vec<&'static str> {
         .collect()
 }
 
-#[kithara::test]
 fn every_control_the_document_can_name_has_a_frame_scenario() {
     let missing = missing_from_table();
     assert!(
@@ -234,7 +233,6 @@ fn every_control_the_document_can_name_has_a_frame_scenario() {
     );
 }
 
-#[kithara::test]
 fn the_scenario_table_names_no_control_the_document_cannot() {
     let unnamed = unnamed_by_the_document();
     assert!(
@@ -270,6 +268,10 @@ fn audit(label: &str, readings: &[Reading]) {
 
 /// Geometry alone cannot prove a gesture landed. A host with neither receipts nor
 /// a scheduled frame measured an idle redraw instead of the declared gesture.
+fn contains(rect: Rect, at: Pt) -> bool {
+    at.x >= rect.x && at.x <= rect.x + rect.w && at.y >= rect.y && at.y <= rect.y + rect.h
+}
+
 fn miss(reading: &Reading) -> Option<String> {
     let rect = reading.rect;
     let viewport = Rect {
