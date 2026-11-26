@@ -31,6 +31,7 @@ documents and reusable agent assets that should be loaded only when relevant.
 | `guides/agent-hooks.md` | tool adapters, hook behavior, or command routing |
 | `guides/review-validation.md` | before a handoff or PR notes, or after a substantial agent-written chunk |
 | `guides/ci-host.md` | the dedicated CI host and its `xtask ci` ownership |
+| `guides/ci-linux-host.md` | Linux native provider profiles, Docker worker setup or safe host deployment |
 | `guides/ci-bridge.md` | repository synchronization, PR check projection, bridge deployment or the CI verdict |
 
 Tool-specific folders such as `.claude/*`, `.cursor/*`, and top-level

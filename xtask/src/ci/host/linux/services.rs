@@ -9,7 +9,9 @@ use tracing::info;
 use super::{
     container::{Container, container},
     cpu,
-    profile::{LinuxHost, LinuxRunner, RunnerFlavor},
+    deployment::{self, Deployment},
+    gitlab,
+    profile::{LinuxHost, LinuxRunner, RunnerFlavor, RunnerTarget},
 };
 use crate::{
     ci::{cache::client_environment, config::CiPins, image::floating_tag, process::Process},
@@ -30,19 +32,25 @@ pub(super) fn install(
     executable: &str,
     root: &Path,
 ) -> Result<()> {
+    super::system::require_linux()?;
+    super::system::require_devices(host)?;
     require_pinned_images(process, host, pins)?;
     let cores = std::thread::available_parallelism()
         .context("reading this machine's core count")?
         .get();
     let cpusets = cpu::assignments(host, cores)?;
-    if Path::new(executable) != Path::new(consts::SERVICE_EXECUTABLE) {
-        std::fs::copy(executable, consts::SERVICE_EXECUTABLE)
-            .with_context(|| format!("installing {}", consts::SERVICE_EXECUTABLE))?;
+    let deployment = deployment::stage(host, pins, Path::new(executable))?;
+    let mut keep = installed_images(host, pins)?;
+    install_slice()?;
+    if host.gitlab.is_some() {
+        super::firewall::apply(process, host)?;
+        keep.extend(gitlab::install(process, host, pins, &cpusets)?);
     }
-    super::permissions::set_mode(Path::new(consts::SERVICE_EXECUTABLE), consts::EXECUTABLE)
-        .with_context(|| format!("making {} executable", consts::SERVICE_EXECUTABLE))?;
 
-    for (runner, cpuset) in host.runners.iter().zip(cpusets) {
+    for (runner, cpuset) in host.runners.iter().zip(&cpusets) {
+        if !matches!(runner.target, RunnerTarget::Github { .. }) {
+            continue;
+        }
         client_environment(&runner.sccache_s3_env_file).with_context(|| {
             format!(
                 "validating S3 cache environment for Linux runner {}",
@@ -50,27 +58,33 @@ pub(super) fn install(
             )
         })?;
         let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(runner.service());
-        std::fs::write(
-            &path,
-            unit(host, runner, &cpuset, pins, consts::SERVICE_EXECUTABLE)?,
-        )
-        .with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(&path, unit(host, runner, cpuset, pins, &deployment)?)
+            .with_context(|| format!("writing {}", path.display()))?;
         info!(
             service = runner.service(),
             cpuset, "runner service installed"
         );
     }
-    install_slice()?;
-    install_cleanup_timer(host, &installed_images(host, pins)?)?;
+    install_cleanup_timer(host, &keep, &deployment)?;
     if host.windows.is_some() {
-        install_renewal_timer(root)?;
+        install_renewal_timer(root, &deployment)?;
     }
     process.run("systemctl", &["daemon-reload"], "reload systemd")?;
     for runner in &host.runners {
+        if !matches!(runner.target, RunnerTarget::Github { .. }) {
+            continue;
+        }
         process.run(
             "systemctl",
             &["enable", "--now", &runner.service()],
             "enable runner service",
+        )?;
+    }
+    if let Some(manager) = &host.gitlab {
+        process.run(
+            "systemctl",
+            &["enable", "--now", &manager.service],
+            "enable native GitLab manager",
         )?;
     }
     process.run(
@@ -94,11 +108,20 @@ pub(super) fn install(
 fn flavor_images<'a>(host: &LinuxHost, pins: &'a CiPins) -> Vec<(&'a str, &'a str)> {
     let mut images = Vec::new();
     for runner in &host.runners {
-        let pair = match runner.flavor {
-            RunnerFlavor::Plain => (pins.linux_image.as_str(), pins.linux_runner_image.as_str()),
-            RunnerFlavor::Android => (
+        let pair = match (&runner.target, runner.flavor) {
+            (RunnerTarget::Github { .. }, RunnerFlavor::Plain) => {
+                (pins.linux_image.as_str(), pins.linux_runner_image.as_str())
+            }
+            (RunnerTarget::Github { .. }, RunnerFlavor::Android) => (
                 pins.linux_android_image.as_str(),
                 pins.linux_android_runner_image.as_str(),
+            ),
+            (RunnerTarget::Gitlab { .. }, RunnerFlavor::Plain) => {
+                (pins.linux_image.as_str(), pins.linux_image.as_str())
+            }
+            (RunnerTarget::Gitlab { .. }, RunnerFlavor::Android) => (
+                pins.linux_android_image.as_str(),
+                pins.linux_android_image.as_str(),
             ),
         };
         if !images.contains(&pair) {
@@ -125,9 +148,15 @@ fn installed_images(host: &LinuxHost, pins: &CiPins) -> Result<Vec<String>> {
     let mut images = Vec::new();
     for (toolchain, runner) in flavor_images(host, pins) {
         for image in [toolchain, runner] {
-            images.push(floating_tag(image)?);
-            images.push(image.to_owned());
+            for spelling in [floating_tag(image)?, image.to_owned()] {
+                if !images.contains(&spelling) {
+                    images.push(spelling);
+                }
+            }
         }
+    }
+    if let Some(manager) = &host.gitlab {
+        images.push(manager.helper_image.clone());
     }
     Ok(images)
 }
@@ -161,6 +190,36 @@ fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> 
             missing.join(" or ")
         );
     }
+    if let Some(manager) = &host.gitlab {
+        process.capture(
+            "docker",
+            &[
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                &manager.helper_image,
+            ],
+            "look for pinned GitLab helper",
+        )?;
+        for runner in host
+            .runners
+            .iter()
+            .filter(|runner| matches!(runner.target, RunnerTarget::Gitlab { .. }))
+        {
+            let image = super::container::image(runner, pins)?;
+            let user = process.capture(
+                "docker",
+                &["image", "inspect", "--format", "{{.Config.User}}", &image],
+                "read native job image user",
+            )?;
+            if user != "runner" {
+                bail!(
+                    "native job image must declare USER runner so the standard Runner owns checkout and temporary files"
+                );
+            }
+        }
+    }
     Ok(())
 }
 
@@ -181,7 +240,7 @@ fn require_pinned_images(process: &Process, host: &LinuxHost, pins: &CiPins) -> 
 /// this machine for good. `TimeoutStartSec` is what bounds a oneshot; at the
 /// profile's deadline systemd ends the unit's processes and fails the pass, so
 /// the next tick starts a fresh one.
-fn cleanup_unit(host: &LinuxHost, keep: &[String]) -> String {
+fn cleanup_unit(host: &LinuxHost, keep: &[String], deployment: &Deployment) -> String {
     format!(
         "[Unit]\n\
          Description=Kithara CI cleanup\n\
@@ -190,10 +249,11 @@ fn cleanup_unit(host: &LinuxHost, keep: &[String]) -> String {
          [Service]\n\
          Type=oneshot\n\
          TimeoutStartSec={deadline}\n\
-         ExecStart={executable} ci host linux --config {config} cleanup{keep}\n",
+         ExecStart={executable} ci host linux --config {config} --pins {pins} cleanup{keep}\n",
         deadline = host.cleanup_deadline_seconds,
-        executable = consts::SERVICE_EXECUTABLE,
-        config = consts::LINUX_CONFIG_PATH,
+        executable = deployment.binary.display(),
+        config = deployment.profile.display(),
+        pins = deployment.pins.display(),
         keep = keep
             .iter()
             .map(|image| format!(" --keep {image}"))
@@ -217,7 +277,7 @@ fn cleanup_timer() -> &'static str {
 /// the repository tracks, so the unit runs in the checkout it was installed
 /// from. The command itself decides whether the guest needs rebuilding; the
 /// timer only asks once a day.
-fn renewal_unit(root: &Path) -> Result<String> {
+fn renewal_unit(root: &Path, deployment: &Deployment) -> Result<String> {
     let root = root
         .to_str()
         .with_context(|| format!("the repository path {} is not UTF-8", root.display()))?;
@@ -229,9 +289,10 @@ fn renewal_unit(root: &Path) -> Result<String> {
          [Service]\n\
          Type=oneshot\n\
          WorkingDirectory={root}\n\
-         ExecStart={executable} ci host linux --config {config} renew-windows\n",
-        executable = consts::SERVICE_EXECUTABLE,
-        config = consts::LINUX_CONFIG_PATH,
+         ExecStart={executable} ci host linux --config {config} --pins {pins} renew-windows\n",
+        executable = deployment.binary.display(),
+        config = deployment.profile.display(),
+        pins = deployment.pins.display(),
     ))
 }
 
@@ -293,8 +354,25 @@ pub(super) fn install_slice() -> Result<()> {
     Ok(())
 }
 
-fn install_cleanup_timer(host: &LinuxHost, keep: &[String]) -> Result<()> {
-    let service = cleanup_unit(host, keep);
+fn worker_slice() -> String {
+    format!("[Slice]\nTasksMax={}\n", Container::PIDS_LIMIT)
+}
+
+pub(super) fn install_worker_slices(process: &Process, host: &LinuxHost) -> Result<()> {
+    for runner in host
+        .runners
+        .iter()
+        .filter(|r| matches!(r.target, RunnerTarget::Gitlab { .. }))
+    {
+        let path =
+            PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(Container::cgroup_parent(runner));
+        super::system::install_configuration(process, &path, &worker_slice())?;
+    }
+    Ok(())
+}
+
+fn install_cleanup_timer(host: &LinuxHost, keep: &[String], deployment: &Deployment) -> Result<()> {
+    let service = cleanup_unit(host, keep, deployment);
     for (name, body) in [
         (consts::SERVICE_CLEANUP_UNIT, service.as_str()),
         (consts::SERVICE_CLEANUP_TIMER, cleanup_timer()),
@@ -306,8 +384,8 @@ fn install_cleanup_timer(host: &LinuxHost, keep: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn install_renewal_timer(root: &Path) -> Result<()> {
-    let service = renewal_unit(root)?;
+fn install_renewal_timer(root: &Path, deployment: &Deployment) -> Result<()> {
+    let service = renewal_unit(root, deployment)?;
     for (name, body) in [
         (consts::SERVICE_RENEWAL_UNIT, service.as_str()),
         (consts::SERVICE_RENEWAL_TIMER, renewal_timer()),
@@ -339,8 +417,9 @@ fn unit(
     runner: &LinuxRunner,
     cpuset: &str,
     pins: &CiPins,
-    executable: &str,
+    deployment: &Deployment,
 ) -> Result<String> {
+    let executable = deployment.binary.display();
     let mut unit = String::new();
     writeln!(
         unit,
@@ -355,11 +434,12 @@ fn unit(
          RuntimeDirectory=kithara-ci\n\
          RuntimeDirectoryMode=0700\n\
          RuntimeDirectoryPreserve=yes\n\n\
-         ExecStartPre={executable} ci host linux --config {config} firewall\n\
-         ExecStartPre={executable} ci host linux --config {config} configure --runner {name} \
+         ExecStartPre={executable} ci host linux --config {config} --pins {pins_file} firewall\n\
+         ExecStartPre={executable} ci host linux --config {config} --pins {pins_file} configure --runner {name} \
          --env-file {env_file}\n",
         name = runner.name,
-        config = consts::LINUX_CONFIG_PATH,
+        config = deployment.profile.display(),
+        pins_file = deployment.pins.display(),
         env_file = env_file(runner),
     )?;
 
@@ -427,6 +507,9 @@ pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
     process.require_tools(&["systemctl"])?;
     let mut unavailable = Vec::new();
     for runner in &host.runners {
+        if !matches!(runner.target, RunnerTarget::Github { .. }) {
+            continue;
+        }
         let properties = process
             .capture(
                 "systemctl",
@@ -453,6 +536,24 @@ pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
             unavailable.push(format!("{} ({state}, {result})", runner.name));
         }
     }
+    if let Some(manager) = &host.gitlab {
+        let properties = process.capture(
+            "systemctl",
+            &["show", "--property=ActiveState,Result", &manager.service],
+            "read native manager health",
+        )?;
+        let state = properties
+            .lines()
+            .find_map(|line| line.strip_prefix("ActiveState="))
+            .context("missing native manager ActiveState")?;
+        let result = properties
+            .lines()
+            .find_map(|line| line.strip_prefix("Result="))
+            .context("missing native manager Result")?;
+        if state != "active" || result != "success" {
+            unavailable.push(format!("{} ({state}, {result})", manager.service));
+        }
+    }
     if !unavailable.is_empty() {
         bail!(
             "CI runner services are unavailable: {}",
@@ -464,9 +565,30 @@ pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    fn deployment_fixture() -> Deployment {
+        Deployment {
+            binary: PathBuf::from("/reviewed-deployment/kithara-ci"),
+            profile: PathBuf::from(consts::LINUX_CONFIG_PATH),
+            pins: PathBuf::from("/etc/kithara-ci/pins.toml"),
+        }
+    }
     use clap::Parser;
 
     use super::*;
+
+    #[test]
+    fn native_workers_have_independent_aggregate_pid_slices() {
+        let mut host = super::super::profile::tests::gitlab_fixture();
+        host.runners[0].name = "worker".into();
+        host.runners[1].name = "worker-child".into();
+        let parents: Vec<_> = host.runners.iter().map(Container::cgroup_parent).collect();
+        assert_ne!(parents[0], parents[1]);
+        for parent in &parents {
+            assert!(parent.starts_with("kithara-ci-"));
+            assert_eq!(parent.matches('-').count(), 2);
+        }
+        assert_eq!(worker_slice(), "[Slice]\nTasksMax=8192\n");
+    }
     use crate::{
         Cli,
         ci::{config::fixture, host::linux::profile::tests::host_fixture, process::Recording},
@@ -547,6 +669,7 @@ mod tests {
         let text = cleanup_unit(
             &host,
             &installed_images(&host, pins).expect("the pins carry tags"),
+            &deployment_fixture(),
         );
 
         let command = text
@@ -564,7 +687,11 @@ mod tests {
     fn cleanup_runs_the_installed_toolchain_tag_when_the_pin_is_retired() {
         let host = host_fixture();
         let pins = &fixture().pins;
-        let text = cleanup_unit(&host, &installed_images(&host, pins).unwrap());
+        let text = cleanup_unit(
+            &host,
+            &installed_images(&host, pins).unwrap(),
+            &deployment_fixture(),
+        );
         let image = text.split_once(" cleanup --keep ").unwrap().1;
 
         assert_eq!(
@@ -582,6 +709,7 @@ mod tests {
         let text = cleanup_unit(
             &host,
             &installed_images(&host, &fixture().pins).expect("the pins carry tags"),
+            &deployment_fixture(),
         );
 
         let deadline = text
@@ -605,7 +733,8 @@ mod tests {
     /// particular directory unless it is told one.
     #[test]
     fn the_renewal_unit_runs_a_command_this_executable_accepts_in_the_repository() {
-        let text = renewal_unit(Path::new("/srv/kithara")).expect("the unit must render");
+        let text = renewal_unit(Path::new("/srv/kithara"), &deployment_fixture())
+            .expect("the unit must render");
 
         assert!(text.contains("WorkingDirectory=/srv/kithara\n"), "{text}");
         let command = text
@@ -644,6 +773,7 @@ mod tests {
         let text = cleanup_unit(
             &host,
             &installed_images(&host, pins).expect("the pins carry tags"),
+            &deployment_fixture(),
         );
         for pin in [
             &pins.linux_image,
@@ -677,7 +807,7 @@ mod tests {
             host.runner("kithara-ci-octocat").expect("runner"),
             "0,1,2",
             pins,
-            "/usr/local/bin/kithara-ci",
+            &deployment_fixture(),
         )
         .expect("the unit must render");
         for entry in
@@ -709,7 +839,7 @@ mod tests {
             runner,
             "0,1,2",
             &fixture().pins,
-            "/usr/local/bin/kithara-ci",
+            &deployment_fixture(),
         )
         .expect("the unit must render");
 
@@ -732,7 +862,7 @@ mod tests {
                 runner,
                 "0,1,2",
                 &fixture().pins,
-                "/usr/local/bin/kithara-ci",
+                &deployment_fixture(),
             )
             .expect("the unit must render");
             assert!(text.contains("docker run --init "), "{text}");
@@ -750,7 +880,7 @@ mod tests {
                 runner,
                 "0,1,2",
                 &fixture().pins,
-                "/usr/local/bin/kithara-ci",
+                &deployment_fixture(),
             )
             .expect("the unit must render");
             assert!(
@@ -800,7 +930,7 @@ mod tests {
             host.runner("kithara-ci-octocat").expect("runner"),
             "0,1,2",
             pins,
-            "/usr/local/bin/kithara-ci",
+            &deployment_fixture(),
         )
         .expect("the unit must render");
 
@@ -848,7 +978,7 @@ mod tests {
             host.runner("kithara-ci-octocat").unwrap(),
             "0,1,2,3",
             pins,
-            "/usr/local/bin/kithara-ci",
+            &deployment_fixture(),
         )
         .unwrap();
 
@@ -873,7 +1003,7 @@ mod tests {
             host.runner("kithara-ci-octocat").unwrap(),
             "0,1,2,3",
             pins,
-            "/usr/bin/xtask",
+            &deployment_fixture(),
         )
         .unwrap();
         let gpu = unit(
@@ -881,7 +1011,7 @@ mod tests {
             host.runner("kithara-ci-octocat-gpu").unwrap(),
             "0,1,2,3",
             pins,
-            "/usr/bin/xtask",
+            &deployment_fixture(),
         )
         .unwrap();
 
@@ -890,7 +1020,7 @@ mod tests {
             host.runner("kithara-ci-octocat-android").unwrap(),
             "0,1,2,3",
             pins,
-            "/usr/bin/xtask",
+            &deployment_fixture(),
         )
         .unwrap();
 

@@ -3,24 +3,14 @@
 The CI-owned Mac mini uses `xtask ci`; GitLab YAML and `just` select typed commands.
 
 Repository-reviewed versions live in `.config/ci-pins.toml`; untracked machine
-profiles hold host settings. Every executor sets `KITHARA_CI_HOST_CONFIG` to
+profiles hold host settings. Host-shell executors set `KITHARA_CI_HOST_CONFIG` to
 `/etc/kithara-ci/mac-host.toml` (`C:/KitharaCI/mac-host.toml` on Windows).
 
 ## Host installation
 
 Write the machine profile first, outside the repository; its fields are in
-`xtask/tests/fixtures/ci-mac-host.toml` (`ci-linux-host.toml` for Linux).
-
-Linux `compiler_cache_root` can place the scoped compiler stores on a separate
-volume from build outputs; when omitted, they live under `cache_root/kache`.
-
-A Linux profile lists each repository served with its own token file, and every
-runner names one. A GitHub registration reaches exactly one repository, so
-repositories are peers with no default. A runner naming an uncredentialed
-repository is refused at profile read; otherwise it registers against whatever
-token is present and reports to the wrong repository. Write each token with
-`install -m 600 -o root -g root /dev/stdin`: `sudo` overrides an inherited
-umask, so `tee` leaves it world-readable.
+`xtask/tests/fixtures/ci-mac-host.toml` (`ci-linux-host.toml` for GitHub Linux,
+`ci-linux-gitlab-host.toml` for GitLab Linux).
 
 `xtask ci host mac` owns the procedure. From a reviewed GitLab commit, with
 `KITHARA_CI_HOST_CONFIG` exported and `sudo -E` where root is needed, run
@@ -79,12 +69,16 @@ them:
 
 ## GitLab runners
 
+Linux Docker worker setup is in [Linux CI host provisioning](ci-linux-host.md).
+
+### Mac shell workers
+
 One `glrt-...` project runner token per file, mode `0600`, at
 `~/.config/kithara-ci/runner-<name>.token` for `macos-1`, `macos-2`, `android` and
 `release`, tagged to match each lane's `tags:`; keep the release runner
 protected. `configure-runners` writes native shell executors. Apple and
 dependency-audit lanes share the host filesystem and cache roots across jobs.
-Linux and browser jobs run on the separate GitHub Linux fleet; the Mac has no
+Linux and browser placement is selected separately; the Mac has no
 Linux runner, Docker image builder or Colima launch agent.
 
 Set `build_root` when checkouts need a separate storage location from
