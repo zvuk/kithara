@@ -7,6 +7,7 @@
 # argument below from the reviewed pins.
 ARG CI_IMAGE
 FROM ${CI_IMAGE}
+USER root
 
 ARG ACTIONS_RUNNER_AMD64_SHA256
 ARG ACTIONS_RUNNER_AMD64_URL

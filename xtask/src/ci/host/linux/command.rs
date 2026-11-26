@@ -8,8 +8,8 @@ use clap::{Args, Subcommand};
 use tracing::info;
 
 use super::{
-    cleanup, compose, firewall,
-    profile::{LinuxHost, RunnerFlavor},
+    cleanup, compose, firewall, gitlab,
+    profile::{LinuxHost, RunnerFlavor, RunnerTarget},
     registration, services, system, windows,
 };
 use crate::{
@@ -53,6 +53,12 @@ enum LinuxCommand {
         /// File the configuration is written to, readable only by root.
         #[arg(long)]
         env_file: PathBuf,
+    },
+    /// Stage and parse native GitLab Docker configuration without changing its manager.
+    GitlabConfig {
+        /// Protected candidate configuration path, distinct from the active file.
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Write and enable one service per runner in the profile.
     InstallServices,
@@ -124,11 +130,12 @@ pub(in crate::ci::host) fn provision(
 /// layered on it.
 fn required_builds(host: &LinuxHost) -> Vec<ImageCommand> {
     let mut builds = vec![ImageCommand::Toolchain];
-    if host
-        .runners
-        .iter()
-        .any(|runner| matches!(runner.flavor, RunnerFlavor::Plain))
-    {
+    if host.runners.iter().any(|runner| {
+        matches!(
+            (&runner.target, runner.flavor),
+            (RunnerTarget::Github { .. }, RunnerFlavor::Plain)
+        )
+    }) {
         builds.push(ImageCommand::Runner);
     }
     if host
@@ -137,7 +144,14 @@ fn required_builds(host: &LinuxHost) -> Vec<ImageCommand> {
         .any(|runner| matches!(runner.flavor, RunnerFlavor::Android))
     {
         builds.push(ImageCommand::Android);
-        builds.push(ImageCommand::AndroidRunner);
+        if host.runners.iter().any(|runner| {
+            matches!(
+                (&runner.target, runner.flavor),
+                (RunnerTarget::Github { .. }, RunnerFlavor::Android)
+            )
+        }) {
+            builds.push(ImageCommand::AndroidRunner);
+        }
     }
     builds
 }
@@ -145,21 +159,22 @@ fn required_builds(host: &LinuxHost) -> Vec<ImageCommand> {
 pub(crate) fn run(args: &LinuxArgs) -> Result<()> {
     let root = std::env::current_dir()?;
     let process = Process::new(&root, BTreeMap::new());
-    if matches!(args.command, LinuxCommand::InstallTools) {
-        return system::install_tools(&process);
-    }
-
     let host = LinuxHost::load(&args.config)?;
     match &args.command {
         LinuxCommand::Image(image) => {
             let pins = CiPins::load(&args.pins)?;
             image::build_pinned(&process, *image, &pins, Some(&host.image_cache_env_file))
         }
-        LinuxCommand::InstallTools => unreachable!("handled before the profile is read"),
+        LinuxCommand::InstallTools => system::install_tools(&process, &host),
         LinuxCommand::Bootstrap => system::bootstrap(&process, &host),
         LinuxCommand::Firewall => firewall::apply(&process, &host),
         LinuxCommand::Configure { runner, env_file } => {
             registration::configure(&host, host.runner(runner)?, env_file)
+        }
+        LinuxCommand::GitlabConfig { out } => {
+            let cores = std::thread::available_parallelism()?.get();
+            let cpusets = super::cpu::assignments(&host, cores)?;
+            gitlab::prepare(&process, &host, &CiPins::load(&args.pins)?, &cpusets, out)
         }
         LinuxCommand::Cleanup { keep } => cleanup::run(&process, &host, keep),
         LinuxCommand::InstallServices => {

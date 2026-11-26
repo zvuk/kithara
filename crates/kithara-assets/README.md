@@ -22,12 +22,11 @@ Assets store (disk or in-memory) with lease/pin semantics and LRU eviction. An *
 use kithara_assets::{
     AssetResource, AssetSource, AssetStore, StorageBackend,
 };
-use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
 
-pool_schema! {
-    AppPools {
-        bytes: u8,
-    }
+#[derive(Pool)]
+struct AppPools {
+    bytes: PoolSlot<u8>,
 }
 
 struct Protocol;

@@ -222,6 +222,7 @@ fn a_pass_whose_key_estimator_fails_ends_unsettled_without_publishing() {
         cancel: CancelToken::root(),
         rate: spec().sample_rate,
         resume: None,
+        report: None,
         ingest: idle_ingest(),
         revision: 0,
     };

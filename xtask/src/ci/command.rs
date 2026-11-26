@@ -9,7 +9,7 @@ use super::{
     cache::CacheArgs,
     host::HostArgs,
     image::ImageArgs,
-    lane::{direct::LaneArgs, select::LanesArgs},
+    lane::{direct::LaneArgs, plan::command::PlanArgs, select::LanesArgs},
     run::RunArgs,
     verdict::VerdictArgs,
 };
@@ -41,6 +41,8 @@ enum CiCommand {
     Lane(LaneArgs),
     /// Render the jobs a role runs for one pipeline kind.
     Lanes(LanesArgs),
+    /// Resolve a read-only logical plan and its trusted placement.
+    Plan(PlanArgs),
     /// Execute one repository CI lane.
     Run(RunArgs),
     /// Check a draft's pull request test block, read from `KITHARA_PR_TESTS`,
@@ -78,6 +80,7 @@ pub(crate) fn run_standalone(args: &CiArgs) -> Result<()> {
         | CiCommand::Full { .. }
         | CiCommand::Lane(_)
         | CiCommand::Lanes(_)
+        | CiCommand::Plan(_)
         | CiCommand::PrTests
         | CiCommand::WindowsDiagnostics { .. } => {
             bail!("repository CI lanes require a workspace")
@@ -97,6 +100,7 @@ pub(crate) fn run(args: &CiArgs, ctx: &Ctx) -> Result<()> {
         CiCommand::Full { output } => super::cycle::full(ctx, output),
         CiCommand::Lane(args) => super::lane::direct::run(args, ctx),
         CiCommand::Lanes(args) => super::lane::select::run(args, ctx),
+        CiCommand::Plan(args) => super::lane::plan::command::run(args, ctx),
         CiCommand::WindowsDiagnostics { output } => super::windows_diagnostics::run(output, ctx),
         CiCommand::PrTests => std::env::var(kithara_devtools::test::PR_TESTS_ENV)
             .map_or(Ok(()), |block| {

@@ -349,6 +349,10 @@ fn assert_hosted_authorization(job: &Mapping) {
         .as_mapping()
         .expect("authorization environment is a mapping");
     assert_eq!(
+        mapping_field(env, "EVENT_NAME").as_str(),
+        Some("${{ github.event_name }}")
+    );
+    assert_eq!(
         mapping_field(env, "ACTOR").as_str(),
         Some("${{ github.actor }}")
     );

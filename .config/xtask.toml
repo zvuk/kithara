@@ -223,12 +223,17 @@ always = ["backend-cpal"]
 when_feature = "beat-backend"
 never = ["beat-backend"]
 
-# `beat-nn` scopes this rule to both crates and is invalid without model bytes.
-# Full-int8 cannot be produced on CI runners. CUDA needs a model and is checked
+# `beat-nn` is invalid without model bytes. CUDA needs a model and is checked
 # with each supported model by the product-context recipe.
 [[health.feature_invariants]]
 when_feature = "beat-nn"
-never = ["beat-nn", "beat-nn-full-int8", "beat-cuda"]
+never = ["beat-nn", "beat-cuda"]
+
+# Model-forwarding consumers need not expose the internal `beat-nn` marker.
+# Full-int8 cannot be produced on CI runners.
+[[health.feature_invariants]]
+when_feature = "beat-nn-small"
+never = ["beat-nn-full-int8"]
 mutually_exclusive = [["beat-nn-small", "beat-nn-full"]]
 
 # kithara-beat embeds one model and says so with compile_error!.
@@ -1532,6 +1537,7 @@ pr_review_line_limit = 5000
 # Lanes that are nothing but the work they ask the executor for. A lane needs a
 # function only when a parameter cannot say what it does.
 [ext.ci.lanes.deps-deny]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "host"
 label = "dependency policy audit"
 os = ["macos", "linux"]
@@ -1552,6 +1558,7 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-advisories]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "host"
 label = "RustSec advisory audit"
 os = ["macos", "linux"]
@@ -1571,6 +1578,7 @@ path_globs = ["Cargo.lock", "**/Cargo.toml", "deny.toml", ".cargo/config.toml"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-unused]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "host"
 label = "dependency audit"
 os = ["macos", "linux"]
@@ -1583,6 +1591,7 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 
 [ext.ci.lanes.crates-publish]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "host"
 label = "publication"
 os = ["macos", "linux"]
@@ -1606,6 +1615,7 @@ timeout_minutes = 60
 # bench-only entries - and every one of them would refuse every push. Weekly
 # on GitLab, nightly here, where the report is read rather than blocking.
 [ext.ci.lanes.deps-shear]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "host"
 label = "dependency audit"
 os = ["macos", "linux"]
@@ -1618,6 +1628,7 @@ kinds_github = ["nightly"]
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-features-full]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "host"
 label = "dependency audit"
 os = ["macos", "linux"]
@@ -1638,6 +1649,7 @@ kinds_github = []
 timeout_minutes = 60
 
 [ext.ci.lanes.deps-features-workspace]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "dependency audit"
 os = "linux"
@@ -1664,6 +1676,7 @@ kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.deps-features-invariants]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "dependency audit"
 os = "linux"
@@ -1688,6 +1701,7 @@ kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.deps-features-invariants-rest]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "dependency audit"
 os = "linux"
@@ -1707,6 +1721,7 @@ kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.deps-semver]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "host"
 label = "dependency audit"
 os = ["macos", "linux"]
@@ -1723,6 +1738,9 @@ history = true
 # go through the repository's wasm recipe rather than `wasm-pack`, because the
 # target rebuilds std for shared memory and only the pinned nightly honours it.
 [ext.ci.lanes.web-chromium]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "browser-chromium",
+] }
 cache_group = "linux"
 label = "Web browser"
 os = "linux"
@@ -1750,6 +1768,9 @@ artifact = { name = "web-chromium-driver", report = "chromium", when = "failure"
 # compile for wasm32 today. The lane reports the break every night instead of
 # refusing every push until the suite is fixed.
 [ext.ci.lanes.web-firefox]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "browser-firefox",
+] }
 cache_group = "linux"
 label = "Web browser"
 os = "linux"
@@ -1770,6 +1791,9 @@ kinds_github = ["nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.web-size]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "wasm-tools",
+] }
 cache_group = "linux"
 label = "WASM size"
 os = "linux"
@@ -1799,6 +1823,11 @@ artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
 # they pin `standalone` themselves. Same detector, two platforms, two
 # backends - not duplication.
 [ext.ci.lanes.deep-rtsan]
+semantics = { kind = "validation", acceptance = "native-exit", automatic_kinds = [
+  "nightly",
+], capabilities = [
+  "rtsan",
+] }
 cache_group = "macos"
 label = "deep Apple"
 os = "macos"
@@ -1827,6 +1856,9 @@ kinds = ["branch", "merge-request", "quarantine", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-fast]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "rtsan",
+] }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1845,6 +1877,9 @@ kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-file]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "rtsan",
+] }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1863,6 +1898,9 @@ kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-hls]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "rtsan",
+] }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1881,6 +1919,7 @@ kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-perf]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "macos"
 label = "deep Apple"
 os = "macos"
@@ -1900,6 +1939,10 @@ kinds = ["nightly"]
 timeout_minutes = 90
 
 [ext.ci.lanes.deep-bench]
+semantics = { kind = "validation", acceptance = "native-exit", automatic_kinds = [
+  "nightly",
+  "bench",
+] }
 cache_group = "host"
 label = "benchmarks"
 os = ["linux", "macos"]
@@ -1921,6 +1964,10 @@ artifact = { name = "bench-results", path = "bench-results.txt\nbench-results/",
 # `KITHARA_GPU_RUNNER_LABELS` and skips when that variable is empty, and the
 # catalog has no field yet for naming a runner pool.
 [ext.ci.lanes.deep-ui]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "ui-renderer",
+  "display",
+] }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1937,6 +1984,9 @@ timeout_minutes = 120
 # forbid `unsafe` themselves. The interpreter runs a program hundreds of times
 # slower than the machine does, so this stays weekly rather than nightly.
 [ext.ci.lanes.deep-miri]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "miri",
+] }
 test_packages = [
   "kithara-abr",
   "kithara-bufpool",
@@ -1966,6 +2016,7 @@ artifact = { name = "miri-junit", path = "target/nextest/miri/junit.xml", when =
 # parser or a resource state machine, and a crash is saved under
 # `tests/fuzz/artifacts/` for reproduction.
 [ext.ci.lanes.deep-fuzz]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1997,6 +2048,7 @@ timeout_minutes = 90
 # lane whose timeout covers the whole suite, about five hours.
 
 [ext.ci.lanes.deep-mutants-stream]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2021,6 +2073,7 @@ artifact = { name = "mutants-stream", path = "target/mutants-ci" }
 timeout_minutes = 60
 
 [ext.ci.lanes.deep-mutants-playback]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2045,6 +2098,7 @@ artifact = { name = "mutants-playback", path = "target/mutants-ci" }
 timeout_minutes = 90
 
 [ext.ci.lanes.deep-mutants-analysis]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2069,6 +2123,7 @@ artifact = { name = "mutants-analysis", path = "target/mutants-ci" }
 timeout_minutes = 60
 
 [ext.ci.lanes.deep-mutants-ui]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2099,6 +2154,7 @@ timeout_minutes = 360
 # behind the one checked out: a secret added and removed again is still in the
 # history that gets pushed.
 [ext.ci.lanes.linux-secrets]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2129,6 +2185,7 @@ kinds_github = ["main", "nightly"]
 timeout_minutes = 15
 
 [ext.ci.lanes.linux-check]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2142,6 +2199,7 @@ kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-wasm]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2162,6 +2220,7 @@ timeout_minutes = 60
 # The two clock lanes run one recipe and differ in the clock they ask for and
 # the directory they build in.
 [ext.ci.lanes.linux-test-simulated-clock]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 github_runner = "kithara-test-simulated"
 github_runner_main = "kithara-trusted-snapshot"
@@ -2197,6 +2256,7 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 120
 
 [ext.ci.lanes.linux-doc]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2215,6 +2275,7 @@ kinds_github = ["nightly"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-loom]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2238,6 +2299,7 @@ timeout_minutes = 180
 # configuration: whole on a ready pull request, `main` and every night, and
 # the draft scope's part they hold on any other branch push.
 [ext.ci.lanes.linux-tooling]
+semantics = { kind = "validation", acceptance = "native-exit" }
 artifact = { name = "hang-dumps-tooling", path = ".ci-artifacts/hang", when = "failure" }
 cache_group = "host"
 label = "tooling"
@@ -2269,6 +2331,7 @@ kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-harness]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2287,6 +2350,7 @@ kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-fixtures]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2311,6 +2375,7 @@ kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-broadcast]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2331,6 +2396,7 @@ timeout_minutes = 180
 # `kithara-net`'s own tests run on the Linux host under its `client-host`
 # backend only here; Android runs the backend with a real transport.
 [ext.ci.lanes.linux-net-host]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2348,6 +2414,7 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-integration-regressions]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2369,6 +2436,7 @@ timeout_minutes = 180
 # calls carries that name into the run, so a run started here and a run started
 # by hand exercise the same browser.
 [ext.ci.lanes.linux-selenium-firefox]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2396,6 +2464,7 @@ timeout_minutes = 180
 # recipe, and a second copy is one edit away from gating a local run and CI at
 # different bars.
 [ext.ci.lanes.linux-coverage]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2419,6 +2488,7 @@ timeout_minutes = 90
 # restore: on the default branch it publishes into its own scope's bucket.
 # Sources are platform-independent, so one object serves both fleets.
 [ext.ci.lanes.linux-lint]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 target_snapshot = "linux-lint"
 label = "Linux"
@@ -2432,6 +2502,7 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-arch]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2445,6 +2516,7 @@ timeout_minutes = 30
 # The image knows which toolchain is the minimum supported one, so the version
 # stays owned by the reviewed pins rather than repeated in a workflow.
 [ext.ci.lanes.linux-msrv]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2463,6 +2535,7 @@ timeout_minutes = 60
 # allocation regressions, a zero-allocation audio hot path, and the resident
 # size of an HLS playback.
 [ext.ci.lanes.linux-perf-memory]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2479,6 +2552,7 @@ timeout_minutes = 60
 # The rebuild check then asks cargo what the next job of this commit would build.
 # Its recipe is the simulated-clock lane's; see the note there.
 [ext.ci.lanes.linux-test-real-clock]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 github_runner = "kithara-test-real"
 label = "Linux"
@@ -2501,6 +2575,7 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 120
 
 [ext.ci.lanes.linux-usdt]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2556,6 +2631,7 @@ timeout_minutes = 60
 # the six jobs inside it run concurrently - only this lane, the longest of the
 # six, carries the `heavy-linux` queue.
 [ext.ci.lanes.quality-assess]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2581,6 +2657,7 @@ kinds_github = ["nightly", "weekly"]
 timeout_minutes = 360
 
 [ext.ci.lanes.quality-similarity]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2594,6 +2671,7 @@ kinds_github = ["nightly", "weekly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.quality-architecture]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2617,6 +2695,7 @@ kinds_github = ["nightly", "weekly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.quality-coverage-risk]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2637,6 +2716,7 @@ timeout_minutes = 240
 # `just ci health` fetches the `main` baseline itself before semver compares
 # against it, so the checkout ahead of it only needs the tip.
 [ext.ci.lanes.quality-health]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2654,6 +2734,7 @@ timeout_minutes = 120
 # where the dispatcher's own download step lands them, not this workflow's
 # `target/quality-artifacts`.
 [ext.ci.lanes.quality-report]
+semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -2700,6 +2781,10 @@ timeout_minutes = 30
 # picks `clang-cl` and needs none of this. The x64 chain has recognised
 # `_M_X64` all along, so its lanes carry neither.
 [ext.ci.lanes.windows-arm64]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "msvc",
+  "arch:aarch64",
+] }
 cache_group = "windows"
 label = "Windows"
 os = "windows"
@@ -2728,6 +2813,10 @@ timeout_minutes = 120
 # `just ci run windows-x64` still reaches it, and GitLab arms it with
 # KITHARA_WINDOWS_X64_SUITE.
 [ext.ci.lanes.windows-x64]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "msvc",
+  "arch:x86_64",
+] }
 cache_group = "windows"
 label = "Windows"
 os = "windows"
@@ -2760,6 +2849,10 @@ timeout_minutes = 120
 # it runs on the executor, never on the target, and its own tests reach for
 # `std::os::unix`.
 [ext.ci.lanes.windows-x64-build]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "msvc",
+  "msvc-x64-build",
+] }
 cache_group = "windows"
 label = "Windows"
 os = "windows"
@@ -2792,6 +2885,9 @@ timeout_minutes = 120
 # emulator through `.github/workflows/android.yml`, which names the runner pool
 # the catalog cannot yet name.
 [ext.ci.lanes.android-build]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "android-sdk",
+] }
 cache_group = "host"
 label = "Android"
 os = ["macos", "linux"]
@@ -2817,6 +2913,10 @@ timeout_minutes = 45
 # CI and prepared local runners execute the same complete baseline. The test
 # command builds the JNI libraries before it acquires an emulator.
 [ext.ci.lanes.android-test]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "android-sdk",
+  "android-emulator-acceleration",
+] }
 cache_group = "host"
 label = "Android"
 os = ["macos", "linux"]
@@ -2845,6 +2945,9 @@ timeout_minutes = 90
 # predecessor. Each one is scheduled on its own and can be retried alone, so the
 # uninitialized Xcode fails in the job that would have used it.
 [ext.ci.lanes.apple-lint]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+] }
 cache_group = "macos"
 target_snapshot = "apple-lint"
 publishes_sources = true
@@ -2895,6 +2998,9 @@ kinds = [
 timeout_minutes = 60
 
 [ext.ci.lanes.apple-msrv]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+] }
 cache_group = "macos"
 label = "Apple"
 os = "macos"
@@ -2919,6 +3025,9 @@ kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.apple-net-units]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+] }
 cache_group = "macos"
 label = "Apple network units"
 os = "macos"
@@ -2961,6 +3070,9 @@ timeout_minutes = 60
 # A review ref asks the same question the default branch asks: what a reviewer
 # would have to fix anyway is cheaper to learn before merge.
 [ext.ci.lanes.apple-test]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+] }
 cache_group = "macos"
 label = "Apple"
 os = "macos"
@@ -3012,6 +3124,9 @@ timeout_minutes = 60
 # The off-flash suite owns a separate lane slot because its feature set differs
 # from the flash gate. Keep nextest reports at that slot's exposed target root.
 [ext.ci.lanes.apple-test-flash-off]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+] }
 cache_group = "macos"
 label = "Apple"
 os = "macos"
@@ -3039,6 +3154,9 @@ kinds = ["platforms", "main", "nightly"]
 timeout_minutes = 60
 
 [ext.ci.lanes.apple-xcframework]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+] }
 cache_group = "macos"
 label = "Apple"
 os = "macos"
@@ -3074,6 +3192,10 @@ kinds = [
 timeout_minutes = 60
 
 [ext.ci.lanes.apple-ios]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+  "ios-simulator",
+] }
 cache_group = "macos"
 label = "Apple"
 os = "macos"
@@ -3109,6 +3231,10 @@ timeout_minutes = 60
 # other browsers do: the target rebuilds std for shared memory, and only the
 # pinned nightly honours that. It needs no Xcode of its own.
 [ext.ci.lanes.apple-safari]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+  "browser-safari",
+] }
 cache_group = "macos"
 label = "Safari WASM"
 os = "macos"
@@ -3140,6 +3266,7 @@ http_timeout_secs = 20
 user_agent = "kithara-xtask-publish (zvuk_ai@prosoftware.io)"
 
 [ext.ci.lanes.release-app]
+semantics = { kind = "signing", acceptance = "native-exit" }
 cache_group = "host"
 label = "macOS application"
 os = "macos"
@@ -3594,3 +3721,384 @@ scan_all_rules = [
   "perf.no-local-test-pools",
   "style.no-items-in-lib-or-mod-rs",
 ]
+
+[ext.ci.planning.residuals.apple-ios-test]
+owner = "xtask/src/ci/run.rs"
+platforms = ["macos"]
+kinds = [
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+  "ios-simulator",
+], reports = [
+  "apple-ios-test-junit",
+] }
+sources = [".gitlab/ci/apple.yml", "xtask/src/ci/run.rs"]
+needs = ["apple-xcframework"]
+
+[ext.ci.planning.residuals.apple-swift-test]
+owner = "xtask/src/ci/run.rs"
+platforms = ["macos"]
+kinds = ["platforms", "main", "nightly"]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+  "swift",
+], reports = [
+  "apple-swift-test-junit",
+] }
+sources = [".gitlab/ci/apple.yml", "xtask/src/ci/run.rs"]
+needs = ["apple-xcframework"]
+
+[ext.ci.planning.residuals.release-android]
+owner = "xtask/src/ci/release.rs"
+platforms = ["linux", "macos"]
+kinds = ["nightly", "release"]
+semantics = { kind = "package-validation", acceptance = "native-exit", capabilities = [
+  "android-sdk",
+], reports = [
+  "package-checksums",
+  "source-provenance",
+] }
+sources = [".gitlab/ci/release.yml", "xtask/src/ci/release.rs"]
+parameters = ["package", "channel"]
+
+[ext.ci.planning.residuals.release-docs]
+owner = "xtask/src/ci/release.rs"
+platforms = ["macos"]
+kinds = ["nightly", "release"]
+semantics = { kind = "package-validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+], reports = [
+  "package-checksums",
+  "source-provenance",
+] }
+sources = [".gitlab/ci/release.yml", "xtask/src/ci/release.rs"]
+parameters = ["package", "channel"]
+
+[ext.ci.planning.residuals.release-publish]
+owner = "xtask/src/ci/release.rs"
+platforms = ["macos", "linux"]
+kinds = ["nightly", "release"]
+semantics = { kind = "publication", acceptance = "release-authority", capabilities = [
+  "release-authority",
+] }
+sources = [".gitlab/ci/release.yml", "xtask/src/ci/release.rs"]
+needs = [
+  "release-xcframework",
+  "release-docs",
+  "release-wasm",
+  "release-android",
+]
+parameters = ["package", "channel"]
+timeout_minutes = 240
+
+[ext.ci.planning.residuals.release-wasm]
+owner = "xtask/src/ci/release.rs"
+platforms = ["linux", "macos"]
+kinds = ["nightly", "release"]
+semantics = { kind = "package-validation", acceptance = "native-exit", capabilities = [
+  "wasm-tools",
+], reports = [
+  "package-checksums",
+  "source-provenance",
+] }
+sources = [".gitlab/ci/release.yml", "xtask/src/ci/release.rs"]
+parameters = ["package", "channel"]
+
+[ext.ci.planning.residuals.release-xcframework]
+owner = "xtask/src/ci/release.rs"
+platforms = ["macos"]
+kinds = ["nightly", "release"]
+semantics = { kind = "package-validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+], reports = [
+  "package-checksums",
+  "source-provenance",
+] }
+sources = [".gitlab/ci/release.yml", "xtask/src/ci/release.rs"]
+parameters = ["package", "channel"]
+
+[ext.ci.planning.residuals.verdict]
+owner = "xtask/src/ci/verdict.rs"
+platforms = ["macos", "linux"]
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+semantics = { kind = "evidence-control", acceptance = "scoped-verdict-journal", reports = [
+  "producer-junit",
+  "selection-report",
+] }
+sources = [".gitlab/ci/verdict.yml", "xtask/src/ci/verdict.rs"]
+
+[ext.ci.planning.dedicated.ci-authorize]
+owner = ".github/workflows/ci.yml"
+platforms = ["linux", "macos", "windows"]
+kinds = []
+semantics = { kind = "evidence-control", acceptance = "authorized-source" }
+sources = [".github/workflows/ci.yml"]
+timeout_minutes = 5
+
+[ext.ci.planning.dedicated.ci-dispatch]
+owner = ".gitlab-ci.yml"
+platforms = ["linux", "macos", "windows"]
+kinds = []
+semantics = { kind = "evidence-control", acceptance = "native-child-verdict" }
+sources = [".gitlab-ci.yml"]
+
+[ext.ci.planning.dedicated.ci-execute]
+owner = "xtask/src/ci/lane/direct.rs"
+platforms = ["linux", "macos", "windows"]
+kinds = []
+semantics = { kind = "evidence-control", acceptance = "actual-execution-evidence" }
+sources = ["xtask/src/ci/lane/direct.rs"]
+
+[ext.ci.planning.dedicated.ci-pr-tests]
+owner = "xtask/src/ci/command.rs"
+platforms = ["linux", "macos", "windows"]
+kinds = []
+semantics = { kind = "validation", acceptance = "draft-scope-union" }
+sources = ["xtask/src/ci/command.rs"]
+timeout_minutes = 10
+
+[ext.ci.planning.dedicated.ci-report]
+owner = "crates/kithara-devtools/src/ci_report.rs"
+platforms = ["linux", "macos"]
+kinds = []
+semantics = { kind = "evidence-control", acceptance = "source-run-and-attempt", reports = [
+  "quality-report",
+] }
+sources = [
+  ".github/workflows/report.yml",
+  "crates/kithara-devtools/src/ci_report.rs",
+]
+parameters = ["run", "attempt"]
+timeout_minutes = 10
+
+[ext.ci.planning.dedicated.ci-required]
+owner = ".github/workflows/ci.yml"
+platforms = ["linux", "macos", "windows"]
+kinds = []
+semantics = { kind = "evidence-control", acceptance = "all-expected-checks" }
+sources = [".github/workflows/ci.yml"]
+timeout_minutes = 5
+
+[ext.ci.planning.dedicated.ci-select]
+owner = "xtask/src/ci/lane/select.rs"
+platforms = ["linux", "macos", "windows"]
+kinds = []
+semantics = { kind = "evidence-control", acceptance = "complete-selected-contracts" }
+sources = ["xtask/src/ci/lane/select.rs"]
+timeout_minutes = 10
+
+[ext.ci.planning.dedicated.host-provision]
+owner = "xtask/src/ci/host/mod.rs"
+platforms = ["linux", "macos"]
+kinds = []
+semantics = { kind = "provisioning", acceptance = "operator-authority", capabilities = [
+  "provisioning-authority",
+] }
+sources = [
+  ".github/workflows/host.yml",
+  ".gitlab/ci/host.yml",
+  "xtask/src/ci/host/mod.rs",
+]
+timeout_minutes = 180
+
+[ext.ci.planning.dedicated.network]
+owner = ".config/just/test.just"
+platforms = ["linux", "macos"]
+kinds = ["nightly"]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "network-drm",
+], reports = [
+  "network-junit",
+] }
+sources = [".config/just/test.just", ".github/workflows/network.yml"]
+parameters = ["filter", "backend"]
+timeout_minutes = 180
+
+[ext.ci.planning.dedicated.stress]
+owner = "crates/kithara-devtools/src/stress/command.rs"
+platforms = ["linux", "macos"]
+kinds = []
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "stress-harness",
+], reports = [
+  "stress-evidence",
+] }
+sources = [
+  ".github/workflows/stress.yml",
+  "crates/kithara-devtools/src/stress/command.rs",
+]
+parameters = [
+  "subject",
+  "controller",
+  "tier",
+  "mode",
+  "lane",
+  "filter",
+  "count",
+  "max-count",
+  "shard",
+  "shards",
+]
+timeout_minutes = 1380
+
+[ext.ci.planning.dedicated.stress-report]
+owner = "crates/kithara-devtools/src/stress_report/mod.rs"
+platforms = ["linux", "macos"]
+kinds = []
+semantics = { kind = "evidence-control", acceptance = "all-expected-shards", reports = [
+  "stress-report",
+] }
+sources = [
+  ".github/workflows/stress.yml",
+  "crates/kithara-devtools/src/stress_report/mod.rs",
+]
+needs = ["stress"]
+timeout_minutes = 30
+
+[ext.ci.planning.dedicated.test-census]
+owner = "crates/kithara-devtools/src/test/census.rs"
+platforms = ["linux", "macos"]
+kinds = []
+semantics = { kind = "validation", acceptance = "complete-inventory", reports = [
+  "test-inventory",
+] }
+sources = [
+  ".github/workflows/test-census.yml",
+  "crates/kithara-devtools/src/test/census.rs",
+]
+parameters = ["before", "after", "renames"]
+timeout_minutes = 120
+
+[ext.ci.planning.dedicated.test-census-compare]
+owner = "crates/kithara-devtools/src/test/census.rs"
+platforms = ["linux", "macos"]
+kinds = []
+semantics = { kind = "evidence-control", acceptance = "inventory-identity-equality" }
+sources = [
+  ".github/workflows/test-census.yml",
+  "crates/kithara-devtools/src/test/census.rs",
+]
+needs = ["test-census"]
+timeout_minutes = 30
+
+[ext.ci.planning.dedicated.windows]
+owner = ".github/workflows/windows.yml"
+platforms = ["windows"]
+kinds = ["nightly"]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "msvc",
+], reports = [
+  "windows-junit",
+  "cache-evidence",
+] }
+sources = [".github/workflows/windows.yml"]
+parameters = ["architecture", "fixture-refresh"]
+timeout_minutes = 180
+
+[ext.ci.planning.dedicated.windows-diagnostics]
+owner = "xtask/src/ci/windows_diagnostics.rs"
+platforms = ["windows"]
+kinds = []
+semantics = { kind = "diagnostic", acceptance = "native-exit" }
+sources = [
+  ".github/workflows/windows.yml",
+  "xtask/src/ci/windows_diagnostics.rs",
+]
+parameters = ["lane", "filter", "count", "load"]
+timeout_minutes = 180
+
+[ext.ci.planning.bindings]
+".github/workflows/android.yml::android" = ["android-test"]
+".github/workflows/ci.yml::android" = ["android-test"]
+".github/workflows/ci.yml::authorize" = ["ci-authorize"]
+".github/workflows/ci.yml::deep" = ["catalog:deep"]
+".github/workflows/ci.yml::lanes" = ["catalog:gate"]
+".github/workflows/ci.yml::platforms" = ["catalog:platforms"]
+".github/workflows/ci.yml::quality" = ["catalog:quality"]
+".github/workflows/ci.yml::required" = ["ci-required"]
+".github/workflows/ci.yml::ui" = ["deep-ui"]
+".github/workflows/dispatch.yml::android" = ["android-test"]
+".github/workflows/dispatch.yml::deep" = ["catalog:deep"]
+".github/workflows/dispatch.yml::gate" = ["catalog:gate"]
+".github/workflows/dispatch.yml::mutants" = ["catalog:mutants"]
+".github/workflows/dispatch.yml::network" = ["network"]
+".github/workflows/dispatch.yml::platforms" = ["catalog:platforms"]
+".github/workflows/dispatch.yml::quality" = ["catalog:quality"]
+".github/workflows/dispatch.yml::stress" = ["stress"]
+".github/workflows/dispatch.yml::ui" = ["deep-ui"]
+".github/workflows/dispatch.yml::windows" = ["windows"]
+".github/workflows/host.yml::provision" = ["host-provision"]
+".github/workflows/lane.yml::run" = ["ci-execute"]
+".github/workflows/network.yml::network" = ["network"]
+".github/workflows/report.yml::report" = ["ci-report"]
+".github/workflows/run.yml::dependent" = ["catalog:all"]
+".github/workflows/run.yml::run" = ["catalog:all"]
+".github/workflows/run.yml::select" = ["ci-select"]
+".github/workflows/stress.yml::authorize" = ["ci-authorize"]
+".github/workflows/stress.yml::execute" = ["stress"]
+".github/workflows/stress.yml::report" = ["stress-report"]
+".github/workflows/test-census.yml::compare" = ["test-census-compare"]
+".github/workflows/test-census.yml::inventory" = ["test-census"]
+".github/workflows/ui.yml::test" = ["deep-ui"]
+".github/workflows/windows.yml::diagnostics" = ["windows-diagnostics"]
+".github/workflows/windows.yml::windows" = ["windows"]
+".gitlab-ci.yml::dispatch:bench" = ["ci-dispatch"]
+".gitlab-ci.yml::dispatch:branch" = ["ci-dispatch"]
+".gitlab-ci.yml::dispatch:main" = ["ci-dispatch"]
+".gitlab-ci.yml::dispatch:merge-request" = ["ci-dispatch"]
+".gitlab-ci.yml::dispatch:nightly" = ["ci-dispatch"]
+".gitlab-ci.yml::dispatch:platforms" = ["ci-dispatch"]
+".gitlab-ci.yml::dispatch:provision" = ["ci-dispatch"]
+".gitlab-ci.yml::dispatch:quarantine" = ["ci-dispatch"]
+".gitlab-ci.yml::dispatch:release" = ["ci-dispatch"]
+".gitlab-ci.yml::dispatch:weekly" = ["ci-dispatch"]
+".gitlab/ci/android.yml::android:build" = ["android-build"]
+".gitlab/ci/android.yml::android:test" = ["android-test"]
+".gitlab/ci/apple.yml::apple:ios" = ["apple-ios"]
+".gitlab/ci/apple.yml::apple:ios-test" = ["apple-ios-test"]
+".gitlab/ci/apple.yml::apple:lint" = ["apple-lint", "linux-tooling"]
+".gitlab/ci/apple.yml::apple:msrv" = ["apple-msrv"]
+".gitlab/ci/apple.yml::apple:net-units" = ["apple-net-units"]
+".gitlab/ci/apple.yml::apple:pr-tests" = ["ci-pr-tests"]
+".gitlab/ci/apple.yml::apple:safari" = ["apple-safari"]
+".gitlab/ci/apple.yml::apple:swift-test" = ["apple-swift-test"]
+".gitlab/ci/apple.yml::apple:test" = ["apple-test"]
+".gitlab/ci/apple.yml::apple:test-flash-off" = ["apple-test-flash-off"]
+".gitlab/ci/apple.yml::apple:xcframework" = ["apple-xcframework"]
+".gitlab/ci/deep.yml::deep:bench" = ["deep-bench"]
+".gitlab/ci/deep.yml::deep:perf" = ["deep-perf"]
+".gitlab/ci/deep.yml::deep:rtsan" = ["deep-rtsan"]
+".gitlab/ci/deep.yml::deps:advisories" = ["deps-advisories"]
+".gitlab/ci/deep.yml::deps:deny" = ["deps-deny"]
+".gitlab/ci/deep.yml::deps:features" = ["deps-features-full"]
+".gitlab/ci/deep.yml::deps:publish" = ["crates-publish"]
+".gitlab/ci/deep.yml::deps:semver" = ["deps-semver"]
+".gitlab/ci/deep.yml::deps:shear" = ["deps-shear"]
+".gitlab/ci/deep.yml::deps:unused" = ["deps-unused"]
+".gitlab/ci/host.yml::host:provision" = ["host-provision"]
+".gitlab/ci/release.yml::release:android" = ["release-android"]
+".gitlab/ci/release.yml::release:app" = ["release-app"]
+".gitlab/ci/release.yml::release:docs" = ["release-docs"]
+".gitlab/ci/release.yml::release:framework-snapshot" = ["release-xcframework"]
+".gitlab/ci/release.yml::release:publish" = ["release-publish"]
+".gitlab/ci/release.yml::release:wasm" = ["release-wasm"]
+".gitlab/ci/release.yml::release:xcframework" = ["release-xcframework"]
+".gitlab/ci/verdict.yml::verdict" = ["verdict"]
+".gitlab/ci/windows.yml::windows:arm64" = ["windows-arm64"]
+".gitlab/ci/windows.yml::windows:x64" = ["windows-x64"]
+".gitlab/ci/windows.yml::windows:x64-build" = ["windows-x64-build"]
