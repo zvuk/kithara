@@ -269,17 +269,18 @@ impl AllocationReport {
                 match policy {
                     AllocatorPolicy::System => {
                         if let Some(observation) = observation {
-                            let timing = observation.other.get("timing").with_context(|| {
-                                format!(
-                                    "allocation case {:?} has observations but no System timing receipt",
-                                    entry.identity
-                                )
-                            })?;
                             ensure!(
-                                timing["policy"] == "system" && timing["inner_backend"] == "system",
-                                "allocation case {:?} has a non-System allocator observation",
+                                observation.guard.is_none() && observation.heap.is_none(),
+                                "allocation case {:?} has a guard/heap policy observation but the request selects System",
                                 entry.identity
                             );
+                            if let Some(timing) = observation.other.get("timing") {
+                                ensure!(
+                                    timing["policy"] == "system" && timing["inner_backend"] == "system",
+                                    "allocation case {:?} has a non-System allocator observation",
+                                    entry.identity
+                                );
+                            }
                         }
                     }
                     AllocatorPolicy::AllocDisabler => {
