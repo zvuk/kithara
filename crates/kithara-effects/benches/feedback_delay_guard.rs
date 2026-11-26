@@ -4,18 +4,33 @@ use criterion::{BenchmarkId, Criterion, Throughput};
 
 mod support;
 
-use support::feedback_delay::{CASES, GROUP, Prepared, prepare, process_once};
+use support::feedback_delay::{CASES, GROUP, Prepared, observe, prepare, process_once};
 
 /// One stereo `process` pass guarded against allocation and deallocation. The
 /// `AllocDisabler` global installed by `main!` aborts the artifact if the pass
 /// touches the allocator, so a completed run is the guard proof.
-#[metabench::benchmark(FEEDBACK_COMB, GROUP, "high_pass", gungraun_setup = prepare)]
+#[metabench::benchmark(FEEDBACK_COMB, GROUP, "high_pass", gungraun_setup = prepare, gungraun_teardown = observe_guard)]
 #[bench::integer_480(480.0)]
 #[bench::integer_96k(96_000.0)]
 #[bench::fractional_96k(96_000.5)]
 fn feedback_delay_process_guarded(mut prepared: Prepared) -> Prepared {
     assert_no_alloc::assert_no_alloc(|| process_once(&mut prepared));
     prepared
+}
+
+fn observe_guard(prepared: Prepared) {
+    observe(
+        &prepared.identity,
+        &serde_json::json!({
+            "guard": {
+                "status": "passed",
+                "policy": "alloc_disabler",
+                "inner_backend": "system",
+                "scope": "checked thread; allocation and free forbidden",
+            }
+        }),
+    );
+    drop(prepared);
 }
 
 fn criterion_benchmarks(criterion: &mut Criterion) {

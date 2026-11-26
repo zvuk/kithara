@@ -32,8 +32,6 @@ memchr = { version = "2" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
-regex = { version = "1", default-features = false, features = ["perf", "std", "unicode"] }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 ringbuf = { version = "0.5", features = ["portable-atomic"] }
 serde = { version = "1", features = ["alloc", "derive"] }
@@ -68,8 +66,6 @@ memchr = { version = "2" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
 portable-atomic = { version = "1", default-features = false, features = ["fallback", "float", "require-cas", "std"] }
-regex = { version = "1", default-features = false, features = ["perf", "std", "unicode"] }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 regex-syntax = { version = "0.8" }
 ringbuf = { version = "0.5", features = ["portable-atomic"] }
 serde = { version = "1", features = ["alloc", "derive"] }
@@ -119,7 +115,7 @@ num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "termios", "time"] }
 serde_core = { version = "1" }
@@ -167,7 +163,7 @@ num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "termios", "time"] }
 serde_core = { version = "1" }
@@ -213,7 +209,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["NSA
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "termios"] }
 rustls-pki-types = { version = "1", features = ["std"] }
@@ -263,7 +259,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["NSA
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "termios"] }
 rustls-pki-types = { version = "1", features = ["std"] }
@@ -311,7 +307,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["NSA
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "termios"] }
 rustls-pki-types = { version = "1", features = ["std"] }
@@ -361,7 +357,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["NSA
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "termios"] }
 rustls-pki-types = { version = "1", features = ["std"] }
@@ -397,6 +393,7 @@ objc2-foundation = { version = "0.3" }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
@@ -429,6 +426,7 @@ objc2-foundation = { version = "0.3" }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
@@ -468,7 +466,7 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
@@ -512,7 +510,7 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
@@ -554,7 +552,7 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
@@ -598,7 +596,7 @@ parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
-regex-automata = { version = "0.4", default-features = false, features = ["dfa-build"] }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
 rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }

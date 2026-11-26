@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{hint::black_box, path::Path};
+use std::path::Path;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput};
 use kithara_beat::{SpectralBeats, Tempo};
 use kithara_test_utils::{
     bufpool::pools,
@@ -14,6 +14,12 @@ mod consts {
     pub(super) const RATE: usize = 22_050;
     /// Length of the excerpt one analysis runs over.
     pub(super) const SECONDS: usize = 30;
+}
+
+struct Prepared {
+    detector: SpectralBeats<kithara_test_utils::bufpool::TestPools>,
+    pcm: Vec<f32>,
+    case: usize,
 }
 
 fn excerpt() -> Vec<f32> {
@@ -37,7 +43,7 @@ fn excerpt() -> Vec<f32> {
         .collect()
 }
 
-fn spectral_beats(c: &mut Criterion) {
+fn prepare(case: usize) -> Prepared {
     let pcm = excerpt();
     let detector = SpectralBeats::new(pools(), Tempo::default()).expect("the detector builds");
     let expected = detector.analyze(&pcm).expect("the full analysis succeeds");
@@ -64,22 +70,53 @@ fn spectral_beats(c: &mut Criterion) {
         detector.analyze(&pcm).expect("a reused detector analyzes"),
         expected
     );
+    Prepared {
+        detector,
+        pcm,
+        case,
+    }
+}
+
+fn input(prepared: &Prepared) -> &[f32] {
+    match prepared.case {
+        0 => prepared.pcm.get(..1024).expect("short frame"),
+        1 => prepared.pcm.get(..1537).expect("padded frame"),
+        2 => prepared.pcm.as_slice(),
+        other => panic!("unknown spectral case {other}"),
+    }
+}
+
+fn analyze(prepared: &Prepared) {
+    let input = input(prepared);
+    let expected = prepared
+        .detector
+        .analyze(input)
+        .expect("the analysis succeeds");
+    let result = prepared.detector.analyze(std::hint::black_box(input));
+    assert_eq!(result.expect("the measured analysis succeeds"), expected);
+}
+
+#[metabench::benchmark(SPECTRAL_ANALYZE, "spectral_beats", "analyze", gungraun_setup = prepare)]
+#[bench::samples_1024(0_usize)]
+#[bench::samples_1537(1_usize)]
+#[bench::seconds_30(2_usize)]
+fn spectral_case(prepared: Prepared) -> Prepared {
+    analyze(&prepared);
+    prepared
+}
+
+fn criterion_benchmarks(c: &mut Criterion) {
     let mut group = c.benchmark_group("spectral_beats");
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(1));
-    for (case, input) in [
-        (
-            "1024_samples",
-            pcm.get(..1024).expect("the excerpt holds a short frame"),
-        ),
-        (
-            "1537_samples",
-            pcm.get(..1537).expect("the excerpt holds a padded frame"),
-        ),
-        ("30s", pcm.as_slice()),
-    ] {
-        let expected = detector.analyze(input).expect("the analysis succeeds");
+    for (case, id) in [("samples_1024", 0), ("samples_1537", 1), ("seconds_30", 2)] {
+        let case_prepared = prepare(id);
+        let input = input(&case_prepared);
+        let expected = case_prepared
+            .detector
+            .analyze(input)
+            .expect("the analysis succeeds");
         group.throughput(Throughput::Elements(
             u64::try_from(input.len()).expect("frame count fits u64"),
         ));
@@ -88,7 +125,9 @@ fn spectral_beats(c: &mut Criterion) {
                 let mut elapsed = Duration::ZERO;
                 for _ in 0..iterations {
                     let start = Instant::now();
-                    let result = black_box(detector.analyze(black_box(input)));
+                    let result = std::hint::black_box(
+                        case_prepared.detector.analyze(std::hint::black_box(input)),
+                    );
                     elapsed += start.elapsed();
                     assert_eq!(result.expect("the measured analysis succeeds"), expected);
                 }
@@ -99,5 +138,8 @@ fn spectral_beats(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, spectral_beats);
-criterion_main!(benches);
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [SPECTRAL_ANALYZE],
+    allocator = std::alloc::System,
+);

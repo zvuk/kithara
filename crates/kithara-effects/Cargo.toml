@@ -47,6 +47,7 @@ kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "mock
 
 criterion = { workspace = true }
 metabench = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 assert_no_alloc = { workspace = true }

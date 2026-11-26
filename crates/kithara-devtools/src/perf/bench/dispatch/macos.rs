@@ -293,18 +293,20 @@ mod tests {
     }
 
     #[test]
-    fn bench_native_ordinary_payload_keeps_all_four_parameters_and_timing() {
+    fn bench_native_ordinary_payload_keeps_source_mode_and_policy_parameters() {
         let request = Request {
             target: "p:b:f".into(),
             filter: "group/(a|b)$; $(false)".into(),
             head: "head".into(),
             base: "base".into(),
+            ..Request::default()
         };
         let variables = variables(&request, None);
         let expected = concat!(
             r#"[{"key":"BENCH_TARGET","value":"p:b:f"},"#,
             r#"{"key":"BENCH_FILTER","value":"group/(a|b)$; $(false)"},"#,
             r#"{"key":"BENCH_REF","value":"head"},{"key":"BENCH_BASE_REF","value":"base"},"#,
+            r#"{"key":"BENCH_MODE","value":"timing"},{"key":"BENCH_ALLOCATOR_POLICY","value":"system"},"#,
             r#"{"key":"RUN_BENCHMARKS","value":"1"}]"#,
         );
         for (controller, path, body) in [
@@ -439,6 +441,8 @@ esac
                 {"key":"BENCH_FILTER", "value":""},
                 {"key":"BENCH_REF", "value":request.head},
                 {"key":"BENCH_BASE_REF", "value":request.base},
+                {"key":"BENCH_MODE", "value":"timing"},
+                {"key":"BENCH_ALLOCATOR_POLICY", "value":"system"},
                 {"key":"BENCH_PREFLIGHT", "value":raw},
             ]})
         );

@@ -83,6 +83,7 @@ wasm-bindgen-test = { workspace = true }
 # Native-only: criterion pulls a native-only toolchain, never wasm.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
+metabench = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-test-dylib = { workspace = true }

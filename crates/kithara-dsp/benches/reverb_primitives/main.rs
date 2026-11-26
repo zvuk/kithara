@@ -1,8 +1,22 @@
 #![forbid(unsafe_code)]
 
-use criterion::{criterion_group, criterion_main};
+include!("suite.rs");
 
-mod suite;
-
-criterion_group!(benches, suite::benchmarks);
-criterion_main!(benches);
+metabench::main!(
+    criterion = benchmarks,
+    benchmarks = [
+        DELAY_DIFFUSE,
+        DELAY_BLEND,
+        ONE_POLE_2_NATIVE,
+        ONE_POLE_2_PROCESS,
+        ONE_POLE_2_SCALAR,
+        ONE_POLE_8_NATIVE,
+        ONE_POLE_8_PROCESS,
+        ONE_POLE_8_SCALAR,
+        BLOCKS_DIFFUSER,
+        BLOCKS_SCALAR,
+        BLOCKS_READ_INTEGER,
+        BLOCKS_READ_FRACTIONAL,
+    ],
+    allocator = std::alloc::System,
+);

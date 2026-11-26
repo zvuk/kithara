@@ -146,6 +146,27 @@ impl Binary {
         Ok(sha256(&fs::read(destination)?))
     }
 
+    pub(super) fn allocate(
+        &self,
+        filter: &str,
+        json: &Path,
+        markdown: &Path,
+        observations: &Path,
+        data: &Path,
+        log: &mut Log,
+    ) -> Result<()> {
+        let mut command = self.command(data);
+        command
+            .env("KITHARA_BENCH_OBSERVATIONS", observations)
+            .args(["--allocations", "--no-baseline", "--export-json"])
+            .arg(json)
+            .arg("--export-md")
+            .arg(markdown)
+            .args(["--criterion-arg", filter]);
+        log.output(&mut command, false)?;
+        Ok(())
+    }
+
     pub(super) fn measure(
         &self,
         filter: &str,

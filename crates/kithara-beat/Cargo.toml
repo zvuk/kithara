@@ -66,6 +66,7 @@ unimock = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
 
 criterion = { workspace = true }
+metabench = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]

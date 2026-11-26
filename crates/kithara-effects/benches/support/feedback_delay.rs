@@ -2,7 +2,11 @@
 //! prepared delay, case parameters and process step, so the timing, guard and
 //! heap artifacts measure one workload with matching case boundaries.
 
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use kithara_effects::{
     DeckEffect,
@@ -23,6 +27,7 @@ pub(crate) const CASES: [(&str, f64); 3] = [
 /// One prepared high-pass feedback-delay case: the constructed delay plus the
 /// stereo impulse input and the wet scratch buffers `process` writes into.
 pub(crate) struct Prepared {
+    pub(crate) identity: String,
     delay: FeedbackDelay,
     input: [Vec<f32>; 2],
     wet: [Vec<f32>; 2],
@@ -44,7 +49,37 @@ pub(crate) fn prepare(frames: f64) -> Prepared {
     input[0][0] = 1.0;
     input[1][0] = -0.5;
     let wet = input.clone();
-    Prepared { delay, input, wet }
+    let id = CASES
+        .iter()
+        .find_map(|(id, value)| (*value == frames).then_some(id))
+        .expect("declared feedback-delay case");
+    Prepared {
+        identity: format!("{GROUP}/high_pass/{id}"),
+        delay,
+        input,
+        wet,
+    }
+}
+
+/// Append one owner-observation record when the canonical runner requests it.
+pub(crate) fn observe(identity: &str, observation: &serde_json::Value) {
+    let Some(path) = std::env::var_os("KITHARA_BENCH_OBSERVATIONS") else {
+        return;
+    };
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .expect("open benchmark observations");
+    serde_json::to_writer(
+        &mut file,
+        &serde_json::json!({
+            "identity": identity,
+            "observation": observation,
+        }),
+    )
+    .expect("write benchmark observation");
+    file.write_all(b"\n").expect("terminate observation");
 }
 
 /// One stereo `process` pass over the prepared delay.
