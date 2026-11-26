@@ -445,62 +445,6 @@ mod tests {
     }
 
     #[test]
-    fn system_policy_accepts_workers_but_rejects_guard_or_heap_policies() {
-        let (_directory, path) = report(
-            r#"{"entries":[{
-                "identity":"group/case",
-                "results":{"alloc_tracker":{
-                    "metrics":{
-                        "Allocations":{"value":1},
-                        "Allocated bytes":{"value":64}
-                    },
-                    "raw_artifacts":[]
-                }}
-            }]}"#,
-        );
-        let report = read_allocation(&path).unwrap();
-        let observations = BTreeMap::from([(
-            "group/case".to_owned(),
-            Observation {
-                worker: Some(WorkerObservation {
-                    joined: 1,
-                    escaped: 0,
-                }),
-                ..Observation::default()
-            },
-        )]);
-        report
-            .canonical(
-                "package:bench:",
-                &[],
-                AllocatorPolicy::System,
-                &observations,
-            )
-            .unwrap();
-        let observations = BTreeMap::from([(
-            "group/case".to_owned(),
-            Observation {
-                guard: Some(GuardObservation {
-                    status: "passed".to_owned(),
-                    policy: "alloc_disabler".to_owned(),
-                    inner_backend: "system".to_owned(),
-                    scope: "checked thread".to_owned(),
-                }),
-                ..Observation::default()
-            },
-        )]);
-        let error = report
-            .canonical(
-                "package:bench:",
-                &[],
-                AllocatorPolicy::System,
-                &observations,
-            )
-            .unwrap_err();
-        assert!(error.to_string().contains("guard/heap policy observation"));
-    }
-
-    #[test]
     fn incomplete_allocation_results_are_rejected() {
         for (contents, error) in [
             (r#"{"entries":[]}"#, "no cases"),

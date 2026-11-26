@@ -23,14 +23,13 @@ track. A player plays once it is inserted into a `kithara-host` Host.
 
 ```rust
 use kithara_assets::AssetStore;
-use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
 use kithara_play::{ResourceConfig, ResourceSrc};
 
-pool_schema! {
-    pub AppPools {
-        bytes: u8,
-        samples: f32,
-    }
+#[derive(Pool)]
+pub struct AppPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
 let config = || PoolConfig::builder().max_buffers(128).build();

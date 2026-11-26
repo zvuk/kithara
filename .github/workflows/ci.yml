@@ -83,6 +83,7 @@ jobs:
 
       - name: Validate actor and runner labels
         env:
+          EVENT_NAME: ${{ github.event_name }}
           ACTOR: ${{ github.actor }}
           OWNER: ${{ github.repository_owner }}
           RUNNER_LABELS: ${{ vars.KITHARA_RUNNER_LABELS }}

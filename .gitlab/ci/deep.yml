@@ -74,24 +74,32 @@ deep:bench:
       - bench-results/
 
 .deps-job:
-  extends:
-    - .macos-job
-    - .rules-weekly
+  extends: .linux-pool-job
   stage: deep
+  interruptible: false
   needs: []
+  rules:
+    - !reference [.linux-pool, rules]
+    - !reference [.rules-weekly, rules]
+
+# The audits a review asks for. A weekly sweep runs them too.
+.deps-review-job:
+  extends: .deps-job
+  interruptible: true
+  rules:
+    - !reference [.linux-pool, rules]
+    - !reference [.rules-verify-and-branch, rules]
+    - !reference [.rules-weekly, rules]
 
 # Licence and source policy stays on every import path. Advisories have their
 # own job so an unrelated review does not inherit a newly published advisory;
-# the weekly sweep always runs it, and quarantine compares only dependency
-# resolution inputs against the exact base the bridge verified.
+# the weekly sweep and the default branch always run it, and a review compares
+# only dependency resolution inputs against the exact base the bridge verified.
 deps:deny:
-  extends: .deps-job
+  extends: .deps-review-job
   timeout: 30 minutes
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "weekly"
-    - if: $KITHARA_PIPELINE_KIND == "quarantine"
   script:
-    - just ci run deps-deny
+    - just ci lane deps-deny --kind "$KITHARA_PIPELINE_KIND"
   artifacts:
     when: always
     expire_in: 30 days
@@ -102,18 +110,28 @@ deps:deny:
 deps:advisories:
   extends: .deps-job
   timeout: 30 minutes
+  interruptible: true
   rules:
+    - !reference [.linux-pool, rules]
     - if: $KITHARA_PIPELINE_KIND == "weekly"
+      interruptible: false
+    - if: $KITHARA_PIPELINE_KIND == "main"
+      interruptible: false
+    # A branch pushed straight to GitLab has no verified base to compare with.
+    - if: $KITHARA_QUARANTINE_BASE_SHA == null
+      when: never
     - if: $KITHARA_PIPELINE_KIND == "quarantine"
-      changes:
+      changes: &advisory-inputs
         paths:
           - Cargo.lock
           - "**/Cargo.toml"
           - deny.toml
           - .cargo/config.toml
         compare_to: $KITHARA_QUARANTINE_BASE_SHA
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+      changes: *advisory-inputs
   script:
-    - just ci run deps-advisories
+    - just ci lane deps-advisories --kind "$KITHARA_PIPELINE_KIND"
   artifacts:
     when: always
     expire_in: 30 days
@@ -122,37 +140,45 @@ deps:advisories:
       - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
 
 deps:unused:
-  extends: .deps-job
+  extends: .deps-review-job
   timeout: 30 minutes
   script:
-    - just ci run deps-unused
+    - just ci lane deps-unused --kind "$KITHARA_PIPELINE_KIND"
 
 deps:publish:
   extends: .deps-job
-  timeout: 60 minutes
+  # GitHub runs it on the other kinds; a GitLab-only profile takes those too.
   rules:
-    - if: $KITHARA_PIPELINE_KIND == "weekly"
-    - if: $KITHARA_PIPELINE_KIND == "quarantine"
+    - !reference [.linux-pool, rules]
+    - !reference [.rules-weekly, rules]
+    - !reference [.gitlab-only-branch-main-merge-request-nightly, rules]
+  timeout: 60 minutes
   script:
-    - just ci run crates-publish
+    - just ci lane crates-publish --kind "$KITHARA_PIPELINE_KIND"
 
 deps:shear:
   extends: .deps-job
+  # GitHub runs it on the other kinds; a GitLab-only profile takes those too.
+  rules:
+    - !reference [.linux-pool, rules]
+    - !reference [.rules-weekly, rules]
+    - !reference [.gitlab-only-nightly, rules]
   timeout: 30 minutes
   script:
-    - just ci run deps-shear
+    - just ci lane deps-shear --kind "$KITHARA_PIPELINE_KIND"
 
 deps:features:
   extends: .deps-job
   timeout: 3 hours
   script:
-    - just ci run deps-features-full
+    - just ci lane deps-features-full --kind "$KITHARA_PIPELINE_KIND"
 
 deps:semver:
   extends: .deps-job
   timeout: 60 minutes
   rules:
+    - !reference [.linux-pool, rules]
     - !reference [.rules-weekly, rules]
     - if: $KITHARA_PIPELINE_KIND == "release"
   script:
-    - just ci run deps-semver
+    - just ci lane deps-semver --kind "$KITHARA_PIPELINE_KIND"

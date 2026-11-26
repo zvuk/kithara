@@ -2,8 +2,9 @@ id: perf.no-manual-pool-registration
 message: |
   Implementing typed pool registration by hand can attach forged slots or
   detach them from the owning region budget. Declare registrations only with
-  `pool_schema!`; its generated `HasPool<K>` implementations preserve region
-  provenance and keep unregistered keys as compile-time errors.
+  `#[derive(Pool)]` over private `PoolSlot<K>` fields; its generated
+  `HasPool<K>` implementations preserve region provenance and keep
+  unregistered keys as compile-time errors.
 severity: error
 language: Rust
 files:

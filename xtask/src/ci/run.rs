@@ -12,6 +12,7 @@ use kithara_devtools::{
     Ctx,
     common::{project::ProjectConfig, tools::ToolsConfig},
 };
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use super::{
@@ -87,7 +88,7 @@ impl Lane {
     /// The residual lanes, by the name a pipeline schedules them under. They
     /// are matched before the configuration is consulted, so a declared lane
     /// cannot shadow one of them.
-    const RESIDUAL: [Self; 8] = [
+    pub(crate) const RESIDUAL: [Self; 8] = [
         Self::AppleSwiftTest,
         Self::AppleIosTest,
         Self::ReleaseXcframework,
@@ -154,7 +155,8 @@ impl Lane {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum PipelineKind {
     Bench,
     Branch,
@@ -976,28 +978,27 @@ mod tests {
     }
 
     #[test]
-    fn reviewed_pipelines_run_the_explicit_flash_and_no_block_gate() {
-        for kind in [
-            PipelineKind::MergeRequest,
-            PipelineKind::Quarantine,
-            PipelineKind::Main,
-            PipelineKind::Platforms,
-            PipelineKind::Nightly,
-            PipelineKind::Release,
+    fn apple_suite_scope() {
+        for (kind, review) in [
+            (PipelineKind::MergeRequest, true),
+            (PipelineKind::Quarantine, true),
+            (PipelineKind::Main, false),
+            (PipelineKind::Platforms, false),
+            (PipelineKind::Nightly, false),
+            (PipelineKind::Release, false),
         ] {
             let (args, _) = gate("apple-test", kind);
-
+            let mut expected = vec!["test", "run"];
+            if review {
+                expected.push("--lane=apple");
+            }
+            expected.extend(["--flash=on", "--no-block=on", "--profile", "ci"]);
+            assert_eq!(args, expected);
+            let (outcome, steps) = resolve("apple-test", kind);
+            outcome.unwrap();
             assert_eq!(
-                args,
-                [
-                    "test",
-                    "run",
-                    "--flash=on",
-                    "--no-block=on",
-                    "--profile",
-                    "ci"
-                ],
-                "{kind:?} must run the explicit gate"
+                steps.iter().filter(|step| step.program == "just").count(),
+                1
             );
         }
     }
@@ -1015,6 +1016,7 @@ mod tests {
                 "test",
                 "run",
                 "--draft",
+                "--lane=apple",
                 "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
                 "--flash=on",
                 "--no-block=on",
@@ -1052,19 +1054,31 @@ mod tests {
         assert_eq!(label, "full lint gate");
     }
 
-    /// The xtask tests resolve the shipped package graph and the configured
-    /// lane commands, so a review has to run them; only the ratchets that
-    /// guard a baseline wait for the default branch.
     #[test]
-    fn a_review_lints_through_the_chain_that_runs_the_xtask_tests() {
-        for kind in [
-            PipelineKind::Branch,
-            PipelineKind::MergeRequest,
-            PipelineKind::Quarantine,
+    fn apple_lint_scope() {
+        for (kind, expected) in [
+            (PipelineKind::Branch, ["check", "clippy"]),
+            (PipelineKind::MergeRequest, ["check", "clippy"]),
+            (PipelineKind::Quarantine, ["check", "clippy"]),
+            (PipelineKind::Main, ["lint", "full"]),
         ] {
-            let (args, _) = gate("apple-lint", kind);
+            assert_eq!(gate("apple-lint", kind).0, expected);
+        }
+    }
 
-            assert_eq!(args, ["lint", "gate"], "{}", kind.name());
+    #[test]
+    fn apple_test_utils_scope() {
+        for (kind, admitted) in [
+            (PipelineKind::Quarantine, false),
+            (PipelineKind::Main, true),
+        ] {
+            let (outcome, steps) = resolve("apple-test-utils", kind);
+            assert_eq!(outcome.is_ok(), admitted);
+            if admitted {
+                assert_eq!(gate("apple-test-utils", kind).0, ["test", "test-utils"]);
+            } else {
+                assert!(steps.is_empty());
+            }
         }
     }
 
@@ -1186,12 +1200,14 @@ mod tests {
         for entry in fs::read_dir(&directory).expect("pipeline directory is readable") {
             let path = entry.expect("pipeline entry is readable").path();
             let text = fs::read_to_string(&path).expect("pipeline file is UTF-8");
-            lanes.extend(
-                text.split("ci run ")
-                    .skip(1)
-                    .filter_map(|rest| rest.split_whitespace().next())
-                    .map(str::to_string),
-            );
+            for invocation in ["ci run ", "ci lane "] {
+                lanes.extend(
+                    text.split(invocation)
+                        .skip(1)
+                        .filter_map(|rest| rest.split_whitespace().next())
+                        .map(str::to_string),
+                );
+            }
         }
         lanes
     }
@@ -1677,19 +1693,19 @@ mod tests {
         }
     }
 
-    /// `kinds` is GitLab's membership and `kinds_github` is GitHub's, so a
+    /// `kinds_gitlab` is GitLab's membership and `kinds_github` is GitHub's, so a
     /// lane claiming a pipeline kind here is claiming a GitLab job runs it.
     #[test]
     fn a_lane_that_claims_a_pipeline_kind_has_a_pipeline_job() {
         let scheduled = scheduled_lanes();
         for (name, lane) in declared_lanes() {
-            if lane.kinds.is_empty() {
+            if lane.kinds_gitlab.is_empty() {
                 continue;
             }
             assert!(
                 scheduled.contains(&name),
                 "the {name} lane claims {:?}, but no pipeline job runs it",
-                lane.kinds
+                lane.kinds_gitlab
             );
         }
     }
@@ -1703,10 +1719,7 @@ mod tests {
         for (name, lane) in declared_lanes() {
             assert!(
                 scheduled.contains(&name)
-                    || lane
-                        .kinds_github
-                        .as_ref()
-                        .is_some_and(|kinds| !kinds.is_empty())
+                    || !lane.kinds_github.is_empty()
                     || consts::BY_NAME_ONLY.contains(&name.as_str()),
                 "nothing reaches the {name} lane: no pipeline job runs it, it claims no \
                  GitHub pipeline kind, and it is not named as reachable by name alone"

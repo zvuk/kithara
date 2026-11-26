@@ -73,6 +73,12 @@ on:
         description: Stable runner label for a lane-owned persistent build cache.
         default: ""
         type: string
+      os:
+        description: >-
+          The pool the selection placed the lane on. Each pool takes its
+          runner labels from its own variable.
+        default: linux
+        type: string
       bench_target:
         type: string
         default: ""
@@ -126,7 +132,7 @@ jobs:
   # the tree says which lanes ran only through the API.
   run:
     name: ${{ inputs.lane }}
-    runs-on: ${{ inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    runs-on: ${{ inputs.runner || (inputs.os == 'macos' && fromJSON(vars.KITHARA_MACOS_RUNNER_LABELS)) || fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
 
     steps:

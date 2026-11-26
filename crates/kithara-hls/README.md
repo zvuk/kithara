@@ -20,14 +20,13 @@ HLS (HTTP Live Streaming) VOD orchestration: playlist parsing, segment fetching,
 
 ```rust
 use kithara_assets::AssetStore;
-use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
 use kithara_hls::{Hls, HlsConfig};
 use kithara_stream::Stream;
 
-pool_schema! {
-    AppPools {
-        bytes: u8,
-    }
+#[derive(Pool)]
+struct AppPools {
+    bytes: PoolSlot<u8>,
 }
 
 let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))

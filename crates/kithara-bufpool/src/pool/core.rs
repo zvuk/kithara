@@ -95,6 +95,7 @@ where
         }
         Ok(core)
     }
+
     pub(crate) fn acquire(self: &Arc<Self>) -> OwnedBuffer<SHARDS, B, OBSERVE> {
         let shard_idx = Self::shard_index();
         let value = self.shards[shard_idx]

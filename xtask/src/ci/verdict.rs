@@ -580,7 +580,11 @@ fn expected_producers<'a>(
 ) -> Result<Vec<ExpectedProducer<'a>>> {
     let mut producers = Vec::new();
     for (name, lane) in &ci.lanes {
-        if !lane.kinds.iter().any(|candidate| candidate == kind.name()) {
+        if !lane
+            .kinds_gitlab
+            .iter()
+            .any(|candidate| candidate == kind.name())
+        {
             continue;
         }
         for step in &lane.steps {

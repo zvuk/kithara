@@ -16,7 +16,7 @@ no-block = ["kithara-platform/no-block"]
 
 [dependencies]
 kithara-config = { workspace = true }
-kithara-derive = { workspace = true, features = ["patch"] }
+kithara-derive = { workspace = true, features = ["patch", "pool"] }
 kithara-platform = { workspace = true }
 kithara-ring = { workspace = true }
 

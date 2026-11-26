@@ -4799,6 +4799,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-analyze"
+version = "0.0.1-alpha5"
+dependencies = [
+ "axum",
+ "clap",
+ "kithara",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kithara-android"
 version = "0.0.1-alpha5"
 dependencies = [
@@ -5075,6 +5093,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "metabench",
  "num-traits",
  "ort",
  "rten",
@@ -5274,6 +5293,7 @@ dependencies = [
  "kithara-config",
  "kithara-test-dylib",
  "kithara-test-utils",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "serde",
@@ -5391,6 +5411,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "metabench",
  "num-traits",
  "realfft",
  "rustfft",
@@ -5428,8 +5449,10 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "metabench",
  "num-traits",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -6067,6 +6090,7 @@ dependencies = [
  "kithara-test-utils",
  "libc",
  "loom",
+ "metabench",
  "parking_lot",
  "parking_lot_core",
  "pin-project-lite",
@@ -6341,6 +6365,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "metabench",
  "num-traits",
  "rubato",
  "serde",
@@ -6855,6 +6880,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "kithara-workspace-hack",
+ "metabench",
  "num-traits",
  "rangemap",
  "serde_json",
@@ -6876,6 +6902,7 @@ dependencies = [
  "kithara-test-utils",
  "kithara-worker",
  "kithara-workspace-hack",
+ "metabench",
  "rayon",
  "serde",
  "thiserror 2.0.21",
@@ -6905,6 +6932,8 @@ dependencies = [
  "crc32fast",
  "crossbeam-utils",
  "dasp_sample",
+ "derive_more",
+ "derive_more-impl",
  "digest 0.10.7",
  "dispatch2",
  "either",
@@ -6963,6 +6992,7 @@ dependencies = [
  "syn 2.0.119",
  "syn 3.0.6",
  "sync_wrapper",
+ "tempfile",
  "thiserror 2.0.21",
  "thunderdome",
  "time",
@@ -6973,6 +7003,7 @@ dependencies = [
  "tracing",
  "tracing-core",
  "typenum",
+ "unicode-width 0.2.2",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",

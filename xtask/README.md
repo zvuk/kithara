@@ -52,6 +52,25 @@ policy and counters come directly from daemon IPC, avoiding blob extent scans.
 
 ## Common Commands
 
+`just ci plan --catalog` prints the complete validation inventory and its digest,
+including residual/dedicated families and classified native entrypoints.
+`just ci plan --request request.json --policy policy.json` resolves a read-only
+plan. Request identity records the repository, head/base, expected purpose trees
+and trusted policy revision. The protected policy supplies the matching catalog
+digest, logical platform axes, abstract enabled pools and one assignment per check.
+Inherited native timeouts must be frozen explicitly; unknown budgets or unavailable
+required pools reject planning before job admission. Full validation includes every
+validation family while publication, signing, diagnostics and provisioning retain
+their separate execution authorities.
+
+Logical contracts include resolved lane arguments, test/build configuration, pins,
+reports, acceptance, dependencies and source/merge purpose. Placement and pool
+availability change the execution generation without rewriting logical coverage.
+`just ci plan --legacy` fingerprints the current active selector across every
+kind/role/provider and path/manual-selection case. Existing `ci lanes` consumers
+remain authoritative until the mirrored frontend handover; planning does not
+dispatch work, change masks or install runners.
+
 - `just lint` runs the architecture, style, and Rust-idiom checks.
 - `just lint ast-grep` runs the rules under `.config/ast-grep/`.
 - `just fmt` formats Rust, Cargo manifests, non-Cargo TOML, and JSON/JSONC.

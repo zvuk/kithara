@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use sha2::{Digest as _, Sha256};
 
-use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor};
+use super::profile::{LinuxHost, LinuxRunner, RunnerFlavor, RunnerTarget};
 use crate::{
     ci::{config::CiPins, image::floating_tag},
     consts,
@@ -25,10 +26,9 @@ pub(super) struct Container<'a> {
     /// [`super::cpu::assignments`].
     pub(super) cpuset: String,
     pub(super) memory: &'a str,
-    /// The slice that caps the fleet as a whole. A runner's own `memory` never
-    /// fired: the host livelocked on the sum of ceilings several times its
-    /// memory, so every container draws on one budget instead.
-    pub(super) cgroup_parent: &'static str,
+    /// The resource slice below the fleet budget. Native workers each have
+    /// an aggregate PID limit shared by their build, helper and services.
+    pub(super) cgroup_parent: String,
     pub(super) devices: &'a [PathBuf],
     pub(super) groups: &'a [u32],
     /// Where the just-in-time registration is left for it. Minted per start and
@@ -40,6 +40,19 @@ pub(super) struct Container<'a> {
 }
 
 impl Container<'_> {
+    pub(super) fn cgroup_parent(runner: &LinuxRunner) -> String {
+        if matches!(runner.target, RunnerTarget::Gitlab { .. }) {
+            format!(
+                "{}-{}.slice",
+                consts::SERVICE_SLICE.trim_end_matches(".slice"),
+                hex::encode(Sha256::digest(runner.name.as_bytes()))
+            )
+        } else {
+            consts::SERVICE_SLICE.to_owned()
+        }
+    }
+    pub(super) const WORKSPACE: &'static str = "/runner/_work";
+    pub(super) const CACHE: &'static str = "/cache";
     /// The volumes this runner mounts.
     ///
     /// The build root is the runner's own: one job runs per container, and the
@@ -58,7 +71,18 @@ impl Container<'_> {
     /// Gradle asks the holder of a cache lock to release it over loopback, and
     /// separate containers do not share one.
     pub(super) fn mounts(host: &LinuxHost, runner: &LinuxRunner) -> Vec<(String, &'static str)> {
-        let mut mounts = vec![
+        let mut mounts = Vec::new();
+        if matches!(runner.target, RunnerTarget::Gitlab { .. }) {
+            mounts.push((
+                host.cache_root
+                    .join("gitlab-cache")
+                    .join(&runner.name)
+                    .to_string_lossy()
+                    .into_owned(),
+                Self::CACHE,
+            ));
+        }
+        mounts.extend([
             (
                 Self::cargo_home(host, runner)
                     .to_string_lossy()
@@ -71,7 +95,7 @@ impl Container<'_> {
                     .join(&runner.name)
                     .to_string_lossy()
                     .into_owned(),
-                "/runner/_work",
+                Self::WORKSPACE,
             ),
             (
                 Self::build_root(host, runner)
@@ -99,7 +123,7 @@ impl Container<'_> {
                     .into_owned(),
                 consts::PREVIOUS_LANES_MOUNT,
             ),
-        ];
+        ]);
         if matches!(runner.flavor, RunnerFlavor::Android) {
             mounts.push((
                 host.cache_root
@@ -204,6 +228,10 @@ impl Container<'_> {
                 .iter()
                 .map(|(name, value)| format!("{name}={value}")),
         );
+        if matches!(runner.target, RunnerTarget::Gitlab { .. }) {
+            environment.retain(|entry| !entry.starts_with("SCCACHE_BASEDIRS="));
+            environment.push("SCCACHE_BASEDIRS=$CI_PROJECT_DIR".to_owned());
+        }
         environment
     }
 
@@ -228,9 +256,11 @@ impl Container<'_> {
 /// The image a runner's unit starts from: the floating tag of its flavour's
 /// pin, which is the tag the machine holds.
 pub(super) fn image(runner: &LinuxRunner, pins: &CiPins) -> Result<String> {
-    floating_tag(match runner.flavor {
-        RunnerFlavor::Plain => &pins.linux_runner_image,
-        RunnerFlavor::Android => &pins.linux_android_runner_image,
+    floating_tag(match (&runner.target, runner.flavor) {
+        (RunnerTarget::Github { .. }, RunnerFlavor::Plain) => &pins.linux_runner_image,
+        (RunnerTarget::Github { .. }, RunnerFlavor::Android) => &pins.linux_android_runner_image,
+        (RunnerTarget::Gitlab { .. }, RunnerFlavor::Plain) => &pins.linux_image,
+        (RunnerTarget::Gitlab { .. }, RunnerFlavor::Android) => &pins.linux_android_image,
     })
 }
 
@@ -246,7 +276,7 @@ pub(super) fn container<'a>(
         network: &host.network,
         cpuset,
         memory: &runner.memory,
-        cgroup_parent: consts::SERVICE_SLICE,
+        cgroup_parent: Container::cgroup_parent(runner),
         devices: &runner.devices,
         groups: &runner.groups,
         env_file: super::services::env_file(runner),

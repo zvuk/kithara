@@ -30,13 +30,7 @@ fn publication_is_a_verified_gate_for_review_main_and_dispatch() {
             "{kind}"
         );
     }
-    assert!(
-        lane["kinds"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|kind| kind.as_str() == Some("quarantine"))
-    );
+    assert_eq!(strings(&lane["kinds_gitlab"]), ["weekly"]);
     let steps = lane["steps"].as_array().expect("publication steps");
     assert_eq!(steps.len(), 1);
     let args: Vec<_> = steps[0]["args"]
@@ -429,7 +423,7 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
             roles.contains(&role.to_owned()),
             "lane `{name}` has unknown role `{role}`"
         );
-        for field in ["kinds", "kinds_github"] {
+        for field in ["kinds_gitlab", "kinds_github"] {
             let Some(listed) = lane.get(field).and_then(toml::Value::as_array) else {
                 continue;
             };
@@ -444,17 +438,10 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
     }
 }
 
-/// The kinds a lane enters the GitHub fan-out under: its own `kinds_github`
-/// where it is declared, the shared `kinds` otherwise, and none at all for a lane
-/// that cannot run on Linux, because that fan-out has only Linux machines.
+/// The kinds a lane enters the GitHub fan-out under. GitHub reads its own
+/// list alone; a missing list is an empty one.
 fn github_membership(lane: &toml::Value) -> Vec<&str> {
-    let os = lane.get("os").map_or_else(Vec::new, strings);
-    if !os.contains(&"linux") {
-        return Vec::new();
-    }
-    lane.get("kinds_github")
-        .or_else(|| lane.get("kinds"))
-        .map_or_else(Vec::new, strings)
+    lane.get("kinds_github").map_or_else(Vec::new, strings)
 }
 
 fn strings(value: &toml::Value) -> Vec<&str> {
@@ -513,10 +500,8 @@ fn a_ready_pull_request_schedules_exactly_the_lanes_a_branch_push_does() {
 
 /// The product suite is what a `test run` naming no lane runs. Every lane a
 /// branch push schedules for it runs one command, apart from the toggles it
-/// asks for, so the clocks it is run under are the only difference between
-/// their counts. That command is the same on every kind: a branch push runs it
-/// over the draft scope by its kind alone, and only the Apple gate names the
-/// selection a branch verdict reads.
+/// asks for. Apple review kinds select the Apple lane, and branch runs name
+/// the selection a branch verdict reads.
 #[test]
 fn the_product_suite_lanes_differ_only_in_their_toggles_and_run_one_command_on_every_kind() {
     let config = xtask_config();
@@ -545,15 +530,21 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_run_one_command_on_e
                 .unwrap_or_default();
             if name == "apple-test" {
                 let mut branch = args.clone();
+                branch.insert(2, "--lane=apple");
                 branch.insert(
-                    2,
+                    3,
                     "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
                 );
                 assert_eq!(
                     by_kind.keys().map(String::as_str).collect::<Vec<_>>(),
-                    ["branch"],
-                    "the Apple gate adds only the branch selection"
+                    ["branch", "merge-request", "quarantine"],
+                    "the Apple gate narrows review kinds"
                 );
+                let mut review = args.clone();
+                review.insert(2, "--lane=apple");
+                for kind in ["merge-request", "quarantine"] {
+                    assert_eq!(strings(&by_kind[kind]), review);
+                }
                 assert_eq!(
                     strings(&by_kind["branch"]),
                     branch,
@@ -601,7 +592,8 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_run_one_command_on_e
 /// The suites `just test` does not carry run under their own configuration,
 /// each in a lane of its own that names it alone: whole on a ready pull
 /// request and the default branch, and over the draft scope on a branch push,
-/// which the branch kind alone asks for.
+/// which the branch kind alone asks for. Either provider may be the one that
+/// runs them.
 #[test]
 fn every_own_configuration_suite_is_a_lane_of_every_reviewed_kind() {
     let config = xtask_config();
@@ -640,7 +632,8 @@ fn every_own_configuration_suite_is_a_lane_of_every_reviewed_kind() {
                 "lane `{name}` runs `{suite}` differently on some kind"
             );
         }
-        let kinds = github_membership(lane);
+        let mut kinds = github_membership(lane);
+        kinds.extend(lane.get("kinds_gitlab").map_or_else(Vec::new, strings));
         for kind in ["branch", "merge-request", "main"] {
             assert!(
                 kinds.contains(&kind),
@@ -651,19 +644,36 @@ fn every_own_configuration_suite_is_a_lane_of_every_reviewed_kind() {
 }
 
 #[test]
-fn github_membership_keeps_an_explicit_empty_list_distinct_from_absence() {
-    for (declaration, expected) in [
-        ("", vec!["weekly"]),
-        ("kinds_github = []", Vec::new()),
-        (
-            "kinds_github = [\"main\", \"nightly\"]",
-            vec!["main", "nightly"],
-        ),
-    ] {
-        let lane: toml::Value = toml::from_str(&format!(
-            "os = \"linux\"\nkinds = [\"weekly\"]\n{declaration}\n"
-        ))
-        .expect("the membership fixture parses");
-        assert_eq!(github_membership(&lane), expected);
-    }
+fn apple_test_lane_matches_target_dependencies() {
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .current_dir(workspace_root())
+        .no_deps()
+        .exec()
+        .expect("workspace metadata loads");
+    let config = xtask_config();
+    let apple = &config["test"]["lanes"]["apple"];
+    let actual: std::collections::BTreeSet<_> =
+        strings(&apple["cargo"]["packages"]).into_iter().collect();
+    let expected: std::collections::BTreeSet<_> = metadata
+        .workspace_packages()
+        .into_iter()
+        .filter(|package| {
+            package.dependencies.iter().any(|dependency| {
+                dependency.target.as_ref().is_some_and(|target| {
+                    let cfg = target.to_string();
+                    ["apple", "macos", "ios"]
+                        .iter()
+                        .any(|name| cfg.contains(name))
+                })
+            })
+        })
+        .map(|package| package.name.as_str())
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "Apple lane differs from target dependencies"
+    );
+    let workspace = &config["test"]["lanes"]["workspace"];
+    assert_eq!(apple["default_features"], workspace["default_features"]);
+    assert_eq!(apple["cargo"]["profile"], workspace["cargo"]["profile"]);
 }

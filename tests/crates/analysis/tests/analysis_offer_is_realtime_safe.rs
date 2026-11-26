@@ -46,7 +46,7 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates(quarter: Vec<f32>, #[ca
         .cancel(cancel)
         .build(),
     );
-    let (_analysis, mut producer) = worker
+    let (_analysis, mut producer, _completion) = worker
         .analyze(
             stalled_reader(spec),
             "rt-track".into(),

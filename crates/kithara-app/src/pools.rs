@@ -1,6 +1,6 @@
 use kithara::{
     assets::AssetStore,
-    bufpool::{OverallBudget, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, pool_schema},
+    bufpool::{OverallBudget, Pool, PoolConfig, PoolConfigPatch, PoolError, PoolRegion, PoolSlot},
     host::{Host, HostConfig, HostCore, HostSettings},
     link::{LinkedConfig, LinkedFactory, LinkedHost, LinkedHostConfig, LinkedHostDeck},
     play::{PlayError, PlayWorker, PlaybackResamplerBackend, PlayerFactory, ResourceConfig},
@@ -18,12 +18,11 @@ mod consts {
     pub(super) const SAMPLE_MAX_RETAINED_CAPACITY: usize = 200_000;
 }
 
-pool_schema! {
-    /// Buffer pools owned by the desktop application composition root.
-    pub AppPools {
-        bytes: u8,
-        samples: f32,
-    }
+/// Buffer pools owned by the desktop application composition root.
+#[derive(Pool)]
+pub struct AppPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
 /// Concrete buffer-pool facade used by the desktop application.
@@ -74,9 +73,9 @@ pub(crate) fn factory(settings: HostSettings) -> LinkedFactory<PlayerFactory> {
 }
 
 /// What a document can say about this application's buffer pools: the region's
-/// own byte budget, then one field per pool the `pool_schema!` invocation above
+/// own byte budget, then one field per pool the `AppPools` schema above
 /// declares. There is no shared region type to derive a patch on, because
-/// `pool_schema!` generates a region per consumer.
+/// every consumer declares its own schema.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]

@@ -10,7 +10,7 @@ use tracing::info;
 
 use super::{
     container::Container,
-    profile::{LinuxHost, LinuxRunner, WindowsGuest},
+    profile::{LinuxHost, LinuxRunner, RunnerTarget, WindowsGuest},
 };
 use crate::{
     ci::{cache::client_environment, kache},
@@ -55,7 +55,10 @@ struct JitRequest<'a> {
 /// and expires with the job it serves. The token that mints it stays on the
 /// host: only the generated configuration reaches the container.
 pub(super) fn configure(host: &LinuxHost, runner: &LinuxRunner, env_file: &Path) -> Result<()> {
-    let credential = host.credential(&runner.repository)?;
+    let RunnerTarget::Github { repository } = &runner.target else {
+        bail!("GitLab workers require native manager configuration");
+    };
+    let credential = host.credential(repository)?;
     let token = read_token(&credential.token_file)?;
     let client = client(&token)?;
     let endpoint = format!(
@@ -286,9 +289,18 @@ fn read_token(path: &Path) -> Result<String> {
 
 /// Credentials reach disk unreadable to anyone but their owner, and never pass
 /// through a command line where every process on the machine could read them.
-fn write_secret(path: &Path, contents: &str) -> Result<()> {
-    fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
-    super::permissions::set_mode(path, consts::OWNER_ONLY)
+pub(super) fn write_secret(path: &Path, contents: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("credential file has no parent directory")?;
+    fs::create_dir_all(parent).context("creating credential directory")?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent).context("staging credentials")?;
+    std::io::Write::write_all(&mut staged, contents.as_bytes())?;
+    super::permissions::set_mode(staged.path(), consts::OWNER_ONLY)?;
+    staged
+        .persist(path)
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
