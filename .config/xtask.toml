@@ -322,6 +322,7 @@ network-manual = "it reaches hosts only the corporate network resolves, and no r
 doc = "doc-tests run under `cargo test`, which leaves no per-test verdict a campaign can count"
 ui-doc = "doc-tests run under `cargo test`, which leaves no per-test verdict a campaign can count"
 selenium-firefox = "it drives a real browser under `cargo test`, which leaves no per-test verdict a campaign can count"
+apple = "a review selection of the workspace, tooling and ui lanes' packages in one Apple build; the month repeats each of those lanes it can, and `ui` is exempt above"
 
 [stress.artifacts]
 attempts = "attempts.json"
@@ -676,6 +677,36 @@ cargo.exclude = [
   "kithara-test-macros",
   "kithara-ffi-web-tests",
   "kithara-ffi-web-analysis-tests",
+]
+cargo.profile = "test-release"
+
+[test.lanes.apple]
+default_features = []
+cargo.packages = [
+  "kithara-app",
+  "kithara-app-document",
+  "kithara-app-library",
+  "kithara-apple",
+  "kithara-audio-tests",
+  "kithara-decode",
+  "kithara-decode-tests",
+  "kithara-dsp",
+  "kithara-effects-tests",
+  "kithara-ffi",
+  "kithara-hls-keys-tests",
+  "kithara-hls-tests",
+  "kithara-integration-tests",
+  "kithara-net",
+  "kithara-platform",
+  "kithara-play-tests",
+  "kithara-queue-network-tests",
+  "kithara-queue-tests",
+  "kithara-queue-zvuk-tests",
+  "kithara-resampler",
+  "kithara-sync-tests",
+  "kithara-test-utils",
+  "kithara-ui",
+  "kithara-workspace-hack",
 ]
 cargo.profile = "test-release"
 
@@ -1536,6 +1567,11 @@ pr_review_line_limit = 5000
 
 # Lanes that are nothing but the work they ask the executor for. A lane needs a
 # function only when a parameter cannot say what it does.
+#
+# `kinds` places a lane on GitLab and `kinds_github` on GitHub. The dependency
+# audits, the tooling lane and the lint gate run on GitLab's Linux pool, and
+# the bridge shows their results on the pull request; an empty GitHub list
+# turns the GitHub copy off, and restoring its kinds turns it back on.
 [ext.ci.lanes.deps-deny]
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "host"
@@ -1553,8 +1589,17 @@ steps = [
   ], label = "licence and source gate" },
 ]
 role = "gate"
-kinds = ["weekly", "quarantine"]
-kinds_github = ["main", "branch", "merge-request"]
+kinds_gitlab = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+  "weekly",
+]
+kinds_github = []
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-advisories]
@@ -1572,8 +1617,8 @@ steps = [
   ], label = "RustSec advisory gate" },
 ]
 role = "gate"
-kinds = ["weekly", "quarantine"]
-kinds_github = ["main", "branch", "merge-request"]
+kinds_gitlab = ["branch", "quarantine", "main", "weekly"]
+kinds_github = []
 path_globs = ["Cargo.lock", "**/Cargo.toml", "deny.toml", ".cargo/config.toml"]
 timeout_minutes = 30
 
@@ -1586,8 +1631,17 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "machete"], label = "unused manifest entries" }]
 role = "gate"
-kinds = ["weekly"]
-kinds_github = ["main", "branch", "merge-request"]
+kinds_gitlab = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+  "weekly",
+]
+kinds_github = []
 timeout_minutes = 30
 
 [ext.ci.lanes.crates-publish]
@@ -1605,7 +1659,7 @@ steps = [
   ], label = "crates.io publication dry run", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = ["weekly", "quarantine"]
+kinds_gitlab = ["weekly"]
 kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 60
 
@@ -1623,7 +1677,7 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "shear"], label = "unused crate dependencies" }]
 role = "gate"
-kinds = ["weekly"]
+kinds_gitlab = ["weekly"]
 kinds_github = ["nightly"]
 timeout_minutes = 30
 
@@ -1636,7 +1690,7 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
 role = "gate"
-kinds = ["weekly"]
+kinds_gitlab = ["weekly"]
 kinds_github = []
 # The measurement, not a nap: over 117 runs on the fork's runners this lane took
 # 6.9 to 38.3 minutes green, with p95 at 29.5, and the six that failed all
@@ -1662,7 +1716,7 @@ steps = [
   ], label = "workspace feature powerset check" },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 # Not on a branch push. Together the two parts check about 375 feature
 # combinations - the count moves as crates and features do - and the workspace
 # is unpublished: the configurations anyone actually builds are the ones the
@@ -1695,7 +1749,7 @@ steps = [
   ], label = "product feature checks" },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 # Native partitions retain every combination within the per-job budget.
 kinds_github = ["main", "nightly"]
 timeout_minutes = 60
@@ -1716,7 +1770,7 @@ steps = [
   ], label = "second invariant feature partition" },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "nightly"]
 timeout_minutes = 60
 
@@ -1729,7 +1783,8 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
 role = "gate"
-kinds = ["weekly", "release"]
+kinds_gitlab = ["weekly", "release"]
+kinds_github = ["weekly", "release"]
 timeout_minutes = 60
 history = true
 
@@ -1756,7 +1811,7 @@ steps = [
   ], label = "Chromium WebCodecs tests" },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 # In a GitHub job the executor captures the ChromeDriver log and the wrapper's
@@ -1786,7 +1841,7 @@ steps = [
   ], label = "Firefox WASM tests" },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly"]
 timeout_minutes = 60
 
@@ -1807,7 +1862,7 @@ steps = [
   ], label = "WASM size check" },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 30
 artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
@@ -1852,7 +1907,8 @@ steps = [
   ], label = "real-time sanitizer suite" },
 ]
 role = "gate"
-kinds = ["branch", "merge-request", "quarantine", "nightly"]
+kinds_gitlab = ["branch", "merge-request", "quarantine", "nightly"]
+kinds_github = []
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-fast]
@@ -1872,7 +1928,7 @@ steps = [
   ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 120
 
@@ -1893,7 +1949,7 @@ steps = [
   ], label = "RTSan file playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 120
 
@@ -1914,7 +1970,7 @@ steps = [
   ], label = "RTSan HLS playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "branch", "merge-request", "nightly"]
 timeout_minutes = 120
 
@@ -1935,7 +1991,8 @@ steps = [
   ], label = "performance profile" },
 ]
 role = "deep"
-kinds = ["nightly"]
+kinds_gitlab = ["nightly"]
+kinds_github = []
 timeout_minutes = 90
 
 [ext.ci.lanes.deep-bench]
@@ -1950,7 +2007,7 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
 role = "deep"
-kinds = ["nightly", "bench", "branch", "merge-request", "quarantine"]
+kinds_gitlab = ["nightly", "bench", "branch", "merge-request", "quarantine"]
 kinds_github = ["nightly", "bench"]
 timeout_minutes = 120
 artifact = { name = "bench-results", path = "bench-results.txt\nbench-results/", when = "always" }
@@ -1975,7 +2032,7 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["test", "ui"], label = "UI suite and host parity" }]
 role = "deep"
-kinds = []
+kinds_gitlab = []
 kinds_github = []
 timeout_minutes = 120
 
@@ -2004,7 +2061,7 @@ tools = ["cargo", "cargo-nextest", "just"]
 program = "just"
 steps = [{ args = ["test", "miri"], label = "Miri interpreter run" }]
 role = "deep"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
 timeout_minutes = 60
@@ -2024,7 +2081,7 @@ tools = ["cargo", "cargo-fuzz", "just"]
 program = "just"
 steps = [{ args = ["test", "fuzz"], label = "libFuzzer targets" }]
 role = "deep"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly", "weekly"]
 queue = "heavy-linux"
 timeout_minutes = 90
@@ -2066,7 +2123,7 @@ steps = [
   ], label = "stream mutation suites" },
 ]
 role = "mutants"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
 artifact = { name = "mutants-stream", path = "target/mutants-ci" }
@@ -2091,7 +2148,7 @@ steps = [
   ], label = "playback mutation suites" },
 ]
 role = "mutants"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
 artifact = { name = "mutants-playback", path = "target/mutants-ci" }
@@ -2116,7 +2173,7 @@ steps = [
   ], label = "analysis mutation suites" },
 ]
 role = "mutants"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
 artifact = { name = "mutants-analysis", path = "target/mutants-ci" }
@@ -2141,7 +2198,7 @@ steps = [
   ], label = "ui mutation suites" },
 ]
 role = "mutants"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["weekly"]
 queue = "heavy-linux"
 artifact = { name = "mutants-ui", path = "target/mutants-ci" }
@@ -2178,7 +2235,7 @@ steps = [
   ], label = "repository secret scan" },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 # GitHub's own answer: a ready pull request there runs what a branch push does,
 # and a GitHub branch push has never run this lane.
 kinds_github = ["main", "nightly"]
@@ -2193,7 +2250,7 @@ tools = ["cargo", "just", "sccache", "kache"]
 program = "just"
 steps = [{ args = ["check", "workspace"], label = "Linux workspace check" }]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 # GitHub's own answer, for the reason `linux-secrets` gives.
 kinds_github = ["main", "nightly"]
 timeout_minutes = 60
@@ -2208,7 +2265,7 @@ program = "just"
 steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
-kinds = []
+kinds_gitlab = []
 timeout_minutes = 60
 
 # Every Linux test lane caps Cargo at two build jobs. The container has five
@@ -2249,13 +2306,14 @@ steps = [
   ], label = "Test utilities at checked-out revision", env = { CARGO_BUILD_JOBS = "2" } },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "branch", "merge-request"]
 # The real-clock lane's budget: a build directory the host budget evicted
 # rebuilds whole at two jobs, which took 58 minutes on the trusted runner.
 timeout_minutes = 120
 
 [ext.ci.lanes.linux-doc]
+artifact = { name = "hang-dumps-doc", path = ".ci-artifacts/hang", when = "failure" }
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
@@ -2267,14 +2325,15 @@ steps = [
     "test",
     "run",
     "--lane=doc",
-  ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "deep"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-loom]
+artifact = { name = "hang-dumps-loom", path = ".ci-artifacts/hang", when = "failure" }
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
@@ -2286,10 +2345,10 @@ steps = [
     "test",
     "run",
     "--lane=loom",
-  ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "deep"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2318,7 +2377,7 @@ steps = [
   ], label = "Native tooling lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "gate"
-kinds = [
+kinds_gitlab = [
   "branch",
   "merge-request",
   "quarantine",
@@ -2327,10 +2386,11 @@ kinds = [
   "platforms",
   "release",
 ]
-kinds_github = ["main", "nightly", "branch", "merge-request"]
+kinds_github = []
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-harness]
+artifact = { name = "hang-dumps-harness", path = ".ci-artifacts/hang", when = "failure" }
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
@@ -2342,14 +2402,15 @@ steps = [
     "test",
     "run",
     "--lane=harness",
-  ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-fixtures]
+artifact = { name = "hang-dumps-fixtures", path = ".ci-artifacts/hang", when = "failure" }
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
@@ -2361,20 +2422,21 @@ steps = [
     "test",
     "run",
     "--lane=fixtures",
-  ], label = "Linux fixtures lane", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
+  ], label = "Linux fixtures lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", RTEN_NUM_THREADS = "1" } },
   { args = [
     "test",
     "run",
     "-E",
     "package(kithara-test-fixtures) | test(sync_fixture_census)",
-  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", RTEN_NUM_THREADS = "1" } },
+  ], label = "Remote fixture contracts and provider census", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang", RTEN_NUM_THREADS = "1" } },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-broadcast]
+artifact = { name = "hang-dumps-broadcast", path = ".ci-artifacts/hang", when = "failure" }
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
@@ -2386,16 +2448,17 @@ steps = [
     "test",
     "run",
     "--lane=broadcast",
-  ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "nightly", "branch", "merge-request"]
 timeout_minutes = 180
 
 # `kithara-net`'s own tests run on the Linux host under its `client-host`
 # backend only here; Android runs the backend with a real transport.
 [ext.ci.lanes.linux-net-host]
+artifact = { name = "hang-dumps-net-host", path = ".ci-artifacts/hang", when = "failure" }
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
@@ -2407,13 +2470,14 @@ steps = [
     "test",
     "run",
     "--lane=net-host",
-  ], label = "Linux net-host lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux net-host lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-integration-regressions]
+artifact = { name = "hang-dumps-integration-regressions", path = ".ci-artifacts/hang", when = "failure" }
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
@@ -2425,10 +2489,10 @@ steps = [
     "test",
     "run",
     "--lane=integration-regressions",
-  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "deep"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2436,6 +2500,7 @@ timeout_minutes = 180
 # calls carries that name into the run, so a run started here and a run started
 # by hand exercise the same browser.
 [ext.ci.lanes.linux-selenium-firefox]
+artifact = { name = "hang-dumps-selenium-firefox", path = ".ci-artifacts/hang", when = "failure" }
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
@@ -2447,10 +2512,10 @@ steps = [
     "test",
     "run",
     "--lane=selenium-firefox",
-  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "deep"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
@@ -2477,16 +2542,15 @@ steps = [
   ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_OUTPUT_DIR = "coverage" } },
 ]
 role = "deep"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly"]
 timeout_minutes = 90
 
-# GitLab already runs its own equivalents of these six under other names; the
-# GitHub fleet's own gate has no such lane yet, so each is reachable only by
-# name until a kind schedules it.
 # This lane records the dependency source layer the lanes of its scope
 # restore: on the default branch it publishes into its own scope's bucket.
-# Sources are platform-independent, so one object serves both fleets.
+# Sources are platform-independent, so one object serves every lane of a
+# store. Reviews run it on GitLab's Linux pool; GitHub keeps the default-branch
+# run because it is the only publisher for the GitHub fleet's store.
 [ext.ci.lanes.linux-lint]
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
@@ -2498,7 +2562,16 @@ program = "just"
 publishes_sources = true
 steps = [{ args = ["lint", "full"], label = "workspace lint gate" }]
 role = "gate"
-kinds_github = ["main", "branch", "merge-request"]
+kinds_gitlab = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+kinds_github = ["main"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-arch]
@@ -2575,6 +2648,7 @@ kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 120
 
 [ext.ci.lanes.linux-usdt]
+artifact = { name = "hang-dumps-usdt", path = ".ci-artifacts/hang", when = "failure" }
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
 label = "Linux"
@@ -2588,38 +2662,38 @@ steps = [
     "--lane=usdt-warp",
     "--profile",
     "ci",
-  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT rate-response contract", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-render-scheduler",
     "--profile",
     "ci",
-  ], label = "USDT render scheduler contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT render scheduler contracts", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls",
     "--profile",
     "ci",
-  ], label = "USDT HLS contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT HLS contracts", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-hls-stress",
     "--profile",
     "ci",
-  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT HLS seek-stress contract", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
   { args = [
     "test",
     "run",
     "--lane=usdt-queue",
     "--profile",
     "ci",
-  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2" } },
+  ], label = "USDT queue contracts", env = { CARGO_BUILD_JOBS = "2", KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "gate"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["main", "branch", "merge-request"]
 timeout_minutes = 60
 
@@ -2652,7 +2726,7 @@ steps = [
   ] } },
 ]
 role = "quality"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly", "weekly"]
 timeout_minutes = 360
 
@@ -2666,7 +2740,7 @@ program = "just"
 artifact = { name = "similarity-report", path = "target/similarity" }
 steps = [{ args = ["lint", "similarity"], label = "duplication report" }]
 role = "quality"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly", "weekly"]
 timeout_minutes = 120
 
@@ -2690,7 +2764,7 @@ steps = [
   ], label = "orphan sweep" },
 ]
 role = "quality"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly", "weekly"]
 timeout_minutes = 120
 
@@ -2709,7 +2783,7 @@ steps = [
   ], label = "coverage risk", env = { KITHARA_HANG_DUMP_DIR = "{root}/coverage/hang" } },
 ]
 role = "quality"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly", "weekly"]
 timeout_minutes = 240
 
@@ -2725,7 +2799,7 @@ program = "just"
 artifact = { name = "health-report", path = "target/health-report.md\ntarget/health-logs/" }
 steps = [{ args = ["ci", "health"], label = "workspace health" }]
 role = "quality"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly", "weekly"]
 timeout_minutes = 120
 
@@ -2750,7 +2824,7 @@ steps = [
   ], label = "consolidated quality report" },
 ]
 role = "quality"
-kinds = []
+kinds_gitlab = []
 kinds_github = ["nightly", "weekly"]
 needs = [
   "quality-assess",
@@ -2805,7 +2879,8 @@ steps = [
   ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static", CFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h", CXXFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h" } },
 ]
 role = "platforms"
-kinds = ["nightly"]
+kinds_gitlab = ["nightly"]
+kinds_github = []
 timeout_minutes = 120
 
 # Off on this host, not gone: the guest is ARM64, so the suite ran under
@@ -2837,7 +2912,8 @@ steps = [
   ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
 ]
 role = "platforms"
-kinds = []
+kinds_gitlab = []
+kinds_github = []
 timeout_minutes = 120
 
 # The x86_64 suite used to run here too, on a host with no x86_64 in it: every
@@ -2876,7 +2952,8 @@ steps = [
   ], label = "Windows build", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
 ]
 role = "platforms"
-kinds = ["nightly"]
+kinds_gitlab = ["nightly"]
+kinds_github = []
 timeout_minutes = 120
 
 # Both Android lanes boot an emulator, which the Mac mini and the Linux KVM
@@ -2906,7 +2983,7 @@ steps = [
   ], label = "Android native build" },
 ]
 role = "platforms"
-kinds = ["platforms", "main", "nightly"]
+kinds_gitlab = ["platforms", "main", "nightly"]
 kinds_github = []
 timeout_minutes = 45
 
@@ -2937,7 +3014,7 @@ steps = [
   ], label = "Android baseline tests" },
 ]
 role = "platforms"
-kinds = ["platforms", "main", "nightly"]
+kinds_gitlab = ["platforms", "main", "nightly"]
 kinds_github = []
 timeout_minutes = 90
 
@@ -2963,30 +3040,23 @@ checks = [
   ] },
 ]
 program = "just"
-# Both chains run the checks that answer whether a change is acceptable:
-# formatting, Clippy over the workspace, ast-grep, typos, the architecture
-# ratchet, this tool's own tests and the two idiom checks a review is held to.
-# What only the default branch pays for is the rest of the ratchet family - the
-# full idiom set, style and the quality scans. They guard a baseline rather than
-# judge a diff, and on one Apple host every one of them is a minute a review
-# waits.
 steps = [
   { args = [
     "lint",
     "full",
   ], label = "full lint gate", args_by_kind = { branch = [
-    "lint",
-    "gate",
+    "check",
+    "clippy",
   ], merge-request = [
-    "lint",
-    "gate",
+    "check",
+    "clippy",
   ], quarantine = [
-    "lint",
-    "gate",
+    "check",
+    "clippy",
   ] } },
 ]
 role = "platforms"
-kinds = [
+kinds_gitlab = [
   "branch",
   "merge-request",
   "quarantine",
@@ -2995,6 +3065,7 @@ kinds = [
   "nightly",
   "release",
 ]
+kinds_github = []
 timeout_minutes = 60
 
 [ext.ci.lanes.apple-msrv]
@@ -3021,7 +3092,8 @@ steps = [
   ], label = "MSRV workspace check", env = { RUSTUP_TOOLCHAIN = "{pin.msrv_toolchain}" } },
 ]
 role = "platforms"
-kinds = ["platforms", "main", "nightly"]
+kinds_gitlab = ["platforms", "main", "nightly"]
+kinds_github = []
 timeout_minutes = 60
 
 [ext.ci.lanes.apple-net-units]
@@ -3055,7 +3127,7 @@ steps = [
   ], label = "Apple network units", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
-kinds = [
+kinds_gitlab = [
   "branch",
   "merge-request",
   "quarantine",
@@ -3098,19 +3170,32 @@ steps = [
   ], label = "Apple flash and no-block gate", args_by_kind = { branch = [
     "test",
     "run",
+    "--lane=apple",
     "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
     "--flash=on",
     "--no-block=on",
     "--profile",
     "ci",
-  ] }, env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
-  { args = [
+  ], merge-request = [
     "test",
-    "test-utils",
-  ], label = "Test utilities at checked-out revision" },
+    "run",
+    "--lane=apple",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ], quarantine = [
+    "test",
+    "run",
+    "--lane=apple",
+    "--flash=on",
+    "--no-block=on",
+    "--profile",
+    "ci",
+  ] }, env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
-kinds = [
+kinds_gitlab = [
   "branch",
   "merge-request",
   "quarantine",
@@ -3119,6 +3204,36 @@ kinds = [
   "nightly",
   "release",
 ]
+kinds_github = []
+timeout_minutes = 60
+
+[ext.ci.lanes.apple-test-utils]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+] }
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+tools = ["cargo", "just", "sccache", "kache", "swift", "xcodebuild", "xcodegen"]
+checks = [
+  { tool = "xcodebuild", args = [
+    "-version",
+  ] },
+  { tool = "xcodebuild", args = [
+    "-checkFirstLaunchStatus",
+  ] },
+]
+kinds_refused = { quarantine = "quarantine pipelines do not run Apple test utilities" }
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "test-utils",
+  ], label = "Test utilities at checked-out revision" },
+]
+role = "platforms"
+kinds_gitlab = ["platforms", "main", "nightly"]
+kinds_github = []
 timeout_minutes = 60
 
 # The off-flash suite owns a separate lane slot because its feature set differs
@@ -3150,7 +3265,8 @@ steps = [
   ], label = "Apple flash-off gate", env = { KITHARA_HANG_DUMP_DIR = "{root}/.ci-artifacts/hang" } },
 ]
 role = "platforms"
-kinds = ["platforms", "main", "nightly"]
+kinds_gitlab = ["platforms", "main", "nightly"]
+kinds_github = []
 timeout_minutes = 60
 
 [ext.ci.lanes.apple-xcframework]
@@ -3180,7 +3296,7 @@ steps = [
   ], label = "Apple XCFramework" },
 ]
 role = "platforms"
-kinds = [
+kinds_gitlab = [
   "branch",
   "merge-request",
   "quarantine",
@@ -3189,6 +3305,7 @@ kinds = [
   "nightly",
   "release",
 ]
+kinds_github = []
 timeout_minutes = 60
 
 [ext.ci.lanes.apple-ios]
@@ -3217,7 +3334,7 @@ steps = [
   ], label = "iOS Simulator build", env = { KITHARA_LOCAL_DEV = "1" } },
 ]
 role = "platforms"
-kinds = [
+kinds_gitlab = [
   "merge-request",
   "quarantine",
   "platforms",
@@ -3225,6 +3342,7 @@ kinds = [
   "nightly",
   "release",
 ]
+kinds_github = []
 timeout_minutes = 60
 
 # Safari goes through the repository's own wasm recipe for the same reason the
@@ -3250,7 +3368,8 @@ steps = [
   ], label = "Safari WASM tests" },
 ]
 role = "platforms"
-kinds = ["nightly"]
+kinds_gitlab = ["nightly"]
+kinds_github = []
 timeout_minutes = 60
 
 
@@ -3290,7 +3409,7 @@ steps = [
   ], label = "Signed universal macOS application" },
 ]
 role = "release"
-kinds = ["nightly", "release"]
+kinds_gitlab = ["nightly", "release"]
 kinds_github = []
 timeout_minutes = 180
 
@@ -4071,7 +4190,7 @@ timeout_minutes = 180
 ".gitlab/ci/android.yml::android:test" = ["android-test"]
 ".gitlab/ci/apple.yml::apple:ios" = ["apple-ios"]
 ".gitlab/ci/apple.yml::apple:ios-test" = ["apple-ios-test"]
-".gitlab/ci/apple.yml::apple:lint" = ["apple-lint", "linux-tooling"]
+".gitlab/ci/apple.yml::apple:lint" = ["apple-lint"]
 ".gitlab/ci/apple.yml::apple:msrv" = ["apple-msrv"]
 ".gitlab/ci/apple.yml::apple:net-units" = ["apple-net-units"]
 ".gitlab/ci/apple.yml::apple:pr-tests" = ["ci-pr-tests"]
@@ -4079,6 +4198,7 @@ timeout_minutes = 180
 ".gitlab/ci/apple.yml::apple:swift-test" = ["apple-swift-test"]
 ".gitlab/ci/apple.yml::apple:test" = ["apple-test"]
 ".gitlab/ci/apple.yml::apple:test-flash-off" = ["apple-test-flash-off"]
+".gitlab/ci/apple.yml::apple:test-utils" = ["apple-test-utils"]
 ".gitlab/ci/apple.yml::apple:xcframework" = ["apple-xcframework"]
 ".gitlab/ci/deep.yml::deep:bench" = ["deep-bench"]
 ".gitlab/ci/deep.yml::deep:perf" = ["deep-perf"]
@@ -4091,6 +4211,57 @@ timeout_minutes = 180
 ".gitlab/ci/deep.yml::deps:shear" = ["deps-shear"]
 ".gitlab/ci/deep.yml::deps:unused" = ["deps-unused"]
 ".gitlab/ci/host.yml::host:provision" = ["host-provision"]
+".gitlab/ci/linux.yml::linux:arch" = ["linux-arch"]
+".gitlab/ci/linux.yml::linux:broadcast" = ["linux-broadcast"]
+".gitlab/ci/linux.yml::linux:check" = ["linux-check"]
+".gitlab/ci/linux.yml::linux:coverage" = ["linux-coverage"]
+".gitlab/ci/linux.yml::linux:deep-fuzz" = ["deep-fuzz"]
+".gitlab/ci/linux.yml::linux:deep-miri" = ["deep-miri"]
+".gitlab/ci/linux.yml::linux:deep-mutants-analysis" = ["deep-mutants-analysis"]
+".gitlab/ci/linux.yml::linux:deep-mutants-playback" = ["deep-mutants-playback"]
+".gitlab/ci/linux.yml::linux:deep-mutants-stream" = ["deep-mutants-stream"]
+".gitlab/ci/linux.yml::linux:deep-mutants-ui" = ["deep-mutants-ui"]
+".gitlab/ci/linux.yml::linux:deep-rtsan-fast" = ["deep-rtsan-fast"]
+".gitlab/ci/linux.yml::linux:deep-rtsan-file" = ["deep-rtsan-file"]
+".gitlab/ci/linux.yml::linux:deep-rtsan-hls" = ["deep-rtsan-hls"]
+".gitlab/ci/linux.yml::linux:deps-features-invariants" = [
+  "deps-features-invariants",
+]
+".gitlab/ci/linux.yml::linux:deps-features-invariants-rest" = [
+  "deps-features-invariants-rest",
+]
+".gitlab/ci/linux.yml::linux:deps-features-workspace" = [
+  "deps-features-workspace",
+]
+".gitlab/ci/linux.yml::linux:doc" = ["linux-doc"]
+".gitlab/ci/linux.yml::linux:fixtures" = ["linux-fixtures"]
+".gitlab/ci/linux.yml::linux:harness" = ["linux-harness"]
+".gitlab/ci/linux.yml::linux:integration-regressions" = [
+  "linux-integration-regressions",
+]
+".gitlab/ci/linux.yml::linux:lint" = ["linux-lint"]
+".gitlab/ci/linux.yml::linux:loom" = ["linux-loom"]
+".gitlab/ci/linux.yml::linux:msrv" = ["linux-msrv"]
+".gitlab/ci/linux.yml::linux:net-host" = ["linux-net-host"]
+".gitlab/ci/linux.yml::linux:perf-memory" = ["linux-perf-memory"]
+".gitlab/ci/linux.yml::linux:quality-architecture" = ["quality-architecture"]
+".gitlab/ci/linux.yml::linux:quality-assess" = ["quality-assess"]
+".gitlab/ci/linux.yml::linux:quality-coverage-risk" = ["quality-coverage-risk"]
+".gitlab/ci/linux.yml::linux:quality-health" = ["quality-health"]
+".gitlab/ci/linux.yml::linux:quality-report" = ["quality-report"]
+".gitlab/ci/linux.yml::linux:quality-similarity" = ["quality-similarity"]
+".gitlab/ci/linux.yml::linux:secrets" = ["linux-secrets"]
+".gitlab/ci/linux.yml::linux:selenium-firefox" = ["linux-selenium-firefox"]
+".gitlab/ci/linux.yml::linux:test-real-clock" = ["linux-test-real-clock"]
+".gitlab/ci/linux.yml::linux:test-simulated-clock" = [
+  "linux-test-simulated-clock",
+]
+".gitlab/ci/linux.yml::linux:tooling" = ["linux-tooling"]
+".gitlab/ci/linux.yml::linux:usdt" = ["linux-usdt"]
+".gitlab/ci/linux.yml::linux:wasm" = ["linux-wasm"]
+".gitlab/ci/linux.yml::linux:web-chromium" = ["web-chromium"]
+".gitlab/ci/linux.yml::linux:web-firefox" = ["web-firefox"]
+".gitlab/ci/linux.yml::linux:web-size" = ["web-size"]
 ".gitlab/ci/release.yml::release:android" = ["release-android"]
 ".gitlab/ci/release.yml::release:app" = ["release-app"]
 ".gitlab/ci/release.yml::release:docs" = ["release-docs"]

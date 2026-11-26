@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::catalog::{commands, digest};
 use crate::{
     ci::{
-        lane::select::{self, Fleet, LanesArgs},
+        lane::select::{self, Fleet, LanesArgs, Profile},
         run::PipelineKind,
     },
     config::CiProjectConfig,
@@ -69,6 +69,11 @@ fn capture(
         kind,
         only: only.to_owned(),
         fleet,
+        profile: Profile::Split,
+        pools: match fleet {
+            Fleet::Github => vec!["linux".to_owned()],
+            Fleet::Gitlab => ["linux", "macos", "windows"].map(String::from).to_vec(),
+        },
         field: None,
         base: None,
         changed_paths: paths.map(ToOwned::to_owned),

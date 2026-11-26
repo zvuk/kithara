@@ -118,6 +118,10 @@ jobs:
       # The inputs reach the script as environment variables rather than as
       # interpolations: a workflow that pastes a caller's string into a shell
       # command is a command the caller wrote.
+      #
+      # A pool is enabled by its runner-label variable: an unset one leaves
+      # its lanes out of the selection instead of queued for a runner that is
+      # not there. `KITHARA_CI_PROFILE` says which provider runs the catalog.
       - name: Render the jobs this role schedules
         id: render
         env:
@@ -125,6 +129,9 @@ jobs:
           KIND: ${{ inputs.kind }}
           ONLY: ${{ inputs.only }}
           BASE_SHA: ${{ inputs.base-sha }}
+          KITHARA_CI_PROFILE: ${{ vars.KITHARA_CI_PROFILE || 'split' }}
+          LINUX_POOL: ${{ vars.KITHARA_RUNNER_LABELS && 'linux' || '' }}
+          MACOS_POOL: ${{ vars.KITHARA_MACOS_RUNNER_LABELS && 'macos' || '' }}
         run: |
           set -euo pipefail
           set --
@@ -132,7 +139,7 @@ jobs:
             set -- --base FETCH_HEAD
           fi
           # Assignment preserves selector failure before publishing an output.
-          selection=$(just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"} "$@")
+          selection=$(just ci lanes --role "$ROLE" --kind "$KIND" --pool "${LINUX_POOL:-},${MACOS_POOL:-}" ${ONLY:+--only "$ONLY"} "$@")
           echo "selection=$selection" >> "$GITHUB_OUTPUT"
 
       # A block the runner would reject fails the run here, before any lane
@@ -175,6 +182,7 @@ jobs:
       artifact-report: ${{ matrix.artifact.report || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
+      os: ${{ matrix.os }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
       narrow: ${{ inputs.narrow }}
       bench_target: ${{ inputs.bench_target }}
@@ -211,6 +219,7 @@ jobs:
       artifact-report: ${{ matrix.artifact.report || '' }}
       artifact-when: ${{ matrix.artifact.when || 'always' }}
       runner: ${{ matrix.runner || '' }}
+      os: ${{ matrix.os }}
       fixture-refresh: ${{ inputs.fixture-refresh }}
       narrow: ${{ inputs.narrow }}
       bench_target: ${{ inputs.bench_target }}

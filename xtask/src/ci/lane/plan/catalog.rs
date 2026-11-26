@@ -59,7 +59,7 @@ impl Catalog {
                 .as_object_mut()
                 .context("lane contract must be an object")?;
             for field in [
-                "kinds",
+                "kinds_gitlab",
                 "kinds_github",
                 "github_runner",
                 "github_runner_main",
@@ -68,9 +68,9 @@ impl Catalog {
             }
             let kinds = semantics.automatic_kinds.as_ref().map_or_else(
                 || {
-                    lane.kinds
+                    lane.kinds_gitlab
                         .iter()
-                        .chain(lane.kinds_github.iter().flatten())
+                        .chain(&lane.kinds_github)
                         .map(|kind| normalize_kind(kind).to_owned())
                         .collect()
                 },
