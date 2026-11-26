@@ -56,7 +56,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # advisory file locks for the tmp claim: `flock` on every non-wasm target
 fs4 = { workspace = true }
-# hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
 # mmap backend (not available on wasm32)
 mmap-io = { workspace = true }
 # crash-safe atomic writes (unique temp files)

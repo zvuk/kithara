@@ -57,8 +57,8 @@ pub use wait::{wait_until, wait_until_blocking};
 
 pub mod kithara {
     pub use kithara_test_macros::{
-        IntoProbeArg, Probe, allow_block, hang_watchdog, measure, measure_block, mock, no_block,
-        probe, probe_event, rtsan_allow_blocking, rtsan_forbid_blocking, test_utils_flash as flash,
+        IntoProbeArg, Probe, allow_block, hang_watchdog, mock, no_block, probe, probe_event,
+        rtsan_allow_blocking, rtsan_forbid_blocking, test_utils_flash as flash,
     };
     #[cfg(feature = "test")]
     pub use kithara_test_macros::{asset, fixture, test};

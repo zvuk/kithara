@@ -120,7 +120,6 @@ winit = { workspace = true, optional = true }
 kithara-apple = { workspace = true, features = ["metal"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
 iced = { workspace = true, optional = true, features = ["tiny-skia"] }
 
 [dev-dependencies]

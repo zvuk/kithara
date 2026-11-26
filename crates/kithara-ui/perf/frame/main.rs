@@ -287,20 +287,36 @@ fn miss(reading: &Reading) -> Option<String> {
 }
 
 struct FrameWork {
-    action: Box<dyn FnMut() -> Reading>,
-    reading: Option<Reading>,
+    action: Box<dyn FnMut()>,
+    driver: Box<dyn FrameHost>,
+    rect: Rect,
+    name: &'static str,
+    steps: Vec<Step>,
+    gestured: bool,
 }
 
 impl FrameWork {
     fn run(&mut self) {
-        self.reading = Some((self.action)());
+        (self.action)();
     }
 
     fn teardown(&mut self) {
-        audit(
-            "frame",
-            std::slice::from_ref(self.reading.as_ref().expect("frame reading")),
-        );
+        let reading = Reading {
+            rect: self.rect,
+            gestured: self.gestured,
+            name: self.name,
+            points: self
+                .steps
+                .iter()
+                .filter_map(|step| match step {
+                    Step::Move(at) => Some(*at),
+                    Step::Press | Step::Release | Step::Data => None,
+                })
+                .collect(),
+            receipts: self.driver.receipts(),
+            scheduled: self.driver.scheduled(),
+        };
+        audit("frame", std::slice::from_ref(&reading));
     }
 }
 
@@ -327,32 +343,23 @@ fn prepare_frame(index: usize) -> FrameWork {
     let mut driver = driver(&backend, fixture, Rc::clone(&reads));
     let _warm = driver.frame();
     let steps = scenario.interaction.steps(rect);
+    let action_steps = steps.clone();
     let action = Box::new(move || {
-        for step in &steps {
+        for step in &action_steps {
             driver.interact(*step);
         }
         let _frame = driver.frame();
-        Reading {
-            rect,
-            gestured: matches!(
-                scenario.interaction,
-                Interaction::Drag | Interaction::Press | Interaction::PressLeading
-            ),
-            name: scenario.name,
-            points: steps
-                .iter()
-                .filter_map(|step| match step {
-                    Step::Move(at) => Some(*at),
-                    Step::Press | Step::Release | Step::Data => None,
-                })
-                .collect(),
-            receipts: driver.receipts(),
-            scheduled: driver.scheduled(),
-        }
     });
     FrameWork {
         action,
-        reading: None,
+        driver,
+        rect,
+        name: scenario.name,
+        steps,
+        gestured: matches!(
+            scenario.interaction,
+            Interaction::Drag | Interaction::Press | Interaction::PressLeading
+        ),
     }
 }
 

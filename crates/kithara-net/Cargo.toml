@@ -79,7 +79,6 @@ kithara-apple = { workspace = true, optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 brotli = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
-# hotpath drives the `perf`/`memprof` profiling knobs and does not build on
 # wasm32; gate it here so the `perf` feature stays inert on wasm.
 tower-layer = { workspace = true, optional = true }
 tower-service = { workspace = true, optional = true }

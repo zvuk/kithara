@@ -511,6 +511,15 @@ fn the_page_table_is_pinned_to_the_gallery() {
     }
 }
 
+fn gallery_case_count() -> usize {
+    consts::PAGES
+        .iter()
+        .map(|page| {
+            usize::from(Vec::<Run>::from(page.program).len()) * 2 * if page.fenced { 2 } else { 1 }
+        })
+        .sum()
+}
+
 fn gallery_case(mut index: usize) -> (usize, Host, Run, bool) {
     for (page_index, page) in consts::PAGES.iter().enumerate() {
         for host in [Host::Immediate, Host::Retained] {
@@ -730,7 +739,7 @@ fn criterion_benchmarks(c: &mut Criterion) {
     the_page_table_is_pinned_to_the_gallery();
     let mut group = c.benchmark_group("gallery");
     group.sample_size(10);
-    for index in 0..80 {
+    for index in 0..gallery_case_count() {
         let (page_index, host, run, fenced) = gallery_case(index);
         let page = &consts::PAGES[page_index];
         let host = match host {

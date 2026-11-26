@@ -21,7 +21,6 @@ test = false
 masonry = ["kithara-ui/masonry"]
 # What the suites vary on the demo model that the gallery itself never does.
 mock = []
-# Frame and page timings through hotpath.
 perf = ["kithara-ui/perf"]
 
 [dependencies]
