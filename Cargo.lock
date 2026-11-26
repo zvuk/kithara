@@ -5196,7 +5196,6 @@ dependencies = [
  "kithara-platform",
  "kithara-ring",
  "kithara-test-dylib",
- "kithara-test-macros",
  "kithara-test-utils",
  "serde",
  "thiserror 2.0.21",

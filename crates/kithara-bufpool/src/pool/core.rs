@@ -5,7 +5,6 @@ use std::{
 
 use crossbeam_queue::ArrayQueue;
 use kithara_platform::{sync::Arc, thread::current_thread_id};
-use kithara_test_macros as kithara;
 
 use super::{shard::PoolShard, stats::PoolStats, storage::Storage};
 use crate::{
@@ -97,7 +96,6 @@ where
         Ok(core)
     }
 
-    #[kithara::measure]
     pub(crate) fn acquire(self: &Arc<Self>) -> OwnedBuffer<SHARDS, B, OBSERVE> {
         let shard_idx = Self::shard_index();
         let value = self.shards[shard_idx]
@@ -397,7 +395,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_platform::sync::{Arc, Weak};
-    use kithara_test_utils::kithara;
 
     use super::Core;
     use crate::{
@@ -505,7 +502,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn failed_growth_reuses_suitable_buffer_beyond_fast_probe() {
         const CAPACITY: usize = 8;
         const CURRENT_CAPACITY: usize = 4;
@@ -542,7 +539,7 @@ mod tests {
         assert_eq!(region_budget.current(), 0);
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn failed_growth_reuses_suitable_cold_start_buffer() {
         const CAPACITY: usize = 8;
         const CURRENT_CAPACITY: usize = 4;
@@ -575,7 +572,7 @@ mod tests {
         assert_eq!(region_budget.current(), 0);
     }
 
-    #[kithara::test]
+    #[kithara_test_utils::kithara::test]
     fn overallocated_growth_reclaims_the_failed_extra_reservation() {
         let region_budget = RegionBudget::new(10);
         let donor = Arc::new(
@@ -622,7 +619,7 @@ mod tests {
         assert_eq!(region_budget.current(), 0);
     }
 
-    #[kithara::test(miri)]
+    #[kithara_test_utils::kithara::test(miri)]
     fn pressure_reclaim_scans_only_the_idle_snapshot() {
         let region_budget = RegionBudget::new(8);
         let core = Arc::new(
