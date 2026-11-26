@@ -15,8 +15,10 @@ use sha2::{Digest, Sha256};
 use tempfile::Builder;
 
 use super::{
+    case::Case,
     dispatch,
     executable::{Binary, build, callback_ids, ensure_no_criterion_results},
+    result::{AllocatorPolicy, BenchMode, read_allocation, read_observations},
     source::{Sources, Target, build_provenance, metadata, select, target_parts, targets},
 };
 use crate::{Ctx, verdict::ChildFailure};
@@ -55,15 +57,21 @@ pub(super) struct Request {
     pub(super) head: String,
     #[arg(long = "bench-target", env = "BENCH_TARGET", default_value = "")]
     pub(super) target: String,
+    #[arg(long = "bench-mode", env = "BENCH_MODE", default_value_t = BenchMode::Timing)]
+    pub(super) mode: BenchMode,
+    #[arg(long = "bench-allocator-policy", env = "BENCH_ALLOCATOR_POLICY", default_value_t = AllocatorPolicy::System)]
+    pub(super) allocator_policy: AllocatorPolicy,
 }
 
 impl Request {
-    pub(super) fn parameters(&self) -> [(&'static str, &str); 4] {
+    pub(super) fn parameters(&self) -> [(&'static str, &str); 6] {
         [
             ("BENCH_TARGET", &self.target),
             ("BENCH_FILTER", &self.filter),
             ("BENCH_REF", &self.head),
             ("BENCH_BASE_REF", &self.base),
+            ("BENCH_MODE", self.mode.as_str()),
+            ("BENCH_ALLOCATOR_POLICY", self.allocator_policy.as_str()),
         ]
     }
 }
@@ -92,6 +100,8 @@ struct Collection {
     filter: String,
     expected_head_ids: Vec<String>,
     expected_base_ids: Option<Vec<String>>,
+    cases: Vec<Case>,
+    base_cases: Option<Vec<Case>>,
 }
 
 impl Preflight {
@@ -156,12 +166,27 @@ impl Preflight {
                     "preflight collection {name:?} has empty or duplicate expected IDs"
                 );
             }
-            if let Some(base_ids) = &collection.expected_base_ids {
-                ensure!(
-                    base_ids.iter().collect::<BTreeSet<_>>()
-                        == collection.expected_head_ids.iter().collect(),
-                    "preflight collection {name:?} declares different base/head IDs"
-                );
+            validate_cases(name, &collection.cases, &collection.expected_head_ids)?;
+            match (&collection.expected_base_ids, &collection.base_cases) {
+                (Some(base_ids), Some(base_cases)) => {
+                    validate_cases(name, base_cases, base_ids)?;
+                    ensure!(
+                        base_cases == &collection.cases,
+                        "preflight collection {name:?} declares different base/head parameters or boundaries"
+                    );
+                    ensure!(
+                        base_ids.iter().collect::<BTreeSet<_>>()
+                            == collection.expected_head_ids.iter().collect(),
+                        "preflight collection {name:?} declares different base/head IDs"
+                    );
+                }
+                (Some(_), None) => anyhow::bail!(
+                    "preflight collection {name:?} has base IDs without base case declarations"
+                ),
+                (None, Some(_)) => anyhow::bail!(
+                    "preflight collection {name:?} has base case declarations without base IDs"
+                ),
+                (None, None) => {}
             }
         }
         Ok(declaration)
@@ -183,17 +208,24 @@ impl Preflight {
             let arms = collection
                 .expected_base_ids
                 .iter()
-                .map(|ids| ("base", ids, binaries[0]))
+                .zip(collection.base_cases.iter())
+                .map(|(ids, cases)| ("base", ids, cases, binaries[0]))
                 .chain(std::iter::once((
                     "head",
                     &collection.expected_head_ids,
+                    &collection.cases,
                     binaries[1],
                 )));
-            for (arm, expected, binary) in arms {
+            for (arm, expected, cases, binary) in arms {
                 let directory = results.join(name).join(arm);
                 fs::create_dir(&directory)?;
                 let (listed, output) = binary.ids(&collection.filter, &directory, log)?;
                 fs::write(directory.join("list.txt"), output)?;
+                let admitted: Vec<_> = cases.iter().map(Case::admitted).collect();
+                fs::write(
+                    directory.join("cases.json"),
+                    serde_json::to_vec_pretty(&admitted)?,
+                )?;
                 let expected = expected.iter().cloned().collect();
                 checks.push((
                     collection.filter.as_str(),
@@ -234,6 +266,28 @@ impl Preflight {
             results.display()
         ))
     }
+}
+
+fn validate_cases(name: &str, cases: &[Case], expected_ids: &[String]) -> Result<()> {
+    ensure!(
+        !cases.is_empty(),
+        "preflight collection {name:?} has no case declarations"
+    );
+    for case in cases {
+        case.validate()
+            .with_context(|| format!("preflight collection {name:?}"))?;
+    }
+    let declared: BTreeSet<_> = cases.iter().map(|case| case.id.as_str()).collect();
+    ensure!(
+        declared.len() == cases.len(),
+        "preflight collection {name:?} has duplicate case declarations"
+    );
+    let expected: BTreeSet<_> = expected_ids.iter().map(String::as_str).collect();
+    ensure!(
+        declared == expected,
+        "preflight collection {name:?} case declarations do not match expected IDs"
+    );
+    Ok(())
 }
 
 fn check_ids(expected: &BTreeSet<String>, observed: &BTreeSet<String>) -> Result<()> {
@@ -509,20 +563,25 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool, input: Option<&str>) -> 
         samples.parse::<usize>().is_ok_and(|samples| samples >= 10),
         "BENCH_SAMPLE_SIZE must be an integer >=10"
     );
-    for (base, head) in &binaries {
+    let mut selected = Vec::new();
+    for ((base, head), target) in binaries.into_iter().zip(&head) {
         let (ids, _) = head.ids(&request.filter, &data, &mut log)?;
-        if let Some(base) = base {
+        let ids: BTreeSet<_> = ids.into_iter().collect();
+        if let Some(base) = &base {
             let (base_ids, _) = base.ids(&request.filter, &data, &mut log)?;
-            let ids = ids.into_iter().collect();
-            let base_ids = base_ids.into_iter().collect();
+            let base_ids: BTreeSet<_> = base_ids.into_iter().collect();
             ensure!(
                 base_ids == ids,
                 "base/head Criterion IDs do not match; {}",
                 selection_difference(&base_ids, &ids)
             );
         }
+        selected.push((base, head, target, ids));
     }
-    for (base, head) in binaries {
+    if request.mode == BenchMode::Allocation {
+        return run_allocation(selected, request, &results, &data, &mut log);
+    }
+    for (base, head, _, _) in selected {
         if let Some(base) = &base {
             base.measure(&request.filter, "base", &samples, &data, &mut log)?;
         }
@@ -539,6 +598,47 @@ fn execute(ctx: &Ctx, request: &Request, measure: bool, input: Option<&str>) -> 
         )?;
     }
     log.line(&format!("Criterion results: {}", results.display()))
+}
+
+type Selected<'a> = (Option<Binary>, Binary, &'a Target, BTreeSet<String>);
+
+fn run_allocation(
+    selected: Vec<Selected<'_>>,
+    request: &Request,
+    results: &Path,
+    data: &Path,
+    log: &mut Log,
+) -> Result<()> {
+    for (base, head, target, ids) in selected {
+        for (arm, binary) in [("base", base.as_ref()), ("head", Some(&head))]
+            .into_iter()
+            .filter_map(|(arm, binary)| binary.map(|binary| (arm, binary)))
+        {
+            let raw = results.join(format!("{}-{arm}-allocation.json", target.bench));
+            let markdown = results.join(format!("{}-{arm}-allocation.md", target.bench));
+            let observations = results.join(format!("{}-{arm}-observations.jsonl", target.bench));
+            binary.allocate(&request.filter, &raw, &markdown, &observations, data, log)?;
+            let report = read_allocation(&raw)?;
+            let owner_observations = read_observations(&observations, request.allocator_policy)?;
+            let actual = report.ids();
+            ensure!(
+                actual == ids,
+                "allocation IDs do not match Criterion IDs; {}",
+                selection_difference(&ids, &actual)
+            );
+            let target_id = target.id();
+            let canonical = report.canonical(
+                &target_id,
+                &target.features,
+                request.allocator_policy,
+                &owner_observations,
+            )?;
+            let path = results.join(format!("{}-{arm}-canonical.json", target.bench));
+            canonical.write(&path)?;
+            log.line(&format!("Canonical allocation result: {}", path.display()))?;
+        }
+    }
+    log.line(&format!("Allocation results: {}", results.display()))
 }
 
 fn selection_difference(base: &BTreeSet<String>, head: &BTreeSet<String>) -> String {
