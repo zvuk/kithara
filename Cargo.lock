@@ -3867,7 +3867,6 @@ dependencies = [
  "futures-util",
  "hdrhistogram",
  "hotpath-macros",
- "hotpath-meta",
  "libc",
  "pin-project-lite",
  "prettytable-rs",
@@ -3876,7 +3875,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tiny_http",
- "tokio",
 ]
 
 [[package]]
@@ -3888,21 +3886,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "hotpath-macros-meta"
-version = "0.23.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcc0ab94ffbb2ee77f4a897df02b5a137a10cf24d69bda936e59aff4dd456e61"
-
-[[package]]
-name = "hotpath-meta"
-version = "0.23.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "053481f6cec8f775a3276c7f6e2f21123111d28261e4edc15ea7421c445964bb"
-dependencies = [
- "hotpath-macros-meta",
 ]
 
 [[package]]
@@ -5026,7 +5009,6 @@ dependencies = [
  "delegate",
  "derive-where",
  "fieldwork",
- "hotpath",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -5171,7 +5153,6 @@ dependencies = [
  "delegate",
  "derive-where",
  "derive_more",
- "hotpath",
  "kithara-config",
  "kithara-derive",
  "kithara-platform",
@@ -5230,7 +5211,6 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
- "hotpath",
  "js-sys",
  "kithara-android",
  "kithara-apple",
@@ -5606,7 +5586,6 @@ dependencies = [
  "derive-where",
  "derive_more",
  "fieldwork",
- "hotpath",
  "kithara-abr",
  "kithara-assets",
  "kithara-bufpool",
@@ -5759,7 +5738,6 @@ dependencies = [
  "fieldwork",
  "futures",
  "hls_m3u8",
- "hotpath",
  "kithara-abr",
  "kithara-android",
  "kithara-assets",
@@ -6034,7 +6012,6 @@ dependencies = [
  "fieldwork",
  "flate2",
  "futures",
- "hotpath",
  "http",
  "kithara-apple",
  "kithara-bufpool",
@@ -6123,7 +6100,6 @@ dependencies = [
  "firewheel",
  "futures",
  "hex",
- "hotpath",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -6313,7 +6289,6 @@ dependencies = [
  "fieldwork",
  "firewheel",
  "futures",
- "hotpath",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -6416,7 +6391,6 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "fs4",
- "hotpath",
  "kithara-bufpool",
  "kithara-config",
  "kithara-derive",
@@ -6444,7 +6418,6 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
- "hotpath",
  "kithara-abr",
  "kithara-net",
  "kithara-platform",
@@ -6481,7 +6454,6 @@ dependencies = [
  "delegate",
  "derive_more",
  "fieldwork",
- "hotpath",
  "kithara-bufpool",
  "kithara-config",
  "kithara-derive",
@@ -6641,7 +6613,6 @@ dependencies = [
  "fieldwork",
  "futures-lite",
  "half",
- "hotpath",
  "iced",
  "iced_renderer",
  "iced_runtime",
@@ -6725,7 +6696,6 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "futures-lite",
- "hotpath",
  "iced",
  "iced_renderer",
  "iced_runtime",
@@ -6901,7 +6871,6 @@ dependencies = [
  "criterion",
  "delegate",
  "fieldwork",
- "hotpath",
  "kithara-config",
  "kithara-derive",
  "kithara-platform",

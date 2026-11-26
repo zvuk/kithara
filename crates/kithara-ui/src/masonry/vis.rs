@@ -1,4 +1,3 @@
-use kithara_test_macros as kithara;
 use masonry::vello::{
     wgpu,
     wgpu::{
@@ -170,7 +169,6 @@ impl VisPass {
     /// Everything here is CPU work: filtering, preparing, writing uniforms and
     /// recording the pass. The submitted commands are timed by whoever fences
     /// the queue, which is a different measurement and a different scenario.
-    #[kithara::measure(label = "vis.pass.cpu")]
     pub fn render(
         &mut self,
         device: &wgpu::Device,

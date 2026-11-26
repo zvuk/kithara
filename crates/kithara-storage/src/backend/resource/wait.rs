@@ -16,7 +16,6 @@ impl<D: DriverIo> ResourceCore<D> {
     /// Tracks how far the available prefix of the range reaches; since bytes arrive front-to-back
     /// for a sequential fetch, its advance signals progress and resets the hang watchdog.
     /// The wait parks until the gate is notified, with no timer.
-    #[kithara::measure]
     #[kithara::hang_watchdog(timeout = consts::WAIT_HANG_TIMEOUT)]
     pub(super) fn wait_range_inner(
         &self,

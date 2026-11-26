@@ -11,6 +11,7 @@ use kithara_decode::{
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{ConstructionGate, MediaInfo};
+#[cfg(test)]
 use kithara_test_utils::kithara;
 use tracing::warn;
 
@@ -330,8 +331,6 @@ impl DecoderGeneration {
         self.holdback = None;
         self.staged.pop_front().or_else(|| self.gapless.next())
     }
-
-    #[kithara::measure(label = "audio.decoder.next")]
     pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         if self.finished {
             return Ok(DecoderChunkOutcome::Eof);
@@ -453,7 +452,6 @@ pub(super) fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFai
 #[cfg(test)]
 mod tests {
     use std::{
-        cell::Cell,
         num::NonZeroU32,
         sync::atomic::{AtomicU64, Ordering},
     };
@@ -466,7 +464,6 @@ mod tests {
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_stream::{MediaInfo, PrerollHint};
     use kithara_test_fixtures::unit_fixtures::decode_quarter;
-    use kithara_test_utils::kithara;
 
     use super::*;
     use crate::test_pools::{Pools, pools, sample_buffer};
@@ -594,7 +591,7 @@ mod tests {
         )
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     #[case(None, 4, "an unnamed codec keeps the compensated trim")]
     #[case(
         Some(kithara_stream::AudioCodec::Flac),
@@ -654,14 +651,14 @@ mod tests {
     /// `MediaOnly` trimmer removes nothing), yet those frames are not content:
     /// the seam origin counts them, and the four `quality_switch_continuity`
     /// integration tests fail by exactly this many frames if it stops.
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn origin_counts_codec_priming_the_media_only_trimmer_leaves_in_place() {
         let generation = priming_generation(spec(2, 44_100), GaplessMode::MediaOnly);
 
         assert_eq!(generation.timeline_origin(GaplessMode::MediaOnly), 1_024);
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn seek_to_start_preserves_codec_priming_trim() {
         let pools = pools();
         let spec = spec(2, 44_100);
@@ -678,7 +675,7 @@ mod tests {
         assert_eq!(output.frames(), 1_024);
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn seek_into_content_does_not_reapply_codec_priming_trim() {
         let pools = pools();
         let spec = spec(2, 44_100);
@@ -702,7 +699,7 @@ mod tests {
         assert_eq!(output.frames(), 2_048);
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn staged_holdback_rejects_gap_mixed_spec_and_bad_metadata(decode_quarter: Vec<f32>) {
         let pools = pools();
         let active = spec(2, 44_100);
@@ -760,7 +757,7 @@ mod tests {
         assert!(bad_meta.staged.is_empty(), "bad metadata must be rejected");
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn staged_holdback_never_grows_past_prepared_capacity(decode_quarter: Vec<f32>) {
         let pools = pools();
         let spec = spec(1, 44_100);
@@ -842,7 +839,7 @@ mod tests {
         assert!(held.next().is_none());
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn prepare_holdback_reserves_from_staged_len_to_logical_limit(decode_quarter: Vec<f32>) {
         let pools = pools();
         let spec = spec(1, 44_100);
@@ -891,7 +888,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn holdback_pumps_surplus_gapless_pending_without_decoder_input(decode_quarter: Vec<f32>) {
         const TRAILING_FRAMES: u64 = 10;
@@ -954,7 +951,7 @@ mod tests {
         assert_eq!(generation.staged.capacity(), capacity);
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn checked_holdback_scans_the_preexisting_span_once(decode_quarter: Vec<f32>) {
         const JOIN_FRAMES: u64 = 7_680;
 
@@ -1011,7 +1008,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn deferred_seek_only_completes_the_current_epoch() {
         let mut generation = generation(spec(2, 44_100));
         let first = Duration::from_secs(1);
@@ -1048,7 +1045,7 @@ mod tests {
         assert!(!generation.has_output());
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn seek_reopens_a_finished_generation() {
         let spec = spec(2, 44_100);
         let mut generation = generation(spec);
@@ -1134,7 +1131,7 @@ mod tests {
         fn update_byte_len(&self, _len: u64) {}
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     fn deferred_incoming_seek_prepares_output_before_consuming_a_chunk() {
         use crate::pipeline::decode::{
             transition::{IncomingPrime, OutgoingFrontier},
@@ -1192,7 +1189,7 @@ mod tests {
         assert!(generation.is_finished());
     }
 
-    #[kithara::test]
+    #[kithara_test_macros::test]
     #[case::unknown_raw_zero(None, 0, 0, 0, 0, 1_024)]
     #[case::observed_shifted_pcm(Some(10_000_000), 0, 0, 0, 15, 1_024)]
     #[case::known_nonzero(Some(700_000_000), 700_000_000, 1_050, 0, 1_050, 1_024)]

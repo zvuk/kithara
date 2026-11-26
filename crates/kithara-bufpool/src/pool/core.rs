@@ -5,7 +5,6 @@ use std::{
 
 use crossbeam_queue::ArrayQueue;
 use kithara_platform::{sync::Arc, thread::current_thread_id};
-use kithara_test_macros as kithara;
 
 use super::{shard::PoolShard, stats::PoolStats, storage::Storage};
 use crate::{
@@ -96,8 +95,6 @@ where
         }
         Ok(core)
     }
-
-    #[kithara::measure]
     pub(crate) fn acquire(self: &Arc<Self>) -> OwnedBuffer<SHARDS, B, OBSERVE> {
         let shard_idx = Self::shard_index();
         let value = self.shards[shard_idx]

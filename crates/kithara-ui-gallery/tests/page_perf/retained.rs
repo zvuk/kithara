@@ -3,7 +3,6 @@ use std::{
     hash::{Hash as _, Hasher as _},
 };
 
-use hotpath::measure_block;
 use kithara_platform::time::Duration;
 use kithara_ui::{
     app::{Config, Ui},
@@ -54,17 +53,12 @@ impl<'a> Retained<'a> {
     /// was wanted is counted separately.
     fn draw(&mut self, fence: bool) -> Census {
         let before = self.ui.draw_pool_stats();
-        measure_block!(
-            "vello.frame",
-            self.ui.frame(Duration::from_millis(consts::STRESS_TICK_MS))
-        );
+        (self.ui.frame(Duration::from_millis(consts::STRESS_TICK_MS)));
         self.scheduled = self.ui.needs_frame();
-        let frame = measure_block!(
-            "vello.render",
-            self.ui
-                .render()
-                .unwrap_or_else(|error| panic!("the retained host must draw: {error}"))
-        );
+        let frame = (self
+            .ui
+            .render()
+            .unwrap_or_else(|error| panic!("the retained host must draw: {error}")));
         let encoding = frame.scene().encoding();
         let scene = Scene {
             draw_tags: encoding.draw_tags.len(),

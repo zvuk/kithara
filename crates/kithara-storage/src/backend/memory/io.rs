@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use kithara_platform::sync::Arc;
-use kithara_test_utils::kithara;
 
 use crate::{
     StorageError, StorageResult,
@@ -80,7 +79,6 @@ impl DriverIo for MemDriver {
     /// Reads the working buffer first while a generation is in flight, since the writer's own
     /// read-back must observe the current bytes, not the stale published snapshot; once `commit`
     /// frees the buffer, the snapshot becomes authoritative.
-    #[kithara::measure]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let state = self.state.lock();
 
@@ -118,8 +116,6 @@ impl DriverIo for MemDriver {
         let state = self.state.lock();
         state.len
     }
-
-    #[kithara::measure]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         if committed {
             return Err(StorageError::Failed(

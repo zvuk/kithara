@@ -24,9 +24,9 @@ client-wreq = ["kithara-stream/client-wreq", "kithara-abr/client-wreq", "kithara
 tls-rustls = ["kithara-stream/tls-rustls", "kithara-abr/tls-rustls", "kithara-decode/tls-rustls"]
 tls-native = ["kithara-stream/tls-native", "kithara-abr/tls-native", "kithara-decode/tls-native"]
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
-perf = ["dep:hotpath", "hotpath/hotpath"]
+perf = []
 # Enable memory profiling for examples (includes allocation tracking, adds overhead)
-memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
+memprof = []
 # Enable Apple AudioToolbox hardware decoder (macOS/iOS).
 apple = ["kithara-decode/apple"]
 # Enable Apple AudioToolbox fused decode+SRC, used by the Apple device FFI set.
@@ -72,7 +72,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
-hotpath = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 
@@ -96,8 +95,6 @@ kithara-assets = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["hls"] }
-
-hotpath = { workspace = true }
 
 [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 kithara-audio = { path = ".", default-features = false, features = ["symphonia"] }

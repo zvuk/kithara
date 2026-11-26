@@ -1,5 +1,4 @@
 use kithara_bufpool::{HasPool, SampleBuffer};
-use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 use signalsmith_stretch::Stretch;
 
@@ -269,7 +268,7 @@ impl ElasticEngine for SignalsmithElastic {
     ) -> Result<(), ElasticError> {
         self.capabilities
             .validate(request, source.len(), output.len())?;
-        kithara::measure_block!("signalsmith::Stretch::process", {
+        ({
             self.inner.process(source, output);
         });
         self.terminal = TerminalState::Armed { request };

@@ -315,8 +315,6 @@ where
         self.source.finish_deferred();
         self.port.flush();
     }
-
-    #[kithara::measure(label = "play.decoder.tick")]
     fn tick(&mut self) -> TickResult {
         if let Err(error) = self.synchronize() {
             self.fail(error);
