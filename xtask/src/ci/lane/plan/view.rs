@@ -56,7 +56,7 @@ fn require_policy_checkout(worktree: &Path, revision: &str) -> Result<()> {
     Ok(())
 }
 
-fn prepare_view(
+pub(super) fn prepare_view(
     ctx: &Ctx,
     request: PlanRequest,
     policy: &PlanningPolicy,
@@ -160,7 +160,7 @@ fn harness(catalog: &Catalog) -> Result<Value> {
     Ok(serde_json::to_value(values)?)
 }
 
-fn verify_catalog(
+pub(super) fn verify_catalog(
     view: &wire::PlanViewV3,
     catalog: &Catalog,
     config: &CiProjectConfig,
