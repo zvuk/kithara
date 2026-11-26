@@ -88,3 +88,8 @@ cache-verify *ARGS:
 [positional-arguments]
 cache-exec PHASE +ARGS:
     just _xtask ci cache exec "$@"
+
+# Resolve logical contracts and frozen execution eligibility without dispatch.
+[positional-arguments]
+plan *ARGS:
+    just _xtask ci plan "$@"
