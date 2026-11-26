@@ -45,83 +45,8 @@ use crate::{
     scenarios::consts,
 };
 
-/// What a frame is asked to answer for. A drag also presses, so the classes are
-/// tested widest-first wherever one has to be chosen.
-#[derive(Clone, Copy)]
-enum Interaction {
-    Drag,
-    Press,
-    /// A press on the leading part of the box rather than the middle of it, for
-    /// a control whose box is mostly a reading and whose one gesture sits at
-    /// one end. Pressing the middle of such a control is a press on the label,
-    /// which correctly answers nothing on either host.
-    PressLeading,
-    DataChange,
-}
-
-/// One neutral step both hosts translate into their own event vocabulary.
-#[derive(Clone, Copy)]
-enum Step {
-    Move(Pt),
-    Press,
-    Release,
-    Data,
-}
-
-impl Interaction {
-    /// Where a gesture acts, as fractions of the control's own laid-out rect. A
-    /// point derived this way is inside the control whatever size its layout gave
-    /// it; a fixed coordinate is inside only the controls big enough to reach it,
-    /// and a control it misses is measured redrawing while claiming to be dragged.
-    const START: (f32, f32) = (0.25, 0.25);
-    const MIDDLE: (f32, f32) = (0.5, 0.5);
-    const END: (f32, f32) = (0.75, 0.75);
-    /// Far enough in to clear the strip's own padding and its icon, and well short
-    /// of where the reading beside the control starts. At this fixture's 240 that
-    /// is x=48, against a scope chip the skin puts at 30 and runs about 50 wide.
-    const LEADING: (f32, f32) = (0.2, 0.5);
-
-    fn steps(self, rect: Rect) -> Vec<Step> {
-        let at = |fraction| Step::Move(inside(rect, fraction));
-        match self {
-            Self::Drag => vec![
-                at(Self::START),
-                Step::Press,
-                at(Self::MIDDLE),
-                at(Self::END),
-                Step::Release,
-            ],
-            Self::Press => vec![at(Self::MIDDLE), Step::Press, Step::Release],
-            Self::PressLeading => vec![at(Self::LEADING), Step::Press, Step::Release],
-            Self::DataChange => vec![Step::Data],
-        }
-    }
-}
-
-/// One point of the rect, named by where in it the gesture wants to be.
-fn inside(rect: Rect, (x, y): (f32, f32)) -> Pt {
-    Pt {
-        x: rect.x + rect.w * x,
-        y: rect.y + rect.h * y,
-    }
-}
-
-fn contains(rect: Rect, at: Pt) -> bool {
-    at.x >= rect.x && at.x <= rect.x + rect.w && at.y >= rect.y && at.y <= rect.y + rect.h
-}
-
-/// One control, mounted alone, and the interaction its frame is driven by.
-///
-/// `name` is the document name of the control, and `control` is the same RON
-/// the paint and gesture censuses mount it from. `interaction` follows the
-/// gesture census: a control that carries a drag is measured dragging, one that
-/// only presses is measured pressing, and the rest are measured redrawing after
-/// their reading moved.
-struct Scenario {
-    control: &'static str,
-    name: &'static str,
-    interaction: Interaction,
-}
+mod types;
+use types::{Interaction, Scenario, Step};
 
 /// One frame's worth of work on one host, from the input applied to the draw
 /// output produced. Nothing here rasterises: the measurement stops at the
