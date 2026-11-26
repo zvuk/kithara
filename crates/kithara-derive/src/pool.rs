@@ -88,8 +88,8 @@ fn derive(input: &DeriveInput) -> Result<TokenStream2> {
 
     let name = &input.ident;
     let context = Ident::new("context", Span::mixed_site());
-    let fields = slots.iter().map(|slot| slot.field).collect::<Vec<_>>();
-    let keys = slots.iter().map(|slot| slot.key).collect::<Vec<_>>();
+    let fields: Vec<&Ident> = slots.iter().map(|slot| slot.field).collect();
+    let keys: Vec<&Type> = slots.iter().map(|slot| slot.key).collect();
     let params = slots
         .iter()
         .map(|Slot { docs, field, .. }| quote!(#(#docs)* #field: ::kithara_bufpool::PoolConfig));
@@ -147,7 +147,8 @@ fn slot_key(ty: &Type) -> Result<&Type> {
     let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
         return Err(refuse());
     };
-    match arguments.args.iter().collect::<Vec<_>>().as_slice() {
+    let args: Vec<&GenericArgument> = arguments.args.iter().collect();
+    match args.as_slice() {
         [GenericArgument::Type(key)] => Ok(key),
         _ => Err(refuse()),
     }

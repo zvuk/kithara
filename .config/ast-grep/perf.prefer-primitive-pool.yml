@@ -36,9 +36,6 @@ files:
   - crates/kithara-*/src/**/*.rs
 ignores:
   - crates/kithara-bufpool/**
-  # The derive crate expands at compile time; its `collect::<Vec<_>>()` builds
-  # `quote!` repetition sources, never a runtime audio-path allocation.
-  - crates/kithara-derive/**
   - crates/kithara-devtools/**
   - crates/kithara-fixture-gen/**
   - crates/kithara-fixture-media/**

@@ -1715,6 +1715,73 @@ fn build(overall_budget: OverallBudget) {
     }
 
     #[test]
+    fn component_pool_rule_matches_the_callee_not_the_whole_call_text() {
+        // The derive crate emits `PoolRegion::__build` inside `quote!`, so the
+        // enclosing `Ok(quote! { ... })` call's text contains `::__build(`.
+        // Matching on the whole call text flags that template as construction;
+        // matching the callee alone does not, while a real `__build` call nested
+        // in another real call is still rejected exactly once.
+        let quoted = r#"
+fn expand() -> ::proc_macro2::TokenStream {
+    ::core::result::Result::Ok(::quote::quote! {
+        ::kithara_bufpool::PoolRegion::__build(overall_budget, |context| {
+            ::core::result::Result::Ok(Self { bytes: context.slot::<u8>(bytes)? })
+        })
+    })
+}
+"#;
+
+        for path in [
+            "crates/kithara-derive/src/pool.rs",
+            "crates/kithara-app/src/fixture.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.no-component-pool-construction.yml", path, quoted),
+                0,
+                "quoted construction at {path}"
+            );
+        }
+
+        let real = r#"
+fn component(overall_budget: OverallBudget) {
+    let direct = PoolRegion::__build(overall_budget, |_| Ok(()));
+    let nested = Ok(PoolRegion::<LocalPools>::__build(overall_budget, |_| Ok(())));
+    let hidden = crate::RoundPools::__build_region(overall_budget, config);
+}
+"#;
+        assert_eq!(
+            rule_hits_at(
+                "perf.no-component-pool-construction.yml",
+                "crates/kithara-app/src/fixture.rs",
+                real,
+            ),
+            3,
+            "direct and nested construction still rejected"
+        );
+    }
+
+    #[test]
+    fn primitive_pool_rule_allows_typed_non_primitive_collections() {
+        // A typed let over a non-primitive element (the derive's own style) is
+        // allowed; the primitive and inferred `Vec<_>` forms stay rejected.
+        let source = r#"
+struct Ident;
+struct Type;
+struct GenericArgument;
+
+fn collect_slots(fields: &[Ident], keys: &[Type], args: &[GenericArgument], values: &[f32]) {
+    let fields_typed: Vec<&Ident> = fields.iter().collect();
+    let keys_typed: Vec<&Type> = keys.iter().collect();
+    let args_typed: Vec<&GenericArgument> = args.iter().collect();
+    let pcm: Vec<f32> = values.iter().copied().collect();
+    let inferred = values.iter().copied().collect::<Vec<_>>();
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 2);
+    }
+
+    #[test]
     fn pool_rules_cover_product_crates_and_ignore_pool_infrastructure() {
         let primitive = "fn scratch() { let values: Vec<f32> = vec![0.0; 8]; }";
         let local = "fn component() { let pools = AppPools::builder(OverallBudget(1024)); }";
