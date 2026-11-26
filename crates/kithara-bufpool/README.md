@@ -15,7 +15,7 @@
 # kithara-bufpool
 
 Typed sharded buffers behind one cloneable region facade. A composition root
-declares a closed schema, configures every pool explicitly, and shares one hard
+derives a closed schema, configures every pool explicitly, and shares one hard
 byte budget across built-in byte/sample buffers and registered vector or string
 keys.
 
@@ -23,7 +23,7 @@ keys.
 
 ```rust
 use kithara_bufpool::{
-    OverallBudget, PoolAlias, PoolConfig, PoolError, StringKey, VecKey, pool_schema,
+    OverallBudget, Pool, PoolAlias, PoolConfig, PoolError, PoolSlot, StringKey, VecKey,
 };
 
 enum CommandsTag {}
@@ -32,13 +32,12 @@ enum TextTag {}
 type Commands = PoolAlias<CommandsTag, VecKey<u32, 1>>;
 type Text = PoolAlias<TextTag, StringKey<1>>;
 
-pool_schema! {
-    pub AppPools {
-        bytes: u8,
-        samples: f32,
-        commands: Commands,
-        text: Text,
-    }
+#[derive(Pool)]
+pub struct AppPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
+    commands: PoolSlot<Commands>,
+    text: PoolSlot<Text>,
 }
 
 fn build() -> Result<(), PoolError> {
@@ -69,7 +68,9 @@ fn build() -> Result<(), PoolError> {
 
 <tr><td><code>PoolRegion&lt;S&gt;</code></td><td>Cloneable facade over one closed schema and shared hard budget</td></tr>
 
-<tr><td><code>pool_schema!</code></td><td>Declares the registered keys and their typestate builder</td></tr>
+<tr><td><code>#[derive(Pool)]</code></td><td>Turns a struct of private <code>PoolSlot&lt;K&gt;</code> fields into a closed schema with a module-private typestate builder</td></tr>
+
+<tr><td><code>PoolSlot&lt;K&gt;</code></td><td>Opaque storage for one registered key; only the derived builder creates it</td></tr>
 
 <tr><td><code>PoolConfig</code></td><td>Retention and initial allocation policy</td></tr>
 
@@ -93,7 +94,9 @@ fn build() -> Result<(), PoolError> {
 
 ## Integration
 
-The app and FFI composition roots own concrete schemas. Lower layers are
+The app and FFI composition roots own concrete schemas. A crate deriving
+`Pool` depends on `kithara-bufpool` directly, because the expansion names
+`::kithara_bufpool` paths. Lower layers are
 generic over only the `HasPool<u8>` and `HasPool<f32>` capabilities they use.
 Acquisition and return stay lock-free; every capacity increase is checked
 against the region limit.

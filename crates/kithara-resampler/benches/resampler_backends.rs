@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use criterion::{
     BenchmarkId, Criterion, Throughput, criterion_group, criterion_main, measurement::Measurement,
 };
-use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolRegion, PoolSlot};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_resampler::apple::AppleAudioConverterBackend;
 #[cfg(feature = "resample-glide")]
@@ -16,10 +16,9 @@ use kithara_resampler::{
 };
 use num_traits::cast::ToPrimitive;
 
-pool_schema! {
-    pub(crate) BenchPools {
-        samples: f32,
-    }
+#[derive(Pool)]
+pub(crate) struct BenchPools {
+    samples: PoolSlot<f32>,
 }
 
 fn pools() -> PoolRegion<BenchPools> {

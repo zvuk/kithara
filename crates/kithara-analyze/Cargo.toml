@@ -25,6 +25,7 @@ flash = ["kithara/flash"]
 
 [dependencies]
 kithara = { workspace = true, features = ["audio", "analysis", "analysis-waveform", "analysis-beat", "play", "file", "hls", "download", "platform", "bufpool", "resampler", "resample-rubato", "stretch-identity", "client-reqwest", "tls-rustls"] }
+kithara-bufpool = { workspace = true }
 
 clap = { workspace = true }
 serde = { workspace = true }

@@ -20,14 +20,13 @@ Single-file media streaming (MP3, AAC, FLAC, ALAC, WAV ...). Implements `kithara
 
 ```rust
 use kithara_assets::AssetStore;
-use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
 use kithara_file::{File, FileConfig, FileSrc};
 use kithara_stream::Stream;
 
-pool_schema! {
-    AppPools {
-        bytes: u8,
-    }
+#[derive(Pool)]
+struct AppPools {
+    bytes: PoolSlot<u8>,
 }
 
 let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))

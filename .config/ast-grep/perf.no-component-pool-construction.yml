@@ -1,7 +1,8 @@
 id: perf.no-component-pool-construction
 message: |
   Declaring or constructing a typed buffer-pool region outside its composition
-  owner creates a second owner and bypasses the shared hard budget. Only
+  owner creates a second owner and bypasses the shared hard budget. A schema
+  is a `#[derive(Pool)]` struct or any struct storing `PoolSlot<K>`. Only
   `crates/kithara-analyze/src/pools.rs`, `crates/kithara-app/src/pools.rs`,
   `crates/kithara-ffi/src/pools.rs`, and the
   `kithara-ui-draw` draw-buffer facade own production schemas and region
@@ -39,15 +40,32 @@ ignores:
   - crates/kithara-host/src/session/testing.rs
   - crates/kithara-play/src/session/testing.rs
   - "**/benches/**"
+utils:
+  pool-derive:
+    kind: attribute_item
+    regex: '^#\[\s*derive\s*\([^\]]*\bPool\s*[,)]'
+  pool-schema:
+    kind: struct_item
+    any:
+      - follows:
+          matches: pool-derive
+          stopBy:
+            not:
+              any:
+                - kind: attribute_item
+                - kind: line_comment
+                - kind: block_comment
+      - has:
+          kind: field_declaration
+          regex: '\bPoolSlot\s*<'
+          stopBy: end
 rule:
   all:
     - any:
-        - all:
-            - kind: macro_invocation
-            - regex: '(?:^|::)pool_schema!\s*(?:\{|\(|\[)'
+        - matches: pool-schema
         - all:
             - kind: use_declaration
-            - regex: '\bpool_schema\s+as\s+'
+            - regex: '\b(?:kithara_bufpool|kithara_derive|bufpool)\b[^;]*\bPool\s+as\s+'
         - all:
             - kind: call_expression
             - regex: '::__build(?:_region)?\s*\('

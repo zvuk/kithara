@@ -1541,13 +1541,12 @@ fn local() -> u32 {
     #[test]
     fn component_pool_rule_rejects_non_owner_region_construction() {
         let source = r#"
-kithara_bufpool::pool_schema! {
-    pub LocalPools {
-        bytes: u8,
-        samples: f32,
-        commands: VecKey<DrawCmd, 1>,
-        text: StringKey<1>,
-    }
+#[derive(kithara_bufpool::Pool)]
+pub struct LocalPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
+    commands: PoolSlot<VecKey<DrawCmd, 1>>,
+    text: PoolSlot<StringKey<1>>,
 }
 
 impl HasPool<u8> for HandWrittenPools {
@@ -1587,19 +1586,27 @@ mod tests {
     #[test]
     fn local_test_pool_rule_requires_the_shared_schema() {
         let source = r#"
-pool_schema! {
-    pub(crate) TestPools {
-        bytes: u8,
-        samples: f32,
-    }
+#[derive(Pool)]
+pub(crate) struct TestPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
-kithara_bufpool::pool_schema!(pub TestPools { bytes: u8 });
-pool_schema![TestPools { samples: f32 }];
-
-pool_schema! {
-    pub InlineTestPools { bytes: u8 }
+mod qualified {
+    #[derive(Debug, kithara_bufpool::Pool)]
+    pub struct TestPools { bytes: kithara_bufpool::PoolSlot<u8> }
 }
+
+mod renamed {
+    #[derive(Schema)]
+    struct TestPools { samples: PoolSlot<f32> }
+}
+
+#[derive(Pool)]
+pub struct InlineTestPools { bytes: PoolSlot<u8> }
+
+#[derive(Debug)]
+struct TestPools;
 
 mod test_pools;
 
@@ -1609,24 +1616,37 @@ fn local_region() {
 "#;
 
         assert_eq!(local_test_pool_hits(source), 5);
-        assert_eq!(
-            rule_hits_at(
-                "perf.no-local-test-pools.yml",
-                "crates/kithara-bufpool/src/testing.rs",
-                source,
-            ),
-            0
-        );
+        for owner in [
+            "crates/kithara-bufpool/src/testing.rs",
+            "crates/kithara-test-utils/src/bufpool.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.no-local-test-pools.yml", owner, source),
+                0,
+                "shared test pool owner {owner}"
+            );
+        }
     }
 
     #[test]
-    fn component_pool_rule_covers_aliases_hidden_constructor_and_macro_delimiters() {
+    fn component_pool_rule_covers_derive_spellings_aliases_and_hidden_constructor() {
         let source = r#"
-use kithara_bufpool::{pool_schema as schema, PoolRegion as Region};
+use kithara_bufpool::{Pool as Schema, PoolRegion as Region};
+use kithara_derive::Pool as Derived;
 
-pool_schema!(pub RoundPools { bytes: u8 });
-pool_schema![pub SquarePools { samples: f32 }];
-schema!(pub AliasedPools { bytes: u8 });
+#[derive(Clone, kithara_derive::Pool, Debug)]
+pub struct ListedPools { bytes: PoolSlot<u8> }
+
+/// Documented schema.
+#[derive(Pool)]
+#[doc(hidden)]
+pub struct AttributedPools { samples: PoolSlot<f32> }
+
+#[derive(Schema)]
+pub struct RenamedPools { bytes: kithara_bufpool::PoolSlot<u8> }
+
+#[derive(Debug, PoolConfigDefaults)]
+pub struct PoolSettings { config: PoolConfig, pool: Pool }
 
 fn component() {
     let direct = Region::__build(OverallBudget(64), |_| Ok(()));
@@ -1640,16 +1660,15 @@ fn component() {
 
         assert_eq!(
             rule_hits("perf.no-component-pool-construction.yml", source),
-            5
+            7
         );
     }
 
     #[test]
     fn component_pool_rule_allows_only_exact_owner_modules() {
         let source = r#"
-pool_schema! {
-    pub AppPools { bytes: u8 }
-}
+#[derive(Pool)]
+pub struct AppPools { bytes: PoolSlot<u8> }
 
 impl HasPool<u8> for HandWrittenPools {
     fn __slot(&self) -> &PoolSlot<u8> { todo!() }
@@ -1662,8 +1681,10 @@ fn build(overall_budget: OverallBudget) {
 "#;
 
         for owner in [
+            "crates/kithara-analyze/src/pools.rs",
             "crates/kithara-app/src/pools.rs",
             "crates/kithara-ffi/src/pools.rs",
+            "crates/kithara-ui-draw/src/draw/pool/buffers.rs",
         ] {
             assert_eq!(
                 rule_hits_at("perf.no-component-pool-construction.yml", owner, source),
@@ -1801,7 +1822,8 @@ impl HasPool<u8> for Fixture {
 }
 
 #[cfg(test)]
-pool_schema! { pub InlineTestPools { bytes: u8 } }
+#[derive(Pool)]
+pub struct InlineTestPools { bytes: PoolSlot<u8> }
 
 #[cfg(all(feature = "usdt", test))]
 impl HasPool<f32> for AllCfgFixture {
@@ -1809,7 +1831,8 @@ impl HasPool<f32> for AllCfgFixture {
 }
 
 #[cfg(all(feature = "usdt", test))]
-pool_schema!(pub AllCfgPools { samples: f32 });
+#[derive(Pool)]
+pub struct AllCfgPools { samples: PoolSlot<f32> }
 
 #[cfg(test)]
 fn fixture() {

@@ -9,6 +9,7 @@ mod entrypoints;
 mod event;
 mod mirror;
 mod phase;
+mod pool;
 mod ranged;
 mod ui;
 mod vocabulary;
@@ -44,6 +45,17 @@ pub fn skin_walk(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 #[proc_macro_derive(Phase, attributes(phase))]
 pub fn phase(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     phase::expand(input)
+}
+
+/// Implements typed construction and key dispatch for a buffer-pool schema.
+///
+/// The struct keeps its private `PoolSlot<K>` fields; expansion adds a
+/// module-private `builder(OverallBudget)` with one required `PoolConfig`
+/// setter per field and one `HasPool<K>` implementation per field.
+#[cfg(feature = "pool")]
+#[proc_macro_derive(Pool)]
+pub fn pool(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    pool::expand(input)
 }
 
 /// Declares a bounded numeric newtype.

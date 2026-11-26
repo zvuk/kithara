@@ -19,14 +19,13 @@ HTTP client with retry, timeout, and streaming. Wraps the selected backend (`req
 ## Usage
 
 ```rust
-use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
 use kithara_net::{HttpClient, Net, NetOptions};
 use kithara_platform::CancelToken;
 
-pool_schema! {
-    NetPools {
-        bytes: u8,
-    }
+#[derive(Pool)]
+struct NetPools {
+    bytes: PoolSlot<u8>,
 }
 
 let pools = NetPools::builder(OverallBudget(64 * 1024 * 1024))

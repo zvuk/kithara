@@ -1,14 +1,13 @@
 use std::num::NonZeroUsize;
 
-use kithara::bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolRegion, PoolSlot};
 
 use crate::RunError;
 
-pool_schema! {
-    pub(crate) AnalyzePools {
-        bytes: u8,
-        samples: f32,
-    }
+#[derive(Pool)]
+pub(crate) struct AnalyzePools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
 pub(crate) type Pools = PoolRegion<AnalyzePools>;

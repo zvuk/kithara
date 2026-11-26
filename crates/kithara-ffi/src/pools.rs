@@ -1,18 +1,17 @@
 use kithara::{
     assets::AssetStore,
-    bufpool::{OverallBudget, PoolConfig, PoolError, PoolRegion, pool_schema},
     play::{PlayWorker, PlaybackResamplerBackend, ResourceConfig},
     queue::{Queue, QueueControl, TrackSource},
 };
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolError, PoolRegion, PoolSlot};
 
 use crate::consts;
 
-pool_schema! {
-    /// Buffer pools owned by one FFI engine composition root.
-    pub FfiPools {
-        bytes: u8,
-        samples: f32,
-    }
+/// Buffer pools owned by one FFI engine composition root.
+#[derive(Pool)]
+pub struct FfiPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
 /// Concrete buffer-pool facade used by FFI player surfaces.

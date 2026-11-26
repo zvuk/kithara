@@ -1,8 +1,8 @@
 use std::{mem::size_of, sync::Barrier, thread};
 
 use kithara_bufpool::{
-    HasPool, OverallBudget, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey, VecKey,
-    pool_schema,
+    HasPool, OverallBudget, Pool, PoolAlias, PoolConfig, PoolError, PoolRegion, PoolSlot,
+    StringKey, VecKey,
 };
 use kithara_platform::{sync::Arc, time::Duration};
 #[cfg(all(test, target_os = "android"))]
@@ -19,11 +19,11 @@ fn pools(max_bytes: usize) -> PoolRegion<TestPools> {
 }
 
 struct ForgedPools {
-    bytes: kithara_bufpool::__private::PoolSlot<u8>,
+    bytes: PoolSlot<u8>,
 }
 
 impl HasPool<u8> for ForgedPools {
-    fn __slot(&self) -> &kithara_bufpool::__private::PoolSlot<u8> {
+    fn __slot(&self) -> &PoolSlot<u8> {
         &self.bytes
     }
 }
@@ -198,11 +198,10 @@ mod aliases {
     pub(super) type First = PoolAlias<FirstTag, f32>;
     pub(super) type Second = PoolAlias<SecondTag, f32>;
 
-    pool_schema! {
-        pub(super) AliasPools {
-            first: First,
-            second: Second,
-        }
+    #[derive(Pool)]
+    pub(super) struct AliasPools {
+        first: PoolSlot<First>,
+        second: PoolSlot<Second>,
     }
 
     pub(super) fn pools() -> PoolRegion<AliasPools> {
@@ -234,11 +233,10 @@ mod reclaim_keys {
     pub(super) type Donor = PoolAlias<DonorTag, VecKey<u8, 1>>;
     pub(super) type Requester = PoolAlias<RequesterTag, VecKey<u8, 1>>;
 
-    pool_schema! {
-        pub(super) ReclaimPools {
-            donor: Donor,
-            requester: Requester,
-        }
+    #[derive(Pool)]
+    pub(super) struct ReclaimPools {
+        donor: PoolSlot<Donor>,
+        requester: PoolSlot<Requester>,
     }
 
     pub(super) fn pools(max_bytes: usize) -> PoolRegion<ReclaimPools> {
@@ -517,11 +515,10 @@ mod generic_keys {
     pub(super) type Numbers = PoolAlias<NumbersTag, VecKey<u64, 1>>;
     pub(super) type Text = PoolAlias<TextTag, StringKey<1>>;
 
-    pool_schema! {
-        pub(super) GenericPools {
-            numbers: Numbers,
-            text: Text,
-        }
+    #[derive(Pool)]
+    pub(super) struct GenericPools {
+        numbers: PoolSlot<Numbers>,
+        text: PoolSlot<Text>,
     }
 
     pub(super) fn pools(
@@ -572,6 +569,57 @@ fn generic_keys_report_reuse_and_rejected_returns() {
     let stats = pools.pool_stats::<generic_keys::Numbers>();
     assert_eq!(stats.alloc_misses, 1);
     assert_eq!(stats.put_drops, 1);
+}
+
+mod declaration_shapes {
+    use super::*;
+
+    pub(super) const EAGER_BYTES: usize = 8;
+
+    pub(super) enum TypeTag {}
+    pub(super) type Type = PoolAlias<TypeTag, VecKey<u16, 1>>;
+
+    /// Field names that match the derive's construction vocabulary.
+    #[derive(Pool)]
+    pub(super) struct ShapePools {
+        /// Byte pool named like the generated construction context.
+        context: PoolSlot<u8>,
+        #[cfg(any())]
+        absent: PoolSlot<UndeclaredKey>,
+        r#type: PoolSlot<Type>,
+        #[cfg(all())]
+        samples: PoolSlot<f32>,
+    }
+
+    pub(super) fn pools() -> PoolRegion<ShapePools> {
+        let eager = PoolConfig::builder()
+            .initial_buffers(1)
+            .initial_capacity(EAGER_BYTES)
+            .max_buffers(32)
+            .build();
+        ShapePools::builder(OverallBudget(1024))
+            .context(eager)
+            .r#type(config(32))
+            .samples(config(32))
+            .build()
+            .unwrap_or_else(|error| panic!("shape region: {error}"))
+    }
+}
+
+#[kithara::test]
+fn derived_setters_configure_their_own_fields() {
+    let pools = declaration_shapes::pools();
+
+    assert_eq!(
+        pools.get::<u8>().capacity(),
+        declaration_shapes::EAGER_BYTES
+    );
+    assert_eq!(pools.get::<declaration_shapes::Type>().capacity(), 0);
+    assert_eq!(pools.get::<f32>().capacity(), 0);
+    assert_eq!(
+        pools.stats().allocated_bytes,
+        declaration_shapes::EAGER_BYTES
+    );
 }
 
 #[kithara::test]

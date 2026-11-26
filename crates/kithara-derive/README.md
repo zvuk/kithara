@@ -21,7 +21,7 @@ implementations while their product types remain in the owning crates.
 The crate has no default features. Enable each derive explicitly with its
 matching feature. The available features are `built-default`, `control`,
 `control-painter`, `enum-str`, `event`, `mirror`, `patch`,
-`phase`, `ranged`, `skin-walk`, and `variants`.
+`phase`, `pool`, `ranged`, `skin-walk`, and `variants`.
 The `event` feature exports both `Event` and `EventSet` because they form one
 event contract.
 
@@ -104,6 +104,38 @@ its own `From` implementations: do not also derive `derive_more::From`. Variant
 order determines receive priority; closed channels do not block live members,
 and lag is returned to the caller.
 
+### Buffer-Pool Schemas
+
+`Pool` accepts a concrete, nonempty struct whose private named fields are
+written as `PoolSlot<K>` (any path ending in `PoolSlot`, one key argument). It
+keeps the struct as declared and adds a module-private
+`builder(OverallBudget)` with one required `PoolConfig` setter per field, plus
+one `HasPool<K>` implementation per field. Enums, tuple or unit structs,
+generics, visible fields, other field types, and fields named `builder`,
+`build`, `__build_region`, or `overall_budget` are refused.
+
+```rust
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
+
+#[derive(Pool)]
+pub struct AppPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
+}
+
+let config = || PoolConfig::builder().max_buffers(32).build();
+let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(config())
+    .samples(config())
+    .build()?;
+```
+
+`kithara-bufpool` re-exports the derive beside `PoolSlot`. The expansion names
+`::kithara_bufpool` paths, so the declaring crate needs a direct
+`kithara-bufpool` dependency; the facade's `kithara::bufpool` re-export is not
+enough. A repeated key, including one reached through two type aliases, fails
+to compile.
+
 ## Key Types
 
 Derive macros:
@@ -115,6 +147,7 @@ Derive macros:
 - `#[derive(Mirror)]` — converts between structurally matching product models
 - `#[derive(Patch)]` — generates `<Struct>Patch` and `<Struct>::apply`
 - `#[derive(Phase)]` — implements a closed typestate phase trait
+- `#[derive(Pool)]` — generates a buffer-pool schema builder and `HasPool<K>` dispatch
 - `#[derive(Ranged)]` — generates bounded scalar construction and deserialization
 - `#[derive(SkinWalk)]` — traverses skin frame and text-role fields
 - `#[derive(Variants)]` — exposes unit enum variants in declaration order

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "kithara derive macros for configuration documents, bounded scalars, events, and event sets."
+description = "kithara derive macros for configuration documents, bounded scalars, events, event sets, and buffer-pool schemas."
 keywords = ["audio", "config", "serde", "macros", "kithara"]
 categories = ["config", "development-tools"]
 
@@ -25,6 +25,7 @@ enum-str = []
 mirror = []
 patch = []
 phase = []
+pool = []
 ranged = []
 skin-walk = []
 variants = []
