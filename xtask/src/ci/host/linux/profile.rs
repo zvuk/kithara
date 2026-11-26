@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    net::Ipv4Addr,
+    net::{Ipv4Addr, SocketAddrV4},
     path::{Path, PathBuf},
 };
 
@@ -48,6 +48,9 @@ pub(crate) struct LinuxHost {
     pub(crate) network: String,
     /// Address block of that network, fenced off from the rest of the machine.
     pub(crate) subnet: String,
+    /// Exact private TCP destinations required by the native control/cache boundary.
+    #[serde(default)]
+    pub(super) private_egress: Vec<SocketAddrV4>,
     /// Bytes a job needs free on `cache_root`'s volume before it starts:
     /// the room one cold lane build takes. Required: the room depends on the
     /// machine's builds, and no number fits every machine.
@@ -63,8 +66,11 @@ pub(crate) struct LinuxHost {
     /// registrations for it. A GitHub runner registration is bound to exactly
     /// one repository, so a machine serving two of them holds two credentials
     /// and runs separate runners against each.
+    #[serde(default)]
     pub(crate) repositories: Vec<RepositoryCredential>,
     pub(crate) runners: Vec<LinuxRunner>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) gitlab: Option<GitlabManager>,
     /// The Windows guest this machine hosts, if it hosts one.
     #[serde(default)]
     pub(crate) windows: Option<WindowsGuest>,
@@ -82,6 +88,32 @@ pub(crate) struct RepositoryCredential {
     pub(crate) name: String,
     /// File holding the token that mints registrations for it.
     pub(crate) token_file: PathBuf,
+}
+
+/// Native manager bindings kept outside the validation catalog.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct GitlabManager {
+    pub(super) service: String,
+    pub(super) binary: PathBuf,
+    pub(super) config_file: PathBuf,
+    pub(super) helper_image: String,
+}
+
+/// The native registration that owns one runner's resource envelope.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "provider", rename_all = "kebab-case", deny_unknown_fields)]
+pub(crate) enum RunnerTarget {
+    Github {
+        repository: String,
+    },
+    Gitlab {
+        url: String,
+        project: u64,
+        token_file: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ca_file: Option<PathBuf>,
+    },
 }
 
 /// A Windows virtual machine serving the lane that needs a real Windows.
@@ -118,10 +150,8 @@ fn default_libvirt_network() -> String {
 pub(crate) struct LinuxRunner {
     /// Identifies the runner's service, registration, and container.
     pub(crate) name: String,
-    /// Which repository of [`LinuxHost::repositories`] this runner serves. A
-    /// registration reaches exactly one, so the choice belongs to the runner
-    /// rather than to the machine underneath it.
-    pub(crate) repository: String,
+    /// Native repository or project registration; no provider is implicit.
+    pub(crate) target: RunnerTarget,
     /// Mode-0600 S3 credentials scoped to this runner's cache namespace.
     pub(crate) sccache_s3_env_file: PathBuf,
     /// Whether these credentials may publish immutable target snapshots.
@@ -213,12 +243,36 @@ impl LinuxHost {
             bail!("Linux CI profile network contains unsupported characters");
         }
         parse_subnet(&self.subnet)?;
+        if self
+            .private_egress
+            .iter()
+            .any(|destination| !destination.ip().is_private() || destination.port() == 0)
+        {
+            bail!("private CI egress must name private IPv4 addresses and nonzero TCP ports");
+        }
         // A job needing no room would be admitted onto a full volume.
         if self.free_bytes_for_a_job == 0 {
             bail!("Linux CI profile free_bytes_for_a_job must be positive");
         }
-        if self.repositories.is_empty() {
+        let github = self.windows.is_some()
+            || self
+                .runners
+                .iter()
+                .any(|runner| matches!(runner.target, RunnerTarget::Github { .. }));
+        let gitlab = self
+            .runners
+            .iter()
+            .any(|runner| matches!(runner.target, RunnerTarget::Gitlab { .. }));
+        if github && self.repositories.is_empty() {
             bail!("Linux CI profile must define at least one repository");
+        }
+        if !github && !self.repositories.is_empty() {
+            bail!("GitLab-only profiles cannot declare GitHub credentials");
+        }
+        match (gitlab, &self.gitlab) {
+            (true, Some(manager)) => manager.validate()?,
+            (false, None) => {}
+            _ => bail!("GitLab manager configuration must match declared GitLab workers"),
         }
         let mut repositories = BTreeSet::new();
         for credential in &self.repositories {
@@ -240,9 +294,38 @@ impl LinuxHost {
         let mut seen = BTreeSet::new();
         let mut scopes = BTreeMap::new();
         let mut credential_roles = BTreeMap::new();
+        let mut gitlab_tokens = BTreeSet::new();
         for runner in &self.runners {
             runner.validate()?;
-            self.credential(&runner.repository)?;
+            match &runner.target {
+                RunnerTarget::Github { repository } => {
+                    self.credential(repository)?;
+                }
+                RunnerTarget::Gitlab {
+                    url,
+                    project,
+                    token_file,
+                    ca_file,
+                } => {
+                    let origin = reqwest::Url::parse(url).context("invalid GitLab server URL")?;
+                    if origin.scheme() != "https"
+                        || !origin.username().is_empty()
+                        || origin.password().is_some()
+                        || origin.query().is_some()
+                        || origin.fragment().is_some()
+                        || *project == 0
+                        || !token_file.is_absolute()
+                        || ca_file.as_ref().is_some_and(|path| !path.is_absolute())
+                    {
+                        bail!(
+                            "GitLab workers require an HTTPS server, positive project and absolute credential paths"
+                        );
+                    }
+                    if !gitlab_tokens.insert(token_file) {
+                        bail!("GitLab workers cannot share a runner credential file");
+                    }
+                }
+            }
             if !seen.insert(runner.name.as_str()) {
                 bail!("Linux CI profile defines runner {} twice", runner.name);
             }
@@ -286,6 +369,36 @@ impl LinuxHost {
             .iter()
             .find(|runner| runner.name == name)
             .with_context(|| format!("Linux CI profile has no runner named {name}"))
+    }
+}
+
+impl GitlabManager {
+    fn validate(&self) -> Result<()> {
+        if !self.service.ends_with(".service") || !safe_name(&self.service) {
+            bail!("GitLab manager must name its owned systemd service");
+        }
+        if !self.binary.is_absolute()
+            || !self.config_file.is_absolute()
+            || self.binary.to_string_lossy().contains(char::is_whitespace)
+            || self
+                .config_file
+                .to_string_lossy()
+                .contains(char::is_whitespace)
+        {
+            bail!("GitLab manager binary and configuration paths must be absolute");
+        }
+        if !self
+            .helper_image
+            .split_once("@sha256:")
+            .is_some_and(|(image, digest)| {
+                !image.is_empty()
+                    && digest.len() == 64
+                    && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        {
+            bail!("GitLab helper image must name its immutable SHA-256 repository digest");
+        }
+        Ok(())
     }
 }
 
@@ -389,7 +502,7 @@ impl LinuxRunner {
 
 /// Docker accepts any CIDR here, so the parse doubles as the check that the
 /// firewall rules built from it cannot be widened by a malformed profile.
-fn parse_subnet(value: &str) -> Result<(Ipv4Addr, u32)> {
+pub(super) fn parse_subnet(value: &str) -> Result<(Ipv4Addr, u32)> {
     let (address, prefix) = value
         .split_once('/')
         .with_context(|| format!("Linux CI profile subnet {value} is not a CIDR block"))?;
@@ -533,6 +646,91 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn gitlab_only_profiles_require_no_github_repository_or_credential() {
+        assert!(gitlab_fixture().repositories.is_empty());
+    }
+
+    pub(crate) fn gitlab_fixture() -> LinuxHost {
+        LinuxHost::load(
+            &crate::testing::workspace::root()
+                .join("xtask/tests/fixtures/ci-linux-gitlab-host.toml"),
+        )
+        .expect("GitLab-only profile")
+    }
+
+    #[test]
+    fn native_provider_and_project_bindings_are_required_and_unambiguous() {
+        for fault in 0..10 {
+            let mut raw = toml::Value::try_from(gitlab_fixture()).unwrap();
+            match fault {
+                0 => {
+                    raw["runners"][0]["target"]
+                        .as_table_mut()
+                        .unwrap()
+                        .remove("provider");
+                }
+                1 => raw["runners"][0]["target"]["provider"] = "unknown".into(),
+                2 => {
+                    raw["runners"][0]["target"]
+                        .as_table_mut()
+                        .unwrap()
+                        .remove("project");
+                }
+                3 => {
+                    raw["runners"][0]["target"]
+                        .as_table_mut()
+                        .unwrap()
+                        .insert("repository".to_owned(), "octocat/kithara".into());
+                }
+                4 => {
+                    raw.as_table_mut().unwrap().remove("gitlab");
+                }
+                5 => raw["gitlab"]["binary"] = "gitlab-runner".into(),
+                6 => raw["gitlab"]["helper_image"] = "helper:latest".into(),
+                7 => raw["runners"][0]["target"]["project"] = 0.into(),
+                8 => {
+                    raw["runners"][1]["target"]["token_file"] =
+                        raw["runners"][0]["target"]["token_file"].clone();
+                }
+                _ => {
+                    raw["repositories"] =
+                        toml::Value::try_from(host_fixture()).unwrap()["repositories"].clone();
+                }
+            }
+            assert!(
+                !raw.try_into::<LinuxHost>()
+                    .is_ok_and(|host| host.validate().is_ok()),
+                "fault {fault}"
+            );
+        }
+    }
+
+    #[test]
+    fn gitlab_targets_reject_relative_credentials_and_url_credentials() {
+        for url in [
+            "http://gitlab.example",
+            "https://user:password@gitlab.example",
+            "https://gitlab.example?token=secret",
+        ] {
+            let mut host = gitlab_fixture();
+            let RunnerTarget::Gitlab {
+                url: configured, ..
+            } = &mut host.runners[0].target
+            else {
+                panic!("GitLab fixture");
+            };
+            *configured = url.to_owned();
+            assert!(host.validate().is_err());
+        }
+        let mut host = gitlab_fixture();
+        let RunnerTarget::Gitlab { token_file, .. } = &mut host.runners[0].target else {
+            panic!("GitLab fixture");
+        };
+        *token_file = "token.json".into();
+        assert!(host.validate().is_err());
+    }
+
+    #[test]
     fn the_fixture_profile_matches_the_machine_contract() {
         let host = host_fixture();
         assert!(host.runner("kithara-ci-octocat").is_ok());
@@ -639,29 +837,25 @@ pub(crate) mod tests {
     #[test]
     fn a_runner_registers_with_the_repository_it_names() {
         let host = host_fixture();
-
-        let octocat = host
-            .credential(
-                &host
-                    .runner("kithara-ci-octocat")
-                    .expect("runner")
-                    .repository,
-            )
-            .expect("credential");
-        assert_eq!(octocat.name, "octocat/kithara");
-        assert_eq!(
-            octocat.token_file,
-            Path::new("/etc/kithara-ci/tokens/octocat.token")
-        );
-
-        let hubot = host
-            .credential(&host.runner("kithara-ci-hubot").expect("runner").repository)
-            .expect("credential");
-        assert_eq!(hubot.name, "hubot/kithara");
-        assert_eq!(
-            hubot.token_file,
-            Path::new("/etc/kithara-ci/tokens/hubot.token")
-        );
+        for (runner, expected, token) in [
+            (
+                "kithara-ci-octocat",
+                "octocat/kithara",
+                "/etc/kithara-ci/tokens/octocat.token",
+            ),
+            (
+                "kithara-ci-hubot",
+                "hubot/kithara",
+                "/etc/kithara-ci/tokens/hubot.token",
+            ),
+        ] {
+            let RunnerTarget::Github { repository } = &host.runner(runner).unwrap().target else {
+                panic!("GitHub fixture");
+            };
+            let credential = host.credential(repository).unwrap();
+            assert_eq!(credential.name, expected);
+            assert_eq!(credential.token_file, Path::new(token));
+        }
     }
 
     /// A runner naming a repository the machine holds no token for must fail
@@ -670,7 +864,9 @@ pub(crate) mod tests {
     #[test]
     fn a_runner_naming_an_unknown_repository_is_rejected() {
         let mut host = host_fixture();
-        "someone/else".clone_into(&mut host.runners[0].repository);
+        host.runners[0].target = RunnerTarget::Github {
+            repository: "someone/else".to_owned(),
+        };
         let error = host
             .validate()
             .expect_err("an unknown repository must fail");

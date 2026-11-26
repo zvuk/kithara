@@ -7,17 +7,17 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use cargo_metadata::Message;
-use kithara_devtools::Ctx;
+use cargo_metadata::{Message, TargetKind};
+use kithara_devtools::{Ctx, cargo};
 use tracing::info;
 
 use crate::{child, job};
 
-struct Consumer<'a> {
-    cancel: &'a child::Cancel,
-    directory: &'a Path,
-    capture: &'a Path,
-    target: &'a Path,
+pub(super) struct Consumer<'a> {
+    pub(super) cancel: &'a child::Cancel,
+    pub(super) directory: &'a Path,
+    pub(super) capture: &'a Path,
+    pub(super) target: &'a Path,
 }
 
 pub(crate) fn run(ctx: &Ctx) -> Result<()> {
@@ -51,7 +51,7 @@ pub(crate) fn run(ctx: &Ctx) -> Result<()> {
 }
 
 impl Consumer<'_> {
-    fn instrumentation(&self) -> Result<()> {
+    pub(super) fn instrumentation(&self) -> Result<()> {
         for features in ["", "facade", "instrumented"] {
             let report = self.checked(
                 &mut self.cargo(&[
@@ -67,14 +67,33 @@ impl Consumer<'_> {
                 None,
             )?;
             let mut library = None;
-            for message in Message::parse_stream(report.as_bytes()) {
-                let Message::CompilerArtifact(artifact) = message? else {
+            let mut executable = None;
+            for line in report.lines() {
+                let message = serde_json::from_str::<Message>(line)
+                    .context("instrumentation Cargo message is not JSON")?;
+                let Message::CompilerArtifact(artifact) = message else {
                     continue;
                 };
                 ensure!(
                     artifact.target.name != "kithara_test_args",
                     "test argument compiler reached production instrumentation"
                 );
+                if artifact.target.name == "instrumentation" {
+                    ensure!(
+                        artifact.target.kind == [TargetKind::Example] && !artifact.profile.test,
+                        "instrumentation artifact is not a runnable example"
+                    );
+                    ensure!(
+                        executable.is_none(),
+                        "multiple instrumentation example executables"
+                    );
+                    executable = Some(
+                        artifact
+                            .executable
+                            .context("instrumentation example executable")?
+                            .into_std_path_buf(),
+                    );
+                }
                 if artifact.target.name == "kithara_test_macros" {
                     ensure!(library.is_none(), "multiple instrumentation macro units");
                     library = artifact.filenames.into_iter().next();
@@ -97,15 +116,9 @@ impl Consumer<'_> {
                 "test-only compiler inputs reached production instrumentation:\n{inputs}"
             );
             info!(features, "production macro inputs exclude the test DSL");
+            let executable = executable.context("instrumentation example artifact")?;
             self.checked(
-                &mut self.cargo(&[
-                    "run",
-                    "--example",
-                    "instrumentation",
-                    "--locked",
-                    "--features",
-                    features,
-                ]),
+                &mut self.native_command(&executable)?,
                 &format!("instrumentation-run-{features}"),
                 Some(300),
             )?;
@@ -113,8 +126,8 @@ impl Consumer<'_> {
         Ok(())
     }
 
-    fn capabilities(&self) -> Result<()> {
-        let toolchain = self.checked(Command::new("rustc").arg("-vV"), "toolchain", Some(30))?;
+    pub(super) fn capabilities(&self) -> Result<()> {
+        let toolchain = self.checked(cargo::rustc("rustc").arg("-vV"), "toolchain", Some(30))?;
         info!(toolchain = toolchain.trim(), "test utilities toolchain");
         for offline in [false, true] {
             for features in [
@@ -143,7 +156,7 @@ impl Consumer<'_> {
                     None,
                 )?;
                 let binary = test_binary(&report)?;
-                let report = self.checked(&mut Command::new(&binary), &label, Some(300))?;
+                let report = self.checked(&mut self.native_command(&binary)?, &label, Some(300))?;
                 info!(label, report = report.trim(), "native consumer passed");
                 if !offline && features == "test,hang" {
                     self.watchdog(&binary)?;
@@ -169,7 +182,19 @@ impl Consumer<'_> {
         Ok(())
     }
 
-    fn cargo(&self, args: &[&str]) -> Command {
+    fn native_command(&self, binary: &Path) -> Result<Command> {
+        let libdir = self.checked(
+            cargo::rustc("rustc").args(["--print", "target-libdir"]),
+            "native-target-libdir",
+            Some(30),
+        )?;
+        let (variable, libraries) = cargo::library_path(binary, Path::new(libdir.trim()))?;
+        let mut command = Command::new(binary);
+        command.env(variable, libraries);
+        Ok(command)
+    }
+
+    pub(super) fn cargo(&self, args: &[&str]) -> Command {
         let mut command = Command::new("cargo");
         command
             .current_dir(self.directory)
@@ -186,7 +211,12 @@ impl Consumer<'_> {
         command
     }
 
-    fn checked(&self, command: &mut Command, label: &str, seconds: Option<u64>) -> Result<String> {
+    pub(super) fn checked(
+        &self,
+        command: &mut Command,
+        label: &str,
+        seconds: Option<u64>,
+    ) -> Result<String> {
         let output = self.execute(command, label, seconds)?;
         ensure!(
             output.status.success(),
@@ -263,7 +293,12 @@ impl Consumer<'_> {
         Ok(())
     }
 
-    fn execute(&self, command: &mut Command, label: &str, seconds: Option<u64>) -> Result<Output> {
+    pub(super) fn execute(
+        &self,
+        command: &mut Command,
+        label: &str,
+        seconds: Option<u64>,
+    ) -> Result<Output> {
         let stdout = self.capture.join(format!("{label}.stdout"));
         let stderr = self.capture.join(format!("{label}.stderr"));
         info!(label, ?command, "test utilities command");
@@ -350,9 +385,9 @@ impl Consumer<'_> {
         Ok(())
     }
 
-    fn watchdog(&self, binary: &Path) -> Result<()> {
+    pub(super) fn watchdog(&self, binary: &Path) -> Result<()> {
         let output = self.execute(
-            Command::new(binary)
+            self.native_command(binary)?
                 .args([
                     "--ignored",
                     "--exact",
@@ -395,7 +430,7 @@ impl Consumer<'_> {
     }
 }
 
-fn manifest(root: &Path, pin: Option<(&str, &str)>) -> Result<String> {
+pub(super) fn manifest(root: &Path, pin: Option<(&str, &str)>) -> Result<String> {
     let workspace: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
     let dependencies = workspace
         .get("workspace")
@@ -484,7 +519,7 @@ wasm-bindgen-test = { workspace = true }
     toml::to_string(&manifest).context("serialize consumer manifest")
 }
 
-fn test_binary(report: &str) -> Result<PathBuf> {
+pub(super) fn test_binary(report: &str) -> Result<PathBuf> {
     let binaries = Message::parse_stream(report.as_bytes())
         .filter_map(|message| match message {
             Ok(Message::CompilerArtifact(artifact)) if artifact.profile.test => {
@@ -500,7 +535,7 @@ fn test_binary(report: &str) -> Result<PathBuf> {
     Ok(binary.clone())
 }
 
-fn forbidden_paths(tree: &str) -> Result<Vec<String>> {
+pub(super) fn forbidden_paths(tree: &str) -> Result<Vec<String>> {
     ensure!(!tree.is_empty(), "empty dependency closure");
     let mut path = Vec::new();
     let mut forbidden = Vec::new();
@@ -538,177 +573,4 @@ fn forbidden_paths(tree: &str) -> Result<Vec<String>> {
         }
     }
     Ok(forbidden)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[cfg(unix)]
-    use crate::testing::signals;
-
-    #[cfg(unix)]
-    #[test]
-    fn direct_children_keep_the_consumer_and_compiler_cache_setup() -> Result<()> {
-        let _signals = signals();
-        let cancel = child::Cancel::install()?;
-        let root = tempfile::tempdir()?;
-        let directory = root.path().join("consumer");
-        let capture = root.path().join("capture");
-        fs::create_dir(&directory)?;
-        fs::create_dir(&capture)?;
-        let consumer = Consumer {
-            cancel: &cancel,
-            directory: &directory,
-            capture: &capture,
-            target: &root.path().join("target"),
-        };
-        let cwd = consumer.checked(&mut Command::new("pwd"), "cwd", Some(10))?;
-        assert_eq!(
-            Path::new(cwd.trim()).canonicalize()?,
-            directory.canonicalize()?
-        );
-        assert!(
-            !consumer
-                .cargo(&["check"])
-                .get_envs()
-                .any(|(name, value)| name == "RUSTC_WRAPPER" && value.is_none()),
-            "nested native and WASM compilations must inherit the compiler cache"
-        );
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn failures_include_output_after_temporary_capture_is_removed() -> Result<()> {
-        let _signals = signals();
-        let cancel = child::Cancel::install()?;
-        // The killed case runs last: the command cancels this test process
-        // only after writing, so the capture holds output when the owned
-        // group is stopped, and the cancellation stays pending afterwards.
-        for (script, killed) in [
-            ("printf stdout; printf stderr >&2; exit 7", false),
-            (
-                "printf stdout; printf stderr >&2; kill -TERM $PPID; exec sleep 60",
-                true,
-            ),
-        ] {
-            let root = tempfile::tempdir()?;
-            let capture = root.path().join("capture");
-            fs::create_dir(&capture)?;
-            let consumer = Consumer {
-                cancel: &cancel,
-                directory: root.path(),
-                capture: &capture,
-                target: &root.path().join("target"),
-            };
-            let error = consumer
-                .checked(Command::new("sh").args(["-c", script]), "failure", None)
-                .expect_err("command must fail");
-            drop(root);
-            assert!(!capture.exists());
-            let diagnostics = format!("{error:#}");
-            assert!(diagnostics.contains("stdout"), "{diagnostics}");
-            assert!(diagnostics.contains("stderr"), "{diagnostics}");
-            assert_eq!(diagnostics.contains("cancelled"), killed, "{diagnostics}");
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn closure_oracle_retains_host_backend_paths() {
-        assert_eq!(
-            forbidden_paths("0consumer v0.0.0\n1host-macro v0.1.0 (proc-macro)\n2cpal v0.17.0\n")
-                .unwrap(),
-            ["consumer -> host-macro -> cpal"]
-        );
-        for invalid in ["", "not a tree", "2orphan v0.1.0\n"] {
-            assert!(forbidden_paths(invalid).is_err());
-        }
-    }
-
-    #[test]
-    fn independent_manifest_pins_all_kithara_dependencies() -> Result<()> {
-        let root = crate::testing::workspace::root();
-        let rendered = manifest(
-            &root,
-            Some((
-                "https://github.example/owner/repo.git",
-                "0123456789abcdef0123456789abcdef01234567",
-            )),
-        )?;
-        assert_eq!(rendered.matches("git = ").count(), 6);
-        assert_eq!(rendered.matches("rev = ").count(), 6);
-        assert!(!rendered.contains("path = "));
-        let parsed: toml::Value = toml::from_str(&rendered)?;
-        assert_eq!(parsed["workspace"]["resolver"].as_str(), Some("2"));
-        assert_eq!(
-            parsed["dependencies"]["kithara-config"]["optional"].as_bool(),
-            Some(true)
-        );
-        assert_eq!(
-            parsed["dependencies"]["kithara-derive"]["features"][0].as_str(),
-            Some("config")
-        );
-        assert_eq!(
-            parsed["dependencies"]["kithara-test-utils"]["default-features"].as_bool(),
-            Some(false)
-        );
-        let wasm = &parsed["target"]["cfg(target_arch = \"wasm32\")"]["dependencies"];
-        assert_eq!(
-            wasm["kithara-test-utils"]["features"][0].as_str(),
-            Some("subscriber")
-        );
-        assert_eq!(
-            wasm["kithara-test-utils"]["default-features"].as_bool(),
-            Some(false)
-        );
-        assert_eq!(
-            parsed["dependencies"]["unimock"]["workspace"].as_bool(),
-            Some(true)
-        );
-        let workspace: toml::Value = toml::from_str(&fs::read_to_string(root.join("Cargo.toml"))?)?;
-        for name in ["unimock", "wasm-bindgen-test"] {
-            assert_eq!(
-                parsed["workspace"]["dependencies"][name],
-                workspace["workspace"]["dependencies"][name]
-            );
-        }
-        let local: toml::Value = toml::from_str(&manifest(&root, None)?)?;
-        let path = local["dependencies"]["kithara-test-utils"]["path"]
-            .as_str()
-            .unwrap();
-        assert!(Path::new(path).is_absolute());
-        Ok(())
-    }
-
-    #[test]
-    fn manifest_rejects_missing_workspace_paths() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        fs::write(
-            root.path().join("Cargo.toml"),
-            "[workspace.dependencies]\nunimock = \"0.6\"\nwasm-bindgen-test = \"0.3\"\nkithara-config = { version = \"0.0.0\" }\n",
-        )?;
-        let error = manifest(root.path(), None).expect_err("missing dependency path");
-        assert_eq!(error.to_string(), "workspace dependency path for kithara");
-        Ok(())
-    }
-
-    #[test]
-    fn test_executable_is_selected_from_cargo_artifacts() -> Result<()> {
-        let artifact = serde_json::json!({
-            "reason": "compiler-artifact", "package_id": "path+file:///consumer#test-utils-check@0.0.0",
-            "manifest_path": "/consumer/Cargo.toml", "features": [], "filenames": [], "fresh": false,
-            "target": { "kind": ["lib"], "crate_types": ["lib"], "name": "test_utils_check", "src_path": "/consumer/src/lib.rs", "edition": "2024", "doc": true, "doctest": false, "test": true },
-            "profile": { "opt_level": "0", "debuginfo": 2, "debug_assertions": true, "overflow_checks": true, "test": true },
-            "executable": "/consumer/target/test-utils-check"
-        });
-        let report = artifact.to_string();
-        assert_eq!(
-            test_binary(&report)?,
-            PathBuf::from("/consumer/target/test-utils-check")
-        );
-        assert!(test_binary("").is_err());
-        assert!(test_binary(&format!("{report}\n{report}")).is_err());
-        Ok(())
-    }
 }

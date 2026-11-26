@@ -375,7 +375,7 @@ rtsan-async FILTER="no_block": (_rtsan "-p kithara-harness-tests --test suite_li
 # `analysis_offer_is_realtime_safe` puts the analysis offer where a decode tick
 # makes it. The lib case checks construction and drop of real stream terminal errors.
 # Render filter tests apply commands and EOF to resident PCM inside a checked RT entry.
-rtsan FILTER="offline_harness rt_metrics mix_tap metronome rt::processor::tests::filter analysis_offer_is_realtime_safe real_stream_terminal_error_construction_and_drop_are_rt_safe": (_rtsan "-p kithara-play -p kithara-render -p kithara-harness-tests -p kithara-host-tests -p kithara-analysis-tests --lib --test play --test suite_light --test host --test analysis" "kithara-play/apple-fused-src,kithara-host-tests/apple-fused-src" FILTER)
+rtsan FILTER="offline_harness rt_metrics mix_tap fx_programs metronome rt::processor::tests::filter analysis_offer_is_realtime_safe real_stream_terminal_error_construction_and_drop_are_rt_safe": (_rtsan "-p kithara-play -p kithara-render -p kithara-harness-tests -p kithara-host-tests -p kithara-analysis-tests --lib --test play --test suite_light --test host --test analysis" "kithara-play/apple-fused-src,kithara-host-tests/apple-fused-src" FILTER)
 
 rtsan-file FILTER="phase_continuity": (_rtsan "-p kithara-decode-tests --test decode_heavy" "apple-fused-src" FILTER)
 

@@ -32,6 +32,8 @@ impl ProgramState {
 pub(in crate::rt) struct ParameterState {
     pub(in crate::rt) program: ProgramState,
     pub(in crate::rt) authority: Option<Seq>,
+    /// Whether the parameter progresses in the logarithm of its value.
+    pub(in crate::rt) logarithmic: bool,
     cursor: CurveCursor,
 }
 
@@ -50,7 +52,7 @@ impl ParameterState {
         if values.is_empty() {
             return;
         }
-        curve.write(&mut self.cursor, at, values);
+        curve.write(&mut self.cursor, at, values, self.logarithmic);
         if let Some(seq) = self.program.active() {
             if SessionFrame::new(
                 i64::from(at).saturating_add(

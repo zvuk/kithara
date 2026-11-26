@@ -12,6 +12,7 @@ use kithara_devtools::{
     Ctx,
     common::{project::ProjectConfig, tools::ToolsConfig},
 };
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use super::{
@@ -87,7 +88,7 @@ impl Lane {
     /// The residual lanes, by the name a pipeline schedules them under. They
     /// are matched before the configuration is consulted, so a declared lane
     /// cannot shadow one of them.
-    const RESIDUAL: [Self; 8] = [
+    pub(crate) const RESIDUAL: [Self; 8] = [
         Self::AppleSwiftTest,
         Self::AppleIosTest,
         Self::ReleaseXcframework,
@@ -154,7 +155,8 @@ impl Lane {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
 pub(crate) enum PipelineKind {
     Bench,
     Branch,

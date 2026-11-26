@@ -97,7 +97,6 @@ fn retry_options(max_retries: u32) -> NetOptions {
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_millis(10),
         })
-        .inactivity_timeout(Duration::from_millis(30))
         .build()
 }
 
@@ -450,7 +449,9 @@ async fn apple_ignored_range_resume_continues_after_discovering_total() {
         }
     })
     .await;
-    let client = HttpClient::new(retry_options(2), pools(), CancelToken::never());
+    let mut options = retry_options(2);
+    options.inactivity_timeout = Duration::from_millis(30);
+    let client = HttpClient::new(options, pools(), CancelToken::never());
     let stream = client
         .get_range(
             server.url(PROBE),

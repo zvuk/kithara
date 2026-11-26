@@ -371,7 +371,7 @@ fn a_program_admitted_from_a_stale_snapshot_returns_its_late_owner_receipt() {
         .owner
         .with_deck(id, &mut |_, _, pass| {
             let trim = pass.deck.parameter(DeckParameter::Trim).expect("trim");
-            assert_eq!(trim.value(), 1.0);
+            assert_eq!(trim.value(), Some(1.0));
             assert_eq!(trim.program(), None);
         })
         .expect("unchanged deck");

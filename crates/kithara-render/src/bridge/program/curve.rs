@@ -131,11 +131,14 @@ impl ParameterCurve {
         low..=high
     }
 
+    /// Write the value of each frame from `at`; a logarithmic parameter
+    /// progresses in the logarithm of its value.
     pub(crate) fn write(
         &self,
         cursor: &mut CurveCursor,
         mut at: SessionFrame,
         mut output: &mut [f64],
+        logarithmic: bool,
     ) {
         if let Some(first) = self.knots.first() {
             let count = if at < first.at {
@@ -184,7 +187,20 @@ impl ParameterCurve {
                 .min(output.len());
             let (values, rest) = output.split_at_mut(count);
             kithara_dsp::ratio_ramp(values, at.frames_since(left.at).unwrap_or(0), left.duration);
-            left.shape.process(values, [left.value, right.value]);
+            if logarithmic && left.value != right.value && left.shape != CurveShape::HOLD {
+                left.shape
+                    .process(values, [left.value.ln(), right.value.ln()]);
+                for value in values.iter_mut() {
+                    *value = value.exp();
+                }
+                if at == left.at
+                    && let Some(value) = values.first_mut()
+                {
+                    *value = left.value;
+                }
+            } else {
+                left.shape.process(values, [left.value, right.value]);
+            }
             at = SessionFrame::new(
                 i64::from(at).saturating_add(i64::try_from(count).unwrap_or(i64::MAX)),
             );
@@ -212,6 +228,7 @@ mod tests {
                 i64::from(curve.start()).saturating_add(i64::try_from(frame).unwrap_or(i64::MAX)),
             ),
             &mut output,
+            false,
         );
         output[0]
     }
@@ -276,6 +293,31 @@ mod tests {
             .expect("single exact step");
         for frame in [0, 1, 17, u64::MAX] {
             assert_eq!(value(&step, frame).to_bits(), (-0.0_f64).to_bits());
+        }
+    }
+
+    #[kithara::test]
+    #[case::hold(CurveShape::HOLD)]
+    #[case::linear(CurveShape::LINEAR)]
+    fn logarithmic_segments_deliver_the_exact_native_knots(#[case] shape: CurveShape) {
+        let curve =
+            ParameterCurve::new(vec![knot(10, 10.0, shape), knot(14, 1.0, CurveShape::HOLD)])
+                .expect("ordered native values");
+        let mut values = [0.0; 5];
+        curve.write(
+            &mut CurveCursor::default(),
+            SessionFrame::new(10),
+            &mut values,
+            true,
+        );
+        assert_eq!(values[0].to_bits(), 10.0_f64.to_bits());
+        assert_eq!(values[4].to_bits(), 1.0_f64.to_bits());
+        if shape == CurveShape::HOLD {
+            assert!(
+                values[..4]
+                    .iter()
+                    .all(|value| value.to_bits() == 10.0_f64.to_bits())
+            );
         }
     }
 

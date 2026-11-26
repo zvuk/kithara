@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use kithara_devtools::Ctx;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::{
@@ -18,7 +18,10 @@ use crate::{
 
 /// Which CI system is asking. A lane may answer them differently, because the
 /// fleets are different machines with different budgets.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum Fleet {
     #[default]
     Github,
