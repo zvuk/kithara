@@ -47,12 +47,15 @@ serde = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["test", "usdt", "client-reqwest", "tls-rustls"] }
 kithara-ui-gallery = { path = ".", features = ["mock"] }
 
+criterion = { workspace = true }
+
 futures-lite = { workspace = true }
 iced_renderer = { workspace = true }
 iced_runtime = { workspace = true }
 iced_tiny_skia = { workspace = true }
 iced_wgpu = { workspace = true }
 masonry = { workspace = true }
+metabench = { workspace = true }
 # The budget guard reads the renderer's bump allocators back, which vello only
 # does when this is on. A dev-dependency so a shipped build keeps the fast path
 # rather than a readback on every frame.
@@ -79,7 +82,8 @@ name = "ui_buffers"
 path = "tests/ui_buffers/main.rs"
 required-features = ["masonry"]
 
-[[test]]
+[[bench]]
 name = "page_perf"
 path = "tests/page_perf/main.rs"
+harness = false
 required-features = ["perf", "masonry"]

@@ -7,8 +7,8 @@ mod scenarios;
 
 use std::{borrow::Cow, rc::Rc, sync::LazyLock};
 
+use criterion::{BenchmarkId, Criterion};
 use futures_lite::future::block_on;
-use hotpath::HotpathGuardBuilder;
 use iced::{
     Pixels, Theme,
     advanced::graphics::{Shell, text::font_system},
@@ -151,18 +151,6 @@ trait FrameHost {
 enum Host {
     Immediate,
     Retained,
-}
-
-impl Host {
-    /// What one unit of this host's frame output is. The two are different
-    /// quantities of different things: comparing them across hosts says
-    /// nothing, and this exists so a report cannot forget that.
-    const fn unit(self) -> &'static str {
-        match self {
-            Self::Immediate => "draw-pool acquisitions",
-            Self::Retained => "scene-encoding bytes",
-        }
-    }
 }
 
 /// The device is boxed because the other variant carries nothing: a wgpu
@@ -339,114 +327,6 @@ struct Reading {
     gestured: bool,
     scheduled: bool,
     receipts: usize,
-    size: usize,
-}
-
-/// Measures one frame per control on each host. It records durations and makes
-/// no claim about them: the comparison this feeds is between the two hosts on
-/// the same machine, and a threshold here would judge the machine.
-/// An unavailable GPU host stays unmeasured: a software fallback would report
-/// Vis/Shader costs without running those passes.
-#[kithara::test]
-#[case("iced", Host::Immediate)]
-#[case("vello", Host::Retained)]
-fn ui_frame_perf(#[case] label: &'static str, #[case] host: Host) {
-    load_fonts();
-    let backend = match Backend::try_from(host) {
-        Ok(backend) => backend,
-        Err(error) => {
-            let notice = format!("{label}: NOT MEASURED, no host to measure it on: {error}");
-            println!("{notice}");
-            eprintln!("{notice}");
-            return;
-        }
-    };
-    let readings = {
-        let _guard = HotpathGuardBuilder::new(label).functions_limit(0).build();
-        measure(&backend)
-    };
-    report(label, host, &readings);
-    audit(label, &readings);
-}
-
-/// Excludes the first frame's mount, layout and shaping-cache setup from frame cost.
-fn measure(backend: &Backend) -> Vec<Reading> {
-    let geometry = backend.geometry();
-    let mut readings = Vec::with_capacity(consts::SCENARIOS.len());
-    for scenario in consts::SCENARIOS {
-        let fixture = Fixture::new(scenario.control);
-        let reads = Rc::new(CensusReads::default());
-        let rect = laid_out_rect(&fixture, &reads, &geometry);
-        let mut driver = driver(backend, &fixture, Rc::clone(&reads));
-        let _warm = driver.frame();
-        let steps = scenario.interaction.steps(rect);
-        let size = hotpath::measure_block!(scenario.name, {
-            for step in &steps {
-                driver.interact(*step);
-            }
-            driver.frame()
-        });
-        readings.push(Reading {
-            rect,
-            size,
-            gestured: matches!(
-                scenario.interaction,
-                Interaction::Drag | Interaction::Press | Interaction::PressLeading
-            ),
-            name: scenario.name,
-            points: steps
-                .iter()
-                .filter_map(|step| match step {
-                    Step::Move(at) => Some(*at),
-                    Step::Press | Step::Release | Step::Data => None,
-                })
-                .collect(),
-            receipts: driver.receipts(),
-            scheduled: driver.scheduled(),
-        });
-    }
-    readings
-}
-
-/// Prints one row per control, then the two totals that are about the host
-/// rather than about a control.
-fn report(label: &str, host: Host, readings: &[Reading]) {
-    for reading in readings {
-        let rect = reading.rect;
-        println!(
-            "{label} {:<15} rect {:7.2} {:7.2} {:7.2} {:7.2}  points {}  scheduled {:<5}  receipts {:<3}  out {}",
-            reading.name,
-            rect.x,
-            rect.y,
-            rect.w,
-            rect.h,
-            reading.points.len(),
-            reading.scheduled,
-            reading.receipts,
-            reading.size,
-        );
-    }
-    let scheduled = readings.iter().filter(|reading| reading.scheduled).count();
-    let silent: Vec<&str> = readings
-        .iter()
-        .filter(|reading| reading.size == 0)
-        .map(|reading| reading.name)
-        .collect();
-    println!(
-        "{label}: {scheduled} of {} frames the host asked for, {} measured",
-        readings.len(),
-        readings.len()
-    );
-    println!(
-        "{label}: {} {} over {} controls, a unit no other host shares",
-        readings.iter().map(|reading| reading.size).sum::<usize>(),
-        host.unit(),
-        readings.len()
-    );
-    println!(
-        "{label}: {} control(s) whose frame produced nothing: {silent:?}",
-        silent.len()
-    );
 }
 
 /// Fails naming every control the gesture did not land on. A pointer that
@@ -495,3 +375,162 @@ fn miss(reading: &Reading) -> Option<String> {
     (reading.gestured && reading.receipts == 0 && !reading.scheduled)
         .then(|| format!("the host saw nothing at {:?} in {rect:?}", reading.points))
 }
+
+fn measure_scenario(backend: &Backend, geometry: &iced::Renderer, scenario: &Scenario) -> Reading {
+    let fixture = Fixture::new(scenario.control);
+    let reads = Rc::new(CensusReads::default());
+    let rect = laid_out_rect(&fixture, &reads, geometry);
+    let mut driver = driver(backend, &fixture, Rc::clone(&reads));
+    let _warm = driver.frame();
+    let steps = scenario.interaction.steps(rect);
+    for step in &steps {
+        driver.interact(*step);
+    }
+    let _frame = driver.frame();
+    Reading {
+        rect,
+        gestured: matches!(
+            scenario.interaction,
+            Interaction::Drag | Interaction::Press | Interaction::PressLeading
+        ),
+        name: scenario.name,
+        points: steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Move(at) => Some(*at),
+                Step::Press | Step::Release | Step::Data => None,
+            })
+            .collect(),
+        receipts: driver.receipts(),
+        scheduled: driver.scheduled(),
+    }
+}
+
+fn execute_frame(index: usize) {
+    load_fonts();
+    let host = if index < consts::SCENARIOS.len() {
+        Host::Immediate
+    } else {
+        Host::Retained
+    };
+    let scenario = &consts::SCENARIOS[index % consts::SCENARIOS.len()];
+    let label = if matches!(host, Host::Immediate) {
+        "iced"
+    } else {
+        "vello"
+    };
+    let backend = Backend::try_from(host)
+        .unwrap_or_else(|error| panic!("{label}: NOT MEASURED, no host to measure it on: {error}"));
+    let reading = measure_scenario(&backend, &backend.geometry(), scenario);
+    audit("frame", std::slice::from_ref(&reading));
+}
+
+#[metabench::benchmark(FRAME_PERF, "frame", "case")]
+#[bench::iced_brand(0_usize)]
+#[bench::iced_spacer(1_usize)]
+#[bench::iced_divider(2_usize)]
+#[bench::iced_presetselector(3_usize)]
+#[bench::iced_settingsbutton(4_usize)]
+#[bench::iced_decksummary(5_usize)]
+#[bench::iced_windowdrag(6_usize)]
+#[bench::iced_titlebar(7_usize)]
+#[bench::iced_windowcontrols(8_usize)]
+#[bench::iced_bpm(9_usize)]
+#[bench::iced_time(10_usize)]
+#[bench::iced_scalar(11_usize)]
+#[bench::iced_wave(12_usize)]
+#[bench::iced_vis(13_usize)]
+#[bench::iced_shader(14_usize)]
+#[bench::iced_custom(15_usize)]
+#[bench::iced_table(16_usize)]
+#[bench::iced_tree(17_usize)]
+#[bench::iced_search(18_usize)]
+#[bench::iced_contextbar(19_usize)]
+#[bench::iced_text(20_usize)]
+#[bench::iced_knob(21_usize)]
+#[bench::iced_chip(22_usize)]
+#[bench::iced_navitem(23_usize)]
+#[bench::iced_button(24_usize)]
+#[bench::iced_glyph(25_usize)]
+#[bench::iced_tablarge(26_usize)]
+#[bench::iced_toggle(27_usize)]
+#[bench::iced_checkbox(28_usize)]
+#[bench::iced_segmented(29_usize)]
+#[bench::iced_select(30_usize)]
+#[bench::iced_statusdot(31_usize)]
+#[bench::iced_swatch(32_usize)]
+#[bench::iced_cell(33_usize)]
+#[bench::iced_readout(34_usize)]
+#[bench::iced_meter(35_usize)]
+#[bench::iced_vuvertical(36_usize)]
+#[bench::iced_vustereo(37_usize)]
+#[bench::iced_crossfader(38_usize)]
+#[bench::iced_fader(39_usize)]
+#[bench::vello_brand(40_usize)]
+#[bench::vello_spacer(41_usize)]
+#[bench::vello_divider(42_usize)]
+#[bench::vello_presetselector(43_usize)]
+#[bench::vello_settingsbutton(44_usize)]
+#[bench::vello_decksummary(45_usize)]
+#[bench::vello_windowdrag(46_usize)]
+#[bench::vello_titlebar(47_usize)]
+#[bench::vello_windowcontrols(48_usize)]
+#[bench::vello_bpm(49_usize)]
+#[bench::vello_time(50_usize)]
+#[bench::vello_scalar(51_usize)]
+#[bench::vello_wave(52_usize)]
+#[bench::vello_vis(53_usize)]
+#[bench::vello_shader(54_usize)]
+#[bench::vello_custom(55_usize)]
+#[bench::vello_table(56_usize)]
+#[bench::vello_tree(57_usize)]
+#[bench::vello_search(58_usize)]
+#[bench::vello_contextbar(59_usize)]
+#[bench::vello_text(60_usize)]
+#[bench::vello_knob(61_usize)]
+#[bench::vello_chip(62_usize)]
+#[bench::vello_navitem(63_usize)]
+#[bench::vello_button(64_usize)]
+#[bench::vello_glyph(65_usize)]
+#[bench::vello_tablarge(66_usize)]
+#[bench::vello_toggle(67_usize)]
+#[bench::vello_checkbox(68_usize)]
+#[bench::vello_segmented(69_usize)]
+#[bench::vello_select(70_usize)]
+#[bench::vello_statusdot(71_usize)]
+#[bench::vello_swatch(72_usize)]
+#[bench::vello_cell(73_usize)]
+#[bench::vello_readout(74_usize)]
+#[bench::vello_meter(75_usize)]
+#[bench::vello_vuvertical(76_usize)]
+#[bench::vello_vustereo(77_usize)]
+#[bench::vello_crossfader(78_usize)]
+#[bench::vello_fader(79_usize)]
+fn native_frame(index: usize) {
+    execute_frame(index);
+}
+
+fn criterion_benchmarks(c: &mut Criterion) {
+    assert!(missing_from_table().is_empty());
+    assert!(unnamed_by_the_document().is_empty());
+    let mut group = c.benchmark_group("frame");
+    group.sample_size(10);
+    for index in 0..80 {
+        let host = if index < 40 { "iced" } else { "vello" };
+        let scenario = &consts::SCENARIOS[index % 40];
+        group.bench_function(
+            BenchmarkId::new(
+                "case",
+                format!("{host}_{}", scenario.name.to_ascii_lowercase()),
+            ),
+            |b| b.iter(|| execute_frame(index)),
+        );
+    }
+    group.finish();
+}
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [FRAME_PERF],
+    allocator = std::alloc::System,
+);

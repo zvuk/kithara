@@ -3363,7 +3363,7 @@ name = "perf-suite"
 command = ["just", "perf"]
 tools = ["perf-suite"]
 hard_invariant = true
-expected_artifacts = ["perf-results.txt"]
+expected_artifacts = ["bench-results.txt"]
 
 [[quality.assessment.deep_stages]]
 name = "benchmarks"

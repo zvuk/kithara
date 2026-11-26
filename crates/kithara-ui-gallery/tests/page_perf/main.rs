@@ -7,7 +7,7 @@ mod retained;
 
 use std::{borrow::Cow, sync::LazyLock};
 
-use hotpath::HotpathGuardBuilder;
+use criterion::{BenchmarkId, Criterion};
 use iced::{Theme, advanced::graphics::text::font_system, theme::Palette};
 use kithara_platform::time::WallInstant as WallClock;
 use kithara_test_utils::kithara;
@@ -91,29 +91,12 @@ impl Run {
     }
 }
 
-/// Which symptom a page is measured for. One route per group, so a run can ask
-/// the question it is after without paying for the other two.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Group {
-    /// The cheap-page control and the stress page it is read against.
-    Pages,
-    /// The visualiser and the document shader, with their fenced variants.
-    Native,
-    /// The wheel sweeps.
-    Scroll,
-    /// The drag sweeps: a control held under the pointer and moved.
-    Drag,
-}
-
 /// One page, the program that drives it, and everything the harness has to know
 /// before its numbers mean anything.
 struct Page {
     /// The hotpath guard each host opens for this page. Stage labels inside are
     /// the host's, so the guard name is what makes a line `host.page.stage`.
-    immediate_guard: &'static str,
     name: &'static str,
-    retained_guard: &'static str,
-    group: Group,
     /// The one reading this page moves on its own, if it has one. A run that
     /// claims to measure an animating page has to show that it animated.
     moving: Option<&'static str>,
@@ -210,9 +193,6 @@ trait PageHost {
     /// this measures a page that ignored every move.
     fn press(&mut self);
 
-    /// How many events the mounted document published, cumulative.
-    fn published(&self) -> usize;
-
     /// A fingerprint of the page's own moving reading, if the page named one.
     fn reading(&self, endpoint: Option<&str>) -> Option<u64>;
 
@@ -264,140 +244,8 @@ struct Outcome<'run> {
     /// The page as its host drew it, before the first measured frame and after
     /// the last.
     picture: [u64; 2],
-    fenced: bool,
     /// Whether the last frame is more than one flat colour.
     painted: bool,
-    published: usize,
-}
-
-/// The cheap-page control and the stress page: is the stress page's cost its
-/// waveform buckets, or is it the page at all?
-#[kithara::test]
-#[case("iced", Host::Immediate, "gallery-buttons")]
-#[case("iced", Host::Immediate, "gallery-clock")]
-#[case("iced", Host::Immediate, "gallery-table")]
-#[case("iced", Host::Immediate, "gallery-stress")]
-#[case("vello", Host::Retained, "gallery-buttons")]
-#[case("vello", Host::Retained, "gallery-clock")]
-#[case("vello", Host::Retained, "gallery-table")]
-#[case("vello", Host::Retained, "gallery-stress")]
-fn ui_page_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
-    measure_one(label, host, Group::Pages, page);
-}
-
-/// The three pages that move without being touched: objects posed by a clock,
-/// a sheet cut into frames, and an artwork emitted afresh every frame. The
-/// buttons page above is the still control they are read against, because what
-/// is asked here is what the motion itself costs on each host.
-#[kithara::test]
-#[case("iced", Host::Immediate, "gallery-objects")]
-#[case("iced", Host::Immediate, "gallery-motion")]
-#[case("iced", Host::Immediate, "gallery-sprites")]
-#[case("iced", Host::Immediate, "gallery-lottie")]
-#[case("iced", Host::Immediate, "gallery-scene")]
-#[case("vello", Host::Retained, "gallery-objects")]
-#[case("vello", Host::Retained, "gallery-motion")]
-#[case("vello", Host::Retained, "gallery-sprites")]
-#[case("vello", Host::Retained, "gallery-lottie")]
-#[case("vello", Host::Retained, "gallery-scene")]
-fn ui_motion_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
-    measure_one(label, host, Group::Pages, page);
-}
-
-/// The visualiser and the document shader, free and fenced. A fenced run
-/// serialises the queue: its totals are their own scenario.
-#[kithara::test]
-#[case("iced", Host::Immediate, "gallery-vis")]
-#[case("iced", Host::Immediate, "gallery-shader")]
-#[case("vello", Host::Retained, "gallery-vis")]
-#[case("vello", Host::Retained, "gallery-shader")]
-fn ui_native_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
-    measure_one(label, host, Group::Native, page);
-}
-
-/// The wheel sweeps: does a page cost more per wheel event, or per frame?
-#[kithara::test]
-#[case("iced", Host::Immediate, "gallery-pivot")]
-#[case("iced", Host::Immediate, "gallery-library2")]
-#[case("iced", Host::Immediate, "gallery-tree")]
-#[case("iced", Host::Immediate, "gallery-table-long")]
-#[case("iced", Host::Immediate, "perf-scroll-vis")]
-#[case("vello", Host::Retained, "gallery-pivot")]
-#[case("vello", Host::Retained, "gallery-library2")]
-#[case("vello", Host::Retained, "gallery-tree")]
-#[case("vello", Host::Retained, "gallery-table-long")]
-#[case("vello", Host::Retained, "perf-scroll-vis")]
-fn ui_scroll_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
-    measure_one(label, host, Group::Scroll, page);
-}
-
-/// The drag sweeps, and the first measurement of the symptom this campaign
-/// started from: a fader that is said to move smoothly on the retained host and
-/// to catch on the immediate one. Both hosts are measured at the same boundary
-/// here - input applied, frame drawn, pixels rasterised - so the two columns can
-/// be read against each other, which the per-widget harness cannot claim.
-#[kithara::test]
-#[case("iced", Host::Immediate, "gallery-faders")]
-#[case("vello", Host::Retained, "gallery-faders")]
-fn ui_drag_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
-    measure_one(label, host, Group::Drag, page);
-}
-
-/// One page on one host, under one hotpath guard.
-///
-/// One guard per case, not per run: hotpath records nothing from a second guard
-/// opened on the same thread, and libtest gives each case its own. So the guard
-/// name carries the host and the page, the stage labels inside carry the host,
-/// and the sweep steps within a page are told apart by the harness's own line
-/// rather than by the hotpath table.
-fn measure_one(label: &'static str, host: Host, group: Group, name: &'static str) {
-    load_fonts();
-    let page = consts::PAGES
-        .iter()
-        .find(|page| page.name == name)
-        .unwrap_or_else(|| panic!("{name} is not a measured page"));
-    assert!(
-        page.group == group,
-        "{name} is measured by the route for another symptom"
-    );
-    let fixture = Fixture::default();
-    let mut gpu = match Gpu::try_from(host) {
-        Ok(gpu) => gpu,
-        Err(error) => {
-            // Falling back to a software rasteriser here would report times for
-            // the visualiser passes without running them.
-            let notice = format!("{label}: NOT MEASURED, no host to measure it on: {error}");
-            println!("{notice}");
-            eprintln!("{notice}");
-            return;
-        }
-    };
-    let expected = leaves(&fixture.compiled(page));
-    let mut outcomes = Vec::new();
-    {
-        let _guard = HotpathGuardBuilder::new(host.guard(page))
-            .functions_limit(0)
-            .build();
-        for run in Vec::<Run>::from(page.program) {
-            outcomes.push(measure(&fixture, page, run, expected, &mut gpu, false));
-            if page.fenced {
-                outcomes.push(measure(&fixture, page, run, expected, &mut gpu, true));
-            }
-        }
-    }
-    // The undriven run of the same page, run for the same number of frames.
-    // Whatever the page animates on its own has reached the same point in it, so
-    // a picture that differs from this one differs by the wheel or the drag.
-    let baseline = outcomes
-        .iter()
-        .find(|outcome| matches!(outcome.run, Run::Wheels(0) | Run::Moves(0)))
-        .map(|outcome| outcome.picture[1]);
-    for outcome in &outcomes {
-        report(label, outcome);
-    }
-    for outcome in &outcomes {
-        prove(label, outcome, baseline);
-    }
 }
 
 impl TryFrom<Host> for Gpu {
@@ -420,15 +268,6 @@ impl TryFrom<Host> for Gpu {
 enum Host {
     Immediate,
     Retained,
-}
-
-impl Host {
-    const fn guard(self, page: &Page) -> &'static str {
-        match self {
-            Self::Immediate => page.immediate_guard,
-            Self::Retained => page.retained_guard,
-        }
-    }
 }
 
 /// One run of one page: warm up, fingerprint, measure under a guard,
@@ -471,8 +310,6 @@ fn measure<'run>(
         drawn_as: driver.drawn_as(),
         reading: [reading_before, driver.reading(page.moving)],
         painted: painted(&pixels),
-        published: driver.published(),
-        fenced,
     }
 }
 
@@ -520,57 +357,7 @@ fn frames(driver: &mut dyn PageHost, page: &Page, run: Run, fence: bool) -> Tall
     tally
 }
 
-/// One stable line per run, with the counted facts beside the timed ones.
-fn report(label: &str, outcome: &Outcome<'_>) {
-    let tally = &outcome.tally;
-    let [total, mean, min, max] = tally.micros();
-    let scene = tally.scene.map_or_else(
-        || "scene -".to_owned(),
-        |scene| {
-            format!(
-                "tags {} path {} draw {} xform {}",
-                scene.draw_tags, scene.path_data, scene.draw_data, scene.transforms
-            )
-        },
-    );
-    let natives = tally.natives.map_or_else(
-        || "natives -".to_owned(),
-        |natives| {
-            format!(
-                "vis {}/{} shaders {}/{}",
-                natives.vis, outcome.expected.vis, natives.shaders, outcome.expected.shaders
-            )
-        },
-    );
-    println!(
-        "{label} {:<17} {:<14} {:<6} frames {:>3} wanted {:>3} published {:>3}  {scene}  \
-         {natives}  pool miss {} home {} steal {} drop {}  picture {:016x}->{:016x}  \
-         us total {total} mean {mean} min {min} max {max}",
-        outcome.page.name,
-        outcome.run.label(),
-        if outcome.fenced { "fenced" } else { "free" },
-        tally.frames,
-        tally.scheduled,
-        outcome.published,
-        tally.pool.alloc_misses,
-        tally.pool.home_hits,
-        tally.pool.steal_hits,
-        tally.pool.put_drops,
-        outcome.picture[0],
-        outcome.picture[1],
-    );
-    if outcome.fenced {
-        println!(
-            "{label} {:<17} {:<14} fenced: the queue was serialised, so these totals are their \
-             own scenario and may not be added to a free total",
-            outcome.page.name,
-            outcome.run.label(),
-        );
-    }
-}
-
-/// Every assertion this harness makes. Each names the thing a run claims to
-/// measure; none of them is about a duration.
+/// Check the declared frame, input, motion and completion evidence.
 fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
     let page = outcome.page;
     let run = outcome.run.label();
@@ -725,3 +512,163 @@ fn the_page_table_is_pinned_to_the_gallery() {
         );
     }
 }
+
+fn gallery_case(mut index: usize) -> (usize, Host, Run, bool) {
+    for (page_index, page) in consts::PAGES.iter().enumerate() {
+        for host in [Host::Immediate, Host::Retained] {
+            for run in Vec::<Run>::from(page.program) {
+                for fenced in [false, true] {
+                    if fenced && !page.fenced {
+                        continue;
+                    }
+                    if index == 0 {
+                        return (page_index, host, run, fenced);
+                    }
+                    index -= 1;
+                }
+            }
+        }
+    }
+    panic!("unknown gallery case {index}")
+}
+
+fn execute_gallery(index: usize) {
+    load_fonts();
+    let (page_index, host, run, fenced) = gallery_case(index);
+    let page = &consts::PAGES[page_index];
+    let fixture = Fixture::default();
+    let mut gpu = Gpu::try_from(host).unwrap_or_else(|error| {
+        panic!(
+            "{}: NOT MEASURED, no host to measure it on: {error}",
+            page.name
+        )
+    });
+    let expected = leaves(&fixture.compiled(page));
+    let outcome = measure(&fixture, page, run, expected, &mut gpu, fenced);
+    let baseline = match run {
+        Run::Wheels(count) if count > 0 => {
+            Some(measure(&fixture, page, Run::Wheels(0), expected, &mut gpu, false).picture[1])
+        }
+        Run::Moves(count) if count > 0 => {
+            Some(measure(&fixture, page, Run::Moves(0), expected, &mut gpu, false).picture[1])
+        }
+        _ => None,
+    };
+    prove(page.name, &outcome, baseline);
+}
+
+#[metabench::benchmark(GALLERY_PERF, "gallery", "case")]
+#[bench::iced_gallery_buttons_plain(0_usize)]
+#[bench::vello_gallery_buttons_plain(1_usize)]
+#[bench::iced_gallery_clock_plain(2_usize)]
+#[bench::vello_gallery_clock_plain(3_usize)]
+#[bench::iced_gallery_table_plain(4_usize)]
+#[bench::vello_gallery_table_plain(5_usize)]
+#[bench::iced_gallery_stress_buckets_8192(6_usize)]
+#[bench::iced_gallery_stress_buckets_4096(7_usize)]
+#[bench::iced_gallery_stress_buckets_1024(8_usize)]
+#[bench::iced_gallery_stress_buckets_256(9_usize)]
+#[bench::vello_gallery_stress_buckets_8192(10_usize)]
+#[bench::vello_gallery_stress_buckets_4096(11_usize)]
+#[bench::vello_gallery_stress_buckets_1024(12_usize)]
+#[bench::vello_gallery_stress_buckets_256(13_usize)]
+#[bench::iced_gallery_vis_plain(14_usize)]
+#[bench::iced_gallery_vis_plain_fenced(15_usize)]
+#[bench::vello_gallery_vis_plain(16_usize)]
+#[bench::vello_gallery_vis_plain_fenced(17_usize)]
+#[bench::iced_gallery_shader_plain(18_usize)]
+#[bench::iced_gallery_shader_plain_fenced(19_usize)]
+#[bench::vello_gallery_shader_plain(20_usize)]
+#[bench::vello_gallery_shader_plain_fenced(21_usize)]
+#[bench::iced_gallery_pivot_wheels_0(22_usize)]
+#[bench::iced_gallery_pivot_wheels_1(23_usize)]
+#[bench::iced_gallery_pivot_wheels_4(24_usize)]
+#[bench::iced_gallery_pivot_wheels_8(25_usize)]
+#[bench::vello_gallery_pivot_wheels_0(26_usize)]
+#[bench::vello_gallery_pivot_wheels_1(27_usize)]
+#[bench::vello_gallery_pivot_wheels_4(28_usize)]
+#[bench::vello_gallery_pivot_wheels_8(29_usize)]
+#[bench::iced_gallery_library2_wheels_0(30_usize)]
+#[bench::iced_gallery_library2_wheels_1(31_usize)]
+#[bench::iced_gallery_library2_wheels_4(32_usize)]
+#[bench::iced_gallery_library2_wheels_8(33_usize)]
+#[bench::vello_gallery_library2_wheels_0(34_usize)]
+#[bench::vello_gallery_library2_wheels_1(35_usize)]
+#[bench::vello_gallery_library2_wheels_4(36_usize)]
+#[bench::vello_gallery_library2_wheels_8(37_usize)]
+#[bench::iced_gallery_table_long_wheels_0(38_usize)]
+#[bench::iced_gallery_table_long_wheels_1(39_usize)]
+#[bench::iced_gallery_table_long_wheels_4(40_usize)]
+#[bench::iced_gallery_table_long_wheels_8(41_usize)]
+#[bench::vello_gallery_table_long_wheels_0(42_usize)]
+#[bench::vello_gallery_table_long_wheels_1(43_usize)]
+#[bench::vello_gallery_table_long_wheels_4(44_usize)]
+#[bench::vello_gallery_table_long_wheels_8(45_usize)]
+#[bench::iced_gallery_tree_wheels_0(46_usize)]
+#[bench::iced_gallery_tree_wheels_1(47_usize)]
+#[bench::iced_gallery_tree_wheels_4(48_usize)]
+#[bench::iced_gallery_tree_wheels_8(49_usize)]
+#[bench::vello_gallery_tree_wheels_0(50_usize)]
+#[bench::vello_gallery_tree_wheels_1(51_usize)]
+#[bench::vello_gallery_tree_wheels_4(52_usize)]
+#[bench::vello_gallery_tree_wheels_8(53_usize)]
+#[bench::iced_gallery_faders_moves_0(54_usize)]
+#[bench::iced_gallery_faders_moves_1(55_usize)]
+#[bench::iced_gallery_faders_moves_4(56_usize)]
+#[bench::iced_gallery_faders_moves_8(57_usize)]
+#[bench::vello_gallery_faders_moves_0(58_usize)]
+#[bench::vello_gallery_faders_moves_1(59_usize)]
+#[bench::vello_gallery_faders_moves_4(60_usize)]
+#[bench::vello_gallery_faders_moves_8(61_usize)]
+#[bench::iced_gallery_objects_plain(62_usize)]
+#[bench::vello_gallery_objects_plain(63_usize)]
+#[bench::iced_gallery_motion_plain(64_usize)]
+#[bench::vello_gallery_motion_plain(65_usize)]
+#[bench::iced_gallery_sprites_plain(66_usize)]
+#[bench::vello_gallery_sprites_plain(67_usize)]
+#[bench::iced_gallery_lottie_plain(68_usize)]
+#[bench::vello_gallery_lottie_plain(69_usize)]
+#[bench::iced_gallery_scene_plain(70_usize)]
+#[bench::vello_gallery_scene_plain(71_usize)]
+#[bench::iced_perf_scroll_vis_wheels_0(72_usize)]
+#[bench::iced_perf_scroll_vis_wheels_1(73_usize)]
+#[bench::iced_perf_scroll_vis_wheels_4(74_usize)]
+#[bench::iced_perf_scroll_vis_wheels_8(75_usize)]
+#[bench::vello_perf_scroll_vis_wheels_0(76_usize)]
+#[bench::vello_perf_scroll_vis_wheels_1(77_usize)]
+#[bench::vello_perf_scroll_vis_wheels_4(78_usize)]
+#[bench::vello_perf_scroll_vis_wheels_8(79_usize)]
+fn native_gallery(index: usize) {
+    execute_gallery(index);
+}
+
+fn criterion_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gallery");
+    group.sample_size(10);
+    for index in 0..80 {
+        let (page_index, host, run, fenced) = gallery_case(index);
+        let page = &consts::PAGES[page_index];
+        let host = match host {
+            Host::Immediate => "iced",
+            Host::Retained => "vello",
+        };
+        let run = match run {
+            Run::Plain => "plain".to_owned(),
+            Run::Buckets(count) => format!("buckets_{count}"),
+            Run::Wheels(count) => format!("wheels_{count}"),
+            Run::Moves(count) => format!("moves_{count}"),
+        };
+        let fenced = if fenced { "_fenced" } else { "" };
+        let identity = format!("{host}_{}_{run}{fenced}", page.name).replace('-', "_");
+        group.bench_function(BenchmarkId::new("case", identity), |b| {
+            b.iter(|| execute_gallery(index))
+        });
+    }
+    group.finish();
+}
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [GALLERY_PERF],
+    allocator = std::alloc::System,
+);

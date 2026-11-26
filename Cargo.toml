@@ -386,7 +386,7 @@ arc-swap = "1.9"
 arrayvec = "0.7"
 
 # memory profiling
-assert_no_alloc = "1.1"
+assert_no_alloc = { version = "1.1", default-features = false }
 
 # async traits
 async-trait = "0.1.92"
@@ -496,6 +496,7 @@ lru = "0.18"
 lucide-icons = { version = "1.52", default-features = false }
 masonry = "0.4"
 memory-stats = "1.2"
+metabench = "0.3.0"
 mmap-io = { version = "1.0", default-features = false }
 naga = { version = "27", features = ["wgsl-in", "termcolor"] }
 ndk-context = "0.1.1"

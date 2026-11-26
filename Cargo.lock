@@ -123,6 +123,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc_tracker"
+version = "0.7.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7cb8bd914c4463865c3dfcd236f406bf386f5e20efada15feddcd92df5853d2"
+dependencies = [
+ "folo_utils",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "alloca"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -800,6 +811,18 @@ dependencies = [
  "disqualified",
  "indexmap",
  "thread_local",
+]
+
+[[package]]
+name = "bincode-next"
+version = "3.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e289ae0e3dfb546a0670c572b5001be7a8691044731d666f9187e98124285565"
+dependencies = [
+ "pastey 0.2.3",
+ "rapidhash",
+ "serde",
+ "unty-next",
 ]
 
 [[package]]
@@ -1588,6 +1611,16 @@ checksum = "cfc320937d09e6de266b31b9afb480f197d7a861be86be7cb2ea7e5d1bfffc5e"
 dependencies = [
  "bytes",
  "memchr",
+]
+
+[[package]]
+name = "command-group"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a68fa787550392a9d58f44c21a3022cfb3ea3e2458b7f85d3b399d0ceeccf409"
+dependencies = [
+ "nix 0.27.1",
+ "winapi",
 ]
 
 [[package]]
@@ -2538,6 +2571,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
+name = "either-or-both"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6717164c227120ba9ddf3e2b32305fc0122741d3ee41a54968eae7573ee01933"
+dependencies = [
+ "indexmap",
+ "serde",
+]
+
+[[package]]
 name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2958,6 +3001,16 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "folo_utils"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d07fd0e0768640461cb4dd84bcfb7340fca66c686b8d9a9beaeee7e5e37fc170"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "font-types"
@@ -3560,6 +3613,53 @@ checksum = "b62d5865c036cb1393e23c50693df631d3f5d7bcca4c04fe4cc0fd592e74a782"
 dependencies = [
  "euclid",
  "svg_fmt",
+]
+
+[[package]]
+name = "gungraun"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c041375e48b8ef7cd2d0e70715598154af627c1a551e41c35fdb4a2b3910831a"
+dependencies = [
+ "bincode-next",
+ "derive_more",
+ "gungraun-common",
+ "gungraun-macros",
+ "gungraun-runner",
+]
+
+[[package]]
+name = "gungraun-common"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc270ba55639babb5806b62d4bfbc35e15ca15791e3ec00c7b92b39c62a9d8eb"
+
+[[package]]
+name = "gungraun-macros"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08472a9e996a98a5b4274dd342fb32ebe1a5cfeb2662b6578d0c7bf1dd203129"
+dependencies = [
+ "derive_more",
+ "proc-macro-error3",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "serde",
+ "serde_json",
+ "syn 3.0.6",
+]
+
+[[package]]
+name = "gungraun-runner"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e1460377fe936c3efbe8e27c422b745fa54ebaea81ffe4a53a6f17c7a478683"
+dependencies = [
+ "either-or-both",
+ "indexmap",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4429,6 +4529,41 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
+name = "jiff"
+version = "0.2.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "175dc66334db3b9ab9985bf8b61cfed50dc16d20964bb47f9e479adcae984a7f"
+dependencies = [
+ "jiff-core",
+ "jiff-static",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
+]
+
+[[package]]
+name = "jiff-core"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e599b80292e597019b8b3e392de3f4bea2959ddfb8c7dff60e035e9e311a2c1b"
+dependencies = [
+ "log",
+]
+
+[[package]]
+name = "jiff-static"
+version = "0.2.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7b1af7547d47354bc438d797e3854601bde8f8d185780c5ba4ab27afa54f1ba"
+dependencies = [
+ "jiff-core",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "jni"
@@ -5744,7 +5879,7 @@ dependencies = [
  "kithara-test-dylib",
  "kithara-test-fixtures",
  "kithara-test-utils",
- "nix",
+ "nix 0.31.3",
  "num-traits",
  "serde",
  "tracing",
@@ -5788,6 +5923,7 @@ dependencies = [
  "kithara-test-fixtures",
  "kithara-test-utils",
  "memory-stats",
+ "metabench",
  "num-traits",
  "rand 0.10.3",
  "reqwest",
@@ -6525,6 +6661,7 @@ dependencies = [
  "kithara-ui-shaping",
  "lucide-icons",
  "masonry",
+ "metabench",
  "naga 27.0.3",
  "num-traits",
  "png 0.18.1",
@@ -6583,6 +6720,7 @@ name = "kithara-ui-gallery"
 version = "0.0.1-alpha5"
 dependencies = [
  "clap",
+ "criterion",
  "delegate",
  "derive_more",
  "fieldwork",
@@ -6600,6 +6738,7 @@ dependencies = [
  "kithara-ui-gallery",
  "kurbo 0.12.0",
  "masonry",
+ "metabench",
  "num-traits",
  "ron",
  "serde",
@@ -6689,12 +6828,14 @@ dependencies = [
 name = "kithara-warp-tests"
 version = "0.0.1-alpha5"
 dependencies = [
+ "criterion",
  "delegate",
  "kithara",
  "kithara-derive",
  "kithara-integration-tests",
  "kithara-test-fixtures",
  "kithara-test-utils",
+ "metabench",
  "num-traits",
  "serde",
  "serde_json",
@@ -7317,6 +7458,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "metabench"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a3b9e87369ad2f5da1ff17c3fe8b4f8b0281645302a4d19ea60384e9588a123"
+dependencies = [
+ "alloc_tracker",
+ "clap",
+ "command-group",
+ "criterion",
+ "either-or-both",
+ "gungraun",
+ "gungraun-runner",
+ "jiff",
+ "libc",
+ "metabench_macros",
+ "nix 0.31.3",
+ "ohno",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "terminal_size",
+ "unicode-width 0.2.2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "metabench_macros"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd4a7734a66eefccc60247338e9854b354b3a4da35ccd5e57f8df8c7685914a9"
+dependencies = [
+ "metabench_macros_impl",
+]
+
+[[package]]
+name = "metabench_macros_impl"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27939b46363b0e12e8bdaeb2dc26774d9cadfc5e1fd2feea3ec10d900d7d9393"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "metal"
 version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7644,6 +7833,17 @@ name = "nextest-workspace-hack"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d906846a98739ed9d73d66e62c2641eef8321f1734b7a1156ab045a0248fb2b3"
+
+[[package]]
+name = "nix"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "libc",
+]
 
 [[package]]
 name = "nix"
@@ -8201,6 +8401,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "ohno"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a800c5ce524851c4e46502ac6a27cbf8f33ea89fb23a35189af7be3a6394b221"
+dependencies = [
+ "ohno_macros",
+ "typeid",
+]
+
+[[package]]
+name = "ohno_macros"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3eabdefe96ef313541d8b89ca4949b6d4279e755d026478dfb6959aabf01bd1"
+dependencies = [
+ "ohno_macros_impl",
+]
+
+[[package]]
+name = "ohno_macros_impl"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99aff4f65c4403fac9a60f00d13dd66a9158dbbce9bbf7d6d42b4b92aed74bcf"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8749,6 +8979,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-error-attr3"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e564d14133360e1ae169ffde5da25881b5fa47261665b8e5713c212c27799da"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
+name = "proc-macro-error3"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f0d4471b3436c22106b21913b1dda531558918ae9b7ec55d58aa84b43552233"
+dependencies = [
+ "proc-macro-error-attr3",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9098,6 +9350,15 @@ checksum = "a611d15b50743feb4c76b7d03edcb0e64f399c26961e4efe6975bc398be6aa3d"
 dependencies = [
  "ordered-float 5.5.0",
  "serde",
+]
+
+[[package]]
+name = "rapidhash"
+version = "4.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5da7e78a036ce858e8d55b7e7dc8ba3a88b78350fd2155d3591bbd966b58589e"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -10876,6 +11137,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix 1.1.6",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11831,6 +12102,12 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "unty-next"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16062d030850f35054e37746427b9febb74a2f24c9c6dd6fa2d0c13c5f53221e"
 
 [[package]]
 name = "url"
@@ -13427,7 +13704,7 @@ dependencies = [
  "hex",
  "kithara-devtools",
  "kithara-test-args",
- "nix",
+ "nix 0.31.3",
  "plist",
  "proc-macro2",
  "regex",

@@ -277,6 +277,7 @@ kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 
 criterion = { workspace = true }
+metabench = { workspace = true }
 
 [[test]]
 name = "suite_light"
@@ -298,11 +299,6 @@ path = "crates/integration/tests/suite_stress.rs"
 name = "suite_integration_regressions"
 path = "crates/integration/tests/suite_integration_regressions.rs"
 required-features = ["integration-regressions"]
-
-[[test]]
-name = "suite_perf"
-path = "perf/suite_perf.rs"
-required-features = ["perf"]
 
 [[test]]
 name = "memory_rss"
