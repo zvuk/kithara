@@ -1749,15 +1749,16 @@ fn component(overall_budget: OverallBudget) {
     let hidden = crate::RoundPools::__build_region(overall_budget, config);
 }
 "#;
-        assert_eq!(
-            rule_hits_at(
-                "perf.no-component-pool-construction.yml",
-                "crates/kithara-app/src/fixture.rs",
-                real,
-            ),
-            3,
-            "direct and nested construction still rejected"
-        );
+        for path in [
+            "crates/kithara-derive/src/pool.rs",
+            "crates/kithara-app/src/fixture.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.no-component-pool-construction.yml", path, real),
+                3,
+                "direct and nested construction still rejected at {path}"
+            );
+        }
     }
 
     #[test]
@@ -1778,7 +1779,16 @@ fn collect_slots(fields: &[Ident], keys: &[Type], args: &[GenericArgument], valu
 }
 "#;
 
-        assert_eq!(primitive_pool_hits(source), 2);
+        for path in [
+            "crates/kithara-derive/src/pool.rs",
+            "crates/kithara-app/src/fixture.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.prefer-primitive-pool.yml", path, source),
+                2,
+                "typed collections allowed, primitive and inferred still rejected at {path}"
+            );
+        }
     }
 
     #[test]
