@@ -34,8 +34,8 @@ use kithara_integration_tests::{
 };
 use kithara_render::bridge::{DeckSnapshot, SlotSnapshot, SlotState};
 use kithara_test_fixtures::signal::{
-    FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, deinterleave_left,
-    goertzel_magnitude, phase,
+    FrameClass, Replay, SAW_PERIOD, Wave, ascending_phase_replays, classify_windows,
+    deinterleave_left, goertzel_magnitude, phase,
 };
 use kithara_test_utils::{TestTempDir, bufpool::TestPools, temp_dir};
 use serde_json::Value;
@@ -1330,7 +1330,6 @@ impl QueueSetup {
 
 struct RenderProgress {
     rendered: Vec<f32>,
-    left: Vec<f32>,
     classes: Vec<FrameClass>,
     peak: f32,
     descending_seen_at: Option<usize>,
@@ -1983,7 +1982,6 @@ impl RenderProgress {
     fn new() -> Self {
         Self {
             rendered: Vec::new(),
-            left: Vec::new(),
             classes: Vec::new(),
             peak: 0.0,
             descending_seen_at: None,
@@ -1996,18 +1994,19 @@ impl RenderProgress {
         class_tolerance: f32,
         detect_descending_from: Option<usize>,
     ) {
-        let block_left = deinterleave_left(block, usize::from(CHANNELS));
+        let mut block_left = deinterleave_left(block, usize::from(CHANNELS));
         self.peak = self.peak.max(max_abs(&block_left));
 
-        let block_classes = if self.peak > MIN_RENDER_PEAK {
-            let block_norm = normalize_with_gain(&block_left, self.peak);
-            classify_windows(&block_norm, WINDOW_FRAMES, class_tolerance)
-        } else {
-            classify_windows(&block_left, WINDOW_FRAMES, class_tolerance)
-        };
+        if self.peak > MIN_RENDER_PEAK {
+            for sample in &mut block_left {
+                *sample /= self.peak;
+            }
+        }
+        let block_classes = classify_windows(&block_left, WINDOW_FRAMES, class_tolerance);
+        let can_complete_descending_run = block_classes.contains(&FrameClass::Descending);
         self.classes.extend(block_classes);
 
-        if self.descending_seen_at.is_none() {
+        if self.descending_seen_at.is_none() && can_complete_descending_run {
             self.descending_seen_at = detect_descending_from.and_then(|min_frame| {
                 first_sustained_window(
                     &self.classes,
@@ -2019,18 +2018,88 @@ impl RenderProgress {
             });
         }
 
-        self.left.extend_from_slice(&block_left);
         self.rendered.extend_from_slice(block);
     }
 
     fn rendered_frames(&self) -> usize {
-        self.left.len()
+        self.rendered.len() / usize::from(CHANNELS)
     }
 
     fn has_b_postroll(&self) -> bool {
         self.descending_seen_at
             .is_some_and(|frame| self.rendered_frames() >= frame.saturating_add(POST_ROLL_FRAMES))
     }
+}
+
+#[kithara::test(native, flash(false))]
+fn render_progress_incremental_detection_matches_full_rescan() {
+    let reference_push =
+        |progress: &mut RenderProgress, block: &[f32], detect_descending_from: Option<usize>| {
+            let block_left = deinterleave_left(block, usize::from(CHANNELS));
+            progress.peak = progress.peak.max(max_abs(&block_left));
+            let block_classes = if progress.peak > MIN_RENDER_PEAK {
+                let block_norm = normalize_with_gain(&block_left, progress.peak);
+                classify_windows(&block_norm, WINDOW_FRAMES, ASCENDING_TOL)
+            } else {
+                classify_windows(&block_left, WINDOW_FRAMES, ASCENDING_TOL)
+            };
+            progress.classes.extend(block_classes);
+            if progress.descending_seen_at.is_none() {
+                progress.descending_seen_at = detect_descending_from.and_then(|min_frame| {
+                    first_sustained_window(
+                        &progress.classes,
+                        FrameClass::Descending,
+                        min_frame,
+                        WINDOW_FRAMES,
+                    )
+                    .map(frame_for_window)
+                });
+            }
+            progress.rendered.extend_from_slice(block);
+        };
+    let blocks = [
+        (Wave::Silence, 1.0),
+        (Wave::Sawtooth, 0.25),
+        (Wave::SawtoothDescending, 0.5),
+        (Wave::SawtoothDescending, 0.75),
+        (Wave::SawtoothDescending, 1.0),
+        (Wave::Sawtooth, 1.0),
+        (Wave::Sawtooth, 1.0),
+        (Wave::SawtoothDescending, 1.0),
+        (Wave::SawtoothDescending, 1.0),
+        (Wave::SawtoothDescending, 1.0),
+    ];
+    let mut actual = RenderProgress::new();
+    let mut reference = RenderProgress::new();
+
+    for (index, (pattern, gain)) in blocks.into_iter().enumerate() {
+        let block: Vec<f32> = (0..BLOCK_FRAMES)
+            .flat_map(|frame| {
+                let sample = f32::from(pattern.sample(index * BLOCK_FRAMES + frame, SAMPLE_RATE))
+                    / 32768.0
+                    * gain;
+                [sample, sample]
+            })
+            .collect();
+        let gate = (index >= 5).then_some(5 * BLOCK_FRAMES);
+        reference_push(&mut reference, &block, gate);
+        actual.push_block(&block, ASCENDING_TOL, gate);
+
+        assert_eq!(
+            actual.rendered, reference.rendered,
+            "rendered block {index}"
+        );
+        assert_eq!(actual.classes, reference.classes, "classes block {index}");
+        assert_eq!(actual.peak, reference.peak, "peak block {index}");
+        assert_eq!(
+            actual.descending_seen_at, reference.descending_seen_at,
+            "detection block {index}"
+        );
+        assert_eq!(actual.rendered_frames(), reference.rendered_frames());
+        assert_eq!(actual.has_b_postroll(), reference.has_b_postroll());
+    }
+
+    assert_eq!(actual.descending_seen_at, Some(7 * BLOCK_FRAMES));
 }
 
 struct ToneRenderProgress {

@@ -6,6 +6,7 @@ use kithara::{
     net::NetOptions,
     platform::{
         CancelToken,
+        time::Duration,
         tokio::{
             runtime::Handle,
             sync::broadcast::{Receiver, error::TryRecvError},
@@ -13,17 +14,21 @@ use kithara::{
     },
     play::{DeckParameter, DeckProgram, ResourceConfig, ResourceSrc},
     queue::QueueControl,
+    signal::SegmentId,
+    stream::AudioCodec,
 };
 use kithara_command::Seq;
 use kithara_integration_tests::{
     HlsFixtureBuilder, SegmentGateHandle, TestServerHelper,
     offline::{OfflinePlayer, OfflinePlayerOptions},
+    test_defaults::packaged_content_frames,
     usdt_trace,
 };
-use kithara_render::bridge::{DeckEvent, SlotState};
+use kithara_render::bridge::{DeckEvent, DeckSnapshot, Slot, SlotState};
+use kithara_test_fixtures::hls_fixtures::frame_samples;
 use kithara_test_utils::cancel_token;
+use num_traits::ToPrimitive;
 
-use super::cases::render_effect_window;
 use crate::underrun::Underruns;
 
 /// One deck program a false-mode starvation window issues while its segment
@@ -35,11 +40,20 @@ pub(crate) struct ProgramPlan {
     pub(crate) endpoint: f64,
 }
 
+async fn render_unpaced_window(harness: &OfflinePlayer, frames: usize) -> Vec<f32> {
+    let mut output = Vec::with_capacity(frames * 2);
+    for start in (0..frames).step_by(64) {
+        let block = 64.min(frames - start);
+        output.extend_from_slice(&harness.render(block).await);
+    }
+    output
+}
+
 /// Render an empty 512-frame window through the withheld deck. The caller
 /// records program admission and the window in one live probe scope.
 async fn empty_callback(harness: &OfflinePlayer) {
     let before = harness.host().position();
-    let silence = render_effect_window(harness, 512).await;
+    let silence = render_unpaced_window(harness, 512).await;
     assert_eq!(
         harness.host().position(),
         before + 512,
@@ -95,6 +109,7 @@ pub(crate) async fn run_withheld_windows<F>(
     F: FnMut(&OfflinePlayer, usize) -> Option<ProgramPlan>,
 {
     let mut edges = Vec::new();
+    let mut origin = None;
     let mut active: Option<ActiveProgram> = None;
     for (index, gate) in gates.iter().enumerate() {
         let expected = u64::try_from(index + 1).expect("three windows");
@@ -102,10 +117,10 @@ pub(crate) async fn run_withheld_windows<F>(
             harness,
             item,
             gate,
-            expected,
             index,
             &mut on_window,
             &mut active,
+            (events, &mut edges, &mut origin),
         )
         .await;
         recover_window(harness, item, gate, expected, active).await;
@@ -136,6 +151,136 @@ struct ActiveProgram {
     owner: (Option<Seq>, Option<Seq>),
 }
 
+fn required_packaged_position(index: usize) -> Duration {
+    let frame_samples = frame_samples(AudioCodec::AacLc).expect("AAC encoder frame geometry");
+    let segment_frames = packaged_content_frames(2 * 44_100, frame_samples, 1)
+        .expect("packet-aligned starvation segment");
+    let segment = index * 2 + 1;
+    let frames = (segment_frames * segment)
+        .to_f64()
+        .expect("packaged starvation position fits f64");
+    Duration::from_secs_f64(frames / f64::from(44_100_u32))
+}
+
+#[derive(Clone, Copy)]
+struct OriginWitness {
+    slot: Slot,
+    item: TrackId,
+    attachment: u64,
+    epoch: u64,
+    segment: SegmentId,
+    source_revision: u64,
+    origin: Duration,
+    raw_position: Duration,
+}
+
+fn source_witness(snapshot: &DeckSnapshot, item: TrackId) -> Result<OriginWitness, String> {
+    let mut matching = snapshot
+        .slots
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| slot.binding.is_some_and(|binding| binding.item() == item));
+    let (index, slot) = matching
+        .next()
+        .ok_or_else(|| format!("item {item:?} has no slot witness"))?;
+    if matching.next().is_some() {
+        return Err(format!("item {item:?} has multiple slot witnesses"));
+    }
+    let binding = slot
+        .binding
+        .ok_or_else(|| format!("item {item:?} lost its slot binding"))?;
+    let source = slot
+        .source
+        .ok_or_else(|| format!("item {item:?} has no source metadata"))?;
+    let mark = slot
+        .mark
+        .ok_or_else(|| format!("item {item:?} has no raw source mark"))?;
+    if source.segment != binding.segment() || mark.lane.segment != binding.segment() {
+        return Err(format!("item {item:?} has mismatched source segments"));
+    }
+    if source.spec.sample_rate.get() != 44_100 {
+        return Err(format!("item {item:?} changed its source sample rate"));
+    }
+    Ok(OriginWitness {
+        slot: Slot::new(u16::try_from(index).map_err(|_| "slot index exceeds Slot".to_owned())?),
+        item,
+        attachment: binding.attachment().get(),
+        epoch: binding.epoch().into(),
+        segment: binding.segment(),
+        source_revision: source.source_revision,
+        origin: source
+            .media_origin
+            .ok_or_else(|| format!("item {item:?} has no actual media origin"))?,
+        raw_position: mark.position,
+    })
+}
+
+fn require_starvation_boundary(
+    edges: &[DeckEvent],
+    witness: OriginWitness,
+    stable: &mut Option<OriginWitness>,
+    item: TrackId,
+    expected: u64,
+    index: usize,
+    required: Duration,
+) -> Result<(), String> {
+    let starts: Vec<(Slot, Option<Duration>)> = edges
+        .iter()
+        .filter_map(|event| match event {
+            DeckEvent::UnderrunStarted {
+                slot,
+                item: owner,
+                position,
+                ..
+            } if *owner == item => Some((*slot, *position)),
+            _ => None,
+        })
+        .collect();
+    if starts.len() != usize::try_from(expected).expect("window count fits usize") {
+        return Err(format!(
+            "expected {expected} underrun starts before window {index}, got {}",
+            starts.len()
+        ));
+    }
+    let (slot, position) = starts
+        .last()
+        .copied()
+        .ok_or_else(|| format!("window {index} has no underrun start"))?;
+    let position =
+        position.ok_or_else(|| format!("window {index} has no owner source position"))?;
+    if witness.slot != slot || witness.item != item {
+        return Err(format!("window {index} has a mismatched item/slot witness"));
+    }
+    let raw = position
+        .checked_add(witness.origin)
+        .ok_or_else(|| format!("window {index} raw source position overflows"))?;
+    if raw != witness.raw_position {
+        return Err(format!(
+            "window {index} event/source raw positions differ: event={raw:?}, slot={:?}",
+            witness.raw_position
+        ));
+    }
+    if raw < required {
+        return Err(format!(
+            "window {index} underrun precedes its withheld packaged boundary: raw={raw:?}, required={required:?}, origin={:?}",
+            witness.origin
+        ));
+    }
+    if let Some(previous) = *stable
+        && (previous.slot != witness.slot
+            || previous.item != witness.item
+            || previous.attachment != witness.attachment
+            || previous.epoch != witness.epoch
+            || previous.segment != witness.segment
+            || previous.source_revision != witness.source_revision
+            || previous.origin != witness.origin)
+    {
+        return Err(format!("window {index} changed its source or media origin"));
+    }
+    *stable = Some(witness);
+    Ok(())
+}
+
 /// Exhaust ready PCM on one withheld segment, issuing the window's program when
 /// `on_window` returns one, and assert the empty callback returns with the gate
 /// still closed and a complete zero-wait trace.
@@ -143,20 +288,40 @@ async fn starve_window<F>(
     harness: &OfflinePlayer,
     item: TrackId,
     gate: &SegmentGateHandle,
-    expected: u64,
     index: usize,
     on_window: &mut F,
     active: &mut Option<ActiveProgram>,
+    observation: (
+        &mut Receiver<DeckEvent>,
+        &mut Vec<DeckEvent>,
+        &mut Option<OriginWitness>,
+    ),
 ) where
     F: FnMut(&OfflinePlayer, usize) -> Option<ProgramPlan>,
 {
+    let expected = u64::try_from(index + 1).expect("three windows");
+    let (events, edges, origin) = observation;
     for _ in 0..1024 {
-        let _ = render_effect_window(harness, 512).await;
+        let _ = render_unpaced_window(harness, 512).await;
         if harness.metrics().underruns() == expected {
             assert!(
                 gate.requested() > 0,
                 "the withheld input owns this starvation window"
             );
+            drain_edges(events, edges);
+            source_witness(&harness.deck_snapshot(), item)
+                .and_then(|witness| {
+                    require_starvation_boundary(
+                        edges,
+                        witness,
+                        origin,
+                        item,
+                        expected,
+                        index,
+                        required_packaged_position(index),
+                    )
+                })
+                .unwrap_or_else(|error| panic!("gate-owned starvation precondition: {error}"));
             let trace = usdt_trace::scope();
             if let Some(plan) = on_window(harness, index) {
                 let ProgramPlan {
@@ -218,7 +383,7 @@ async fn recover_window(
     gate.release();
     let mut recovered = false;
     for _ in 0..256 {
-        let output = render_effect_window(harness, 512).await;
+        let output = render_unpaced_window(harness, 512).await;
         if output.iter().any(|sample| sample.abs() > 0.01) {
             recovered = true;
             break;
@@ -267,7 +432,7 @@ async fn verify_transport(
         "three forced starvation windows recovered",
     );
     harness.with_queue(QueueControl::pause).await;
-    let paused = render_effect_window(harness, 2048).await;
+    let paused = render_unpaced_window(harness, 2048).await;
     assert!(
         paused[paused.len() - 1024..]
             .iter()
@@ -275,7 +440,7 @@ async fn verify_transport(
     );
     raw.checkpoint(harness.metrics(), true, "after pause");
     harness.with_queue(QueueControl::play).await;
-    let resumed = render_effect_window(harness, 4096).await;
+    let resumed = render_unpaced_window(harness, 4096).await;
     assert!(resumed.iter().any(|sample| sample.abs() > 0.01));
     raw.checkpoint(harness.metrics(), true, "after play");
     assert_eq!(
@@ -284,7 +449,7 @@ async fn verify_transport(
         "only the three withheld segments starve before seek"
     );
     harness.seek(0.5).await;
-    let sought = render_effect_window(harness, 4096).await;
+    let sought = render_unpaced_window(harness, 4096).await;
     assert!(sought.iter().any(|sample| sample.abs() > 0.01));
     assert!(
         (0.49..0.75).contains(&harness.position()),
@@ -314,6 +479,96 @@ async fn verify_transport(
         .find(|slot| slot.binding.is_some_and(|binding| binding.item() == item))
         .expect("the controlled item remains bound");
     assert_eq!(slot.state, SlotState::Playing);
+}
+
+#[kithara::test]
+fn starvation_rejects_pre_boundary_producer_lag() {
+    use kithara::signal::SessionFrame;
+
+    let item = TrackId(1);
+    let event = |position| DeckEvent::UnderrunStarted {
+        slot: Slot::new(0),
+        item,
+        at: SessionFrame::new(0),
+        position: Some(position),
+    };
+    let required = Duration::from_secs_f64(89_088.0 / 44_100.0);
+    let origin = Duration::from_millis(37);
+    let witness = OriginWitness {
+        slot: Slot::new(0),
+        item,
+        attachment: 1,
+        epoch: 1,
+        segment: SegmentId::FIRST,
+        source_revision: 7,
+        origin,
+        raw_position: required,
+    };
+    let mut stable = None;
+    assert!(source_witness(&DeckSnapshot::default(), item).is_err());
+
+    let pre_boundary = required - Duration::from_millis(1);
+    let mut edges = vec![event(pre_boundary - origin)];
+    assert!(
+        require_starvation_boundary(
+            &edges,
+            OriginWitness {
+                raw_position: pre_boundary,
+                ..witness
+            },
+            &mut stable,
+            item,
+            1,
+            0,
+            required,
+        )
+        .is_err()
+    );
+
+    edges[0] = event(required - origin);
+    assert!(
+        require_starvation_boundary(&edges, witness, &mut stable, item, 1, 0, required).is_ok()
+    );
+
+    let changed_origin = origin + Duration::from_millis(1);
+    edges[0] = event(required - changed_origin);
+    assert!(
+        require_starvation_boundary(
+            &edges,
+            OriginWitness {
+                origin: changed_origin,
+                ..witness
+            },
+            &mut stable,
+            item,
+            1,
+            0,
+            required,
+        )
+        .is_err()
+    );
+
+    edges[0] = event(required - origin);
+    assert!(
+        require_starvation_boundary(
+            &edges,
+            OriginWitness {
+                slot: Slot::new(1),
+                ..witness
+            },
+            &mut stable,
+            item,
+            1,
+            0,
+            required,
+        )
+        .is_err()
+    );
+
+    edges.push(event(required - origin));
+    assert!(
+        require_starvation_boundary(&edges, witness, &mut stable, item, 1, 0, required).is_err()
+    );
 }
 
 #[kithara::test(tokio, multi_thread, timeout(Long))]
