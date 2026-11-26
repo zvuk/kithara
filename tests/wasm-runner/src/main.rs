@@ -101,8 +101,10 @@ async fn run(cli: Cli, watchdog: Duration) -> Result<bool> {
         return Ok(true);
     }
     let _fixtures = within(deadline, watchdog, fixture::ensure()).await??;
+    eprintln!("wasm runner stage: fixtures ready");
     let dir = tempfile::tempdir()?;
     suite.generate(dir.path())?;
+    eprintln!("wasm runner stage: bindings generated");
     let (browser, driver) = driver::locate()?;
     let options = page::Options {
         nocapture: cli.nocapture,
@@ -110,19 +112,24 @@ async fn run(cli: Cli, watchdog: Duration) -> Result<bool> {
     };
     let index = page::write(dir.path(), &suite, options, browser.hidden_style())?;
     let server = server::spawn(dir.path().to_path_buf(), index).await;
+    eprintln!("wasm runner stage: fixture server ready");
     let capabilities = capabilities::load(browser, &cli.file)?;
+    eprintln!("wasm runner stage: starting browser session");
     let session = within(
         deadline,
         watchdog,
         Session::start(browser, driver, capabilities),
     )
     .await??;
+    eprintln!("wasm runner stage: browser session ready");
     let url = server.url("/").to_string();
     eprintln!("Running headless tests in {browser:?} at {url}");
     let outcome = within(deadline, watchdog, drive(&session, &url))
         .await
         .and_then(convert::identity);
+    eprintln!("wasm runner stage: page drive finished");
     session.close().await;
+    eprintln!("wasm runner stage: browser session closed");
     outcome
 }
 
@@ -140,7 +147,10 @@ async fn within<F: Future>(deadline: Instant, watchdog: Duration, future: F) -> 
 /// Opens the page and reports its results.
 async fn drive(session: &Session, url: &str) -> Result<bool> {
     session.visit(url).await?;
-    report(session, seconds("WASM_BINDGEN_TEST_TIMEOUT", 20)).await
+    eprintln!("wasm runner stage: page loaded");
+    let outcome = report(session, seconds("WASM_BINDGEN_TEST_TIMEOUT", 20)).await;
+    eprintln!("wasm runner stage: page report finished");
+    outcome
 }
 
 /// Streams the page's output until the summary appears or `limit` passes.
