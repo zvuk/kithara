@@ -32,7 +32,7 @@ use crate::{
 
 /// The line the harness prints once every selected test has finished.
 const SUMMARY: &str = "test result: ";
-const POLL: Duration = Duration::from_millis(100);
+const POLL: Duration = Duration::from_millis(10);
 
 /// The flags cargo forwards after `--`.
 #[derive(Parser)]
