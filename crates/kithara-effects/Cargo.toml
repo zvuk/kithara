@@ -46,12 +46,21 @@ kithara-test-fixtures = { workspace = true, default-features = false, features =
 kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "mock"] }
 
 criterion = { workspace = true }
+metabench = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 assert_no_alloc = { workspace = true }
 
 [[bench]]
 name = "feedback_delay"
+harness = false
+
+[[bench]]
+name = "feedback_delay_guard"
+harness = false
+
+[[bench]]
+name = "feedback_delay_heap"
 harness = false
 
 [[bench]]

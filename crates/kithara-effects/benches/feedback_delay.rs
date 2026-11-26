@@ -1,50 +1,39 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    hint::black_box,
-    num::{NonZeroU32, NonZeroUsize},
-};
+use criterion::{BenchmarkId, Criterion, Throughput};
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use kithara_effects::{
-    DeckEffect,
-    delay::{DelayTime, Feedback, FeedbackDelay, FeedbackDelayConfig, FeedbackHighPass},
-};
-use kithara_test_utils::bufpool::pools;
+mod support;
 
-fn feedback_comb(c: &mut Criterion) {
-    let mut group = c.benchmark_group("feedback_comb");
+use support::feedback_delay::{CASES, GROUP, Prepared, prepare, process_once};
+
+/// One stereo `process` pass over the prepared delay. Returning the owner keeps
+/// delay and buffer destruction outside the measured window.
+#[metabench::benchmark(FEEDBACK_COMB, GROUP, "high_pass", gungraun_setup = prepare)]
+#[bench::integer_480(480.0)]
+#[bench::integer_96k(96_000.0)]
+#[bench::fractional_96k(96_000.5)]
+fn feedback_delay_process(mut prepared: Prepared) -> Prepared {
+    process_once(&mut prepared);
+    prepared
+}
+
+fn criterion_benchmarks(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group(FEEDBACK_COMB.group_name());
     group.throughput(Throughput::Elements(512));
-    let region = pools();
-    for (path, frames) in [
-        ("integer", 480.0),
-        ("integer", 96_000.0),
-        ("fractional", 96_000.5),
-    ] {
-        let config = FeedbackDelayConfig::builder()
-            .sample_rate(NonZeroU32::new(48_000).expect("rate"))
-            .capacity(NonZeroUsize::new(192_000).expect("capacity"))
-            .time(DelayTime::checked(frames).expect("delay"))
-            .feedback(Feedback::checked(0.5).expect("gain"))
-            .high_pass(FeedbackHighPass::checked(1000.0).expect("cutoff"))
-            .build();
-        let mut delay = FeedbackDelay::new(config, &region).expect("delay fits");
-        let mut input = [vec![0.0_f32; 256], vec![0.0; 256]];
-        input[0][0] = 1.0;
-        input[1][0] = -0.5;
-        let mut wet = input.clone();
-        group.bench_function(BenchmarkId::new(format!("high_pass/{path}"), frames), |b| {
-            b.iter(|| {
-                let [left, right] = &mut wet;
-                delay.process(
-                    black_box([input[0].as_slice(), input[1].as_slice()]),
-                    black_box([left.as_mut_slice(), right.as_mut_slice()]),
-                );
-            });
-        });
+    for (id, frames) in CASES {
+        group.bench_function(
+            BenchmarkId::new(FEEDBACK_COMB.benchmark_name(), id),
+            |bencher| {
+                let mut prepared = prepare(frames);
+                bencher.iter(|| process_once(&mut prepared));
+            },
+        );
     }
     group.finish();
 }
 
-criterion_group!(benches, feedback_comb);
-criterion_main!(benches);
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [FEEDBACK_COMB],
+    allocator = std::alloc::System,
+);
