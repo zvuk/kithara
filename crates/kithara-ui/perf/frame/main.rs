@@ -376,37 +376,25 @@ fn miss(reading: &Reading) -> Option<String> {
         .then(|| format!("the host saw nothing at {:?} in {rect:?}", reading.points))
 }
 
-fn measure_scenario(backend: &Backend, geometry: &iced::Renderer, scenario: &Scenario) -> Reading {
-    let fixture = Fixture::new(scenario.control);
-    let reads = Rc::new(CensusReads::default());
-    let rect = laid_out_rect(&fixture, &reads, geometry);
-    let mut driver = driver(backend, &fixture, Rc::clone(&reads));
-    let _warm = driver.frame();
-    let steps = scenario.interaction.steps(rect);
-    for step in &steps {
-        driver.interact(*step);
+struct FrameWork {
+    action: Box<dyn FnMut() -> Reading>,
+    reading: Option<Reading>,
+}
+
+impl FrameWork {
+    fn run(&mut self) {
+        self.reading = Some((self.action)());
     }
-    let _frame = driver.frame();
-    Reading {
-        rect,
-        gestured: matches!(
-            scenario.interaction,
-            Interaction::Drag | Interaction::Press | Interaction::PressLeading
-        ),
-        name: scenario.name,
-        points: steps
-            .iter()
-            .filter_map(|step| match step {
-                Step::Move(at) => Some(*at),
-                Step::Press | Step::Release | Step::Data => None,
-            })
-            .collect(),
-        receipts: driver.receipts(),
-        scheduled: driver.scheduled(),
+
+    fn teardown(&mut self) {
+        audit(
+            "frame",
+            std::slice::from_ref(self.reading.as_ref().expect("frame reading")),
+        );
     }
 }
 
-fn execute_frame(index: usize) {
+fn prepare_frame(index: usize) -> FrameWork {
     load_fonts();
     let host = if index < consts::SCENARIOS.len() {
         Host::Immediate
@@ -421,11 +409,48 @@ fn execute_frame(index: usize) {
     };
     let backend = Backend::try_from(host)
         .unwrap_or_else(|error| panic!("{label}: NOT MEASURED, no host to measure it on: {error}"));
-    let reading = measure_scenario(&backend, &backend.geometry(), scenario);
-    audit("frame", std::slice::from_ref(&reading));
+    // A driver borrows its fixture. Keep the one fixture for this case alive
+    // for the rest of the process, outside the measured frame and allocation window.
+    let fixture = Box::leak(Box::new(Fixture::new(scenario.control)));
+    let reads = Rc::new(CensusReads::default());
+    let rect = laid_out_rect(fixture, &reads, &backend.geometry());
+    let mut driver = driver(&backend, fixture, Rc::clone(&reads));
+    let _warm = driver.frame();
+    let steps = scenario.interaction.steps(rect);
+    let action = Box::new(move || {
+        for step in &steps {
+            driver.interact(*step);
+        }
+        let _frame = driver.frame();
+        Reading {
+            rect,
+            gestured: matches!(
+                scenario.interaction,
+                Interaction::Drag | Interaction::Press | Interaction::PressLeading
+            ),
+            name: scenario.name,
+            points: steps
+                .iter()
+                .filter_map(|step| match step {
+                    Step::Move(at) => Some(*at),
+                    Step::Press | Step::Release | Step::Data => None,
+                })
+                .collect(),
+            receipts: driver.receipts(),
+            scheduled: driver.scheduled(),
+        }
+    });
+    FrameWork {
+        action,
+        reading: None,
+    }
 }
 
-#[metabench::benchmark(FRAME_PERF, "frame", "case")]
+fn teardown_frame(mut work: FrameWork) {
+    work.teardown();
+}
+
+#[metabench::benchmark(FRAME_PERF, "frame", "case", gungraun_setup = prepare_frame, gungraun_teardown = teardown_frame)]
 #[bench::iced_brand(0_usize)]
 #[bench::iced_spacer(1_usize)]
 #[bench::iced_divider(2_usize)]
@@ -506,8 +531,9 @@ fn execute_frame(index: usize) {
 #[bench::vello_vustereo(77_usize)]
 #[bench::vello_crossfader(78_usize)]
 #[bench::vello_fader(79_usize)]
-fn native_frame(index: usize) {
-    execute_frame(index);
+fn native_frame(mut work: FrameWork) -> FrameWork {
+    work.run();
+    work
 }
 
 fn criterion_benchmarks(c: &mut Criterion) {
@@ -523,7 +549,11 @@ fn criterion_benchmarks(c: &mut Criterion) {
                 "case",
                 format!("{host}_{}", scenario.name.to_ascii_lowercase()),
             ),
-            |b| b.iter(|| execute_frame(index)),
+            |b| {
+                let mut work = prepare_frame(index);
+                b.iter(|| work.run());
+                work.teardown();
+            },
         );
     }
     group.finish();

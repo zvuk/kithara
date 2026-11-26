@@ -83,7 +83,31 @@ fn observe(identity: &str, worker: f64, service: f64, render: f64) {
     file.write_all(b"\n").expect("terminate tempo observation");
 }
 
-fn execute(motion: Motion, keylock: bool, identity: &'static str) {
+struct TempoWork {
+    motion: Motion,
+    identity: &'static str,
+    pools: [Pools; DECKS],
+    renderers:
+        [kithara::warp::WarpRenderer<kithara_integration_tests::bufpool_ext::TestPools>; DECKS],
+    samples: Vec<f32>,
+    blocks: Vec<Duration>,
+    service: Vec<Duration>,
+    render: Vec<Duration>,
+}
+
+impl TempoWork {
+    fn teardown(&mut self) {
+        observe(
+            self.identity,
+            total(&self.blocks),
+            total(&self.service),
+            total(&self.render),
+        );
+    }
+}
+
+fn prepare_tempo(index: usize) -> TempoWork {
+    let (motion, keylock, identity) = case(index);
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
         .maybe_controls(
@@ -93,19 +117,34 @@ fn execute(motion: Motion, keylock: bool, identity: &'static str) {
         .speed(1.05)
         .build();
     let pools: [_; DECKS] = std::array::from_fn(|_| pools());
-    let mut renderers: [_; DECKS] =
+    let renderers: [_; DECKS] =
         std::array::from_fn(|deck| Warp::new((), &config).renderer(spec(), pools[deck].clone()));
     let tone = kithara_test_fixtures::unit_fixtures::warp_sine();
     let source_frames = (WARM_FRAMES + MEASURED_FRAMES) * 2 + 65_536;
-    let samples: Vec<_> = tone
+    let samples = tone
         .iter()
         .copied()
         .cycle()
         .take(source_frames * 2)
         .collect();
-    let mut blocks = Vec::with_capacity(32_768);
-    let mut service = Vec::with_capacity(32_768);
-    let mut render = Vec::with_capacity(32_768);
+    TempoWork {
+        motion,
+        identity,
+        pools,
+        renderers,
+        samples,
+        blocks: Vec::with_capacity(32_768),
+        service: Vec::with_capacity(32_768),
+        render: Vec::with_capacity(32_768),
+    }
+}
+
+fn run_tempo(work: &mut TempoWork) {
+    let motion = work.motion;
+    let pools = &work.pools;
+    let renderers = &mut work.renderers;
+    let samples = &work.samples;
+    let source_frames = (WARM_FRAMES + MEASURED_FRAMES) * 2 + 65_536;
     let mut source = [0_usize; DECKS];
     let mut output_frames = 0;
     let mut next_update = UPDATE_FRAMES;
@@ -134,7 +173,7 @@ fn execute(motion: Motion, keylock: bool, identity: &'static str) {
                 )),
             };
             if let Some(curve) = curve {
-                for renderer in &mut renderers {
+                for renderer in &mut *renderers {
                     renderer
                         .set_speed(curve.clone(), revision)
                         .expect("supported shared tempo curve");
@@ -219,9 +258,9 @@ fn execute(motion: Motion, keylock: bool, identity: &'static str) {
             }
         }
         if output_frames >= WARM_FRAMES {
-            service.push(prepared);
-            render.push(rendered);
-            blocks.push(elapsed);
+            work.service.push(prepared);
+            work.render.push(rendered);
+            work.blocks.push(elapsed);
             measured += frames;
         }
         output_frames += frames;
@@ -231,19 +270,22 @@ fn execute(motion: Motion, keylock: bool, identity: &'static str) {
     for energy in energy {
         assert!(energy / (measured * 2).to_f64().expect("sample count fits f64") > 0.01);
     }
-    observe(identity, total(&blocks), total(&service), total(&render));
 }
 
-#[metabench::benchmark(TEMPO_WORKER, "tempo_worker", "case")]
+fn teardown_tempo(mut work: TempoWork) {
+    work.teardown();
+}
+
+#[metabench::benchmark(TEMPO_WORKER, "tempo_worker", "case", gungraun_setup = prepare_tempo, gungraun_teardown = teardown_tempo)]
 #[bench::constant_keylock(0_usize)]
 #[bench::approach_keylock(1_usize)]
 #[bench::retarget_keylock(2_usize)]
 #[bench::constant_varispeed(3_usize)]
 #[bench::approach_varispeed(4_usize)]
 #[bench::retarget_varispeed(5_usize)]
-fn native_tempo(index: usize) {
-    let (motion, keylock, identity) = case(index);
-    execute(motion, keylock, identity);
+fn native_tempo(mut work: TempoWork) -> TempoWork {
+    run_tempo(&mut work);
+    work
 }
 
 fn case(index: usize) -> (Motion, bool, &'static str) {
@@ -272,8 +314,9 @@ fn criterion_benchmarks(c: &mut Criterion) {
     .enumerate()
     {
         group.bench_function(BenchmarkId::new("case", id), |b| {
-            let (motion, keylock, identity) = case(index);
-            b.iter(|| execute(motion, keylock, identity));
+            let mut work = prepare_tempo(index);
+            b.iter(|| run_tempo(&mut work));
+            work.teardown();
         });
     }
     group.finish();

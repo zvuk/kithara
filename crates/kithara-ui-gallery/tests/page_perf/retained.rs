@@ -53,12 +53,12 @@ impl<'a> Retained<'a> {
     /// was wanted is counted separately.
     fn draw(&mut self, fence: bool) -> Census {
         let before = self.ui.draw_pool_stats();
-        (self.ui.frame(Duration::from_millis(consts::STRESS_TICK_MS)));
+        self.ui.frame(Duration::from_millis(consts::STRESS_TICK_MS));
         self.scheduled = self.ui.needs_frame();
-        let frame = (self
+        let frame = self
             .ui
             .render()
-            .unwrap_or_else(|error| panic!("the retained host must draw: {error}")));
+            .unwrap_or_else(|error| panic!("the retained host must draw: {error}"));
         let encoding = frame.scene().encoding();
         let scene = Scene {
             draw_tags: encoding.draw_tags.len(),

@@ -532,32 +532,117 @@ fn gallery_case(mut index: usize) -> (usize, Host, Run, bool) {
     panic!("unknown gallery case {index}")
 }
 
-fn execute_gallery(index: usize) {
+struct GalleryWork<'run> {
+    driver: Box<dyn PageHost + 'run>,
+    host: Host,
+    page: &'run Page,
+    run: Run,
+    fenced: bool,
+    expected: Natives,
+    picture_before: u64,
+    reading_before: Option<u64>,
+    tally: Option<Tally>,
+}
+
+impl<'run> GalleryWork<'run> {
+    fn run(&mut self) {
+        self.tally = Some(frames(
+            self.driver.as_mut(),
+            self.page,
+            self.run,
+            self.fenced,
+        ));
+    }
+
+    fn teardown(&mut self) {
+        let outcome = Outcome {
+            page: self.page,
+            run: self.run,
+            tally: self.tally.take().expect("gallery tally"),
+            expected: self.expected,
+            picture: [self.picture_before, self.driver.picture()],
+            drawn_as: self.driver.drawn_as(),
+            reading: [self.reading_before, self.driver.reading(self.page.moving)],
+            painted: painted(&self.driver.pixels()),
+        };
+        let baseline = match self.run {
+            Run::Wheels(count) if count > 0 => {
+                let fixture = Fixture::default();
+                let mut gpu = Gpu::try_from(self.host).expect("baseline GPU");
+                Some(
+                    measure(
+                        &fixture,
+                        self.page,
+                        Run::Wheels(0),
+                        self.expected,
+                        &mut gpu,
+                        false,
+                    )
+                    .picture[1],
+                )
+            }
+            Run::Moves(count) if count > 0 => {
+                let fixture = Fixture::default();
+                let mut gpu = Gpu::try_from(self.host).expect("baseline GPU");
+                Some(
+                    measure(
+                        &fixture,
+                        self.page,
+                        Run::Moves(0),
+                        self.expected,
+                        &mut gpu,
+                        false,
+                    )
+                    .picture[1],
+                )
+            }
+            _ => None,
+        };
+        prove(self.page.name, &outcome, baseline);
+    }
+}
+
+fn prepare_gallery(index: usize) -> GalleryWork<'static> {
     load_fonts();
     let (page_index, host, run, fenced) = gallery_case(index);
     let page = &consts::PAGES[page_index];
-    let fixture = Fixture::default();
-    let mut gpu = Gpu::try_from(host).unwrap_or_else(|error| {
+    let fixture = Box::leak(Box::new(Fixture::default()));
+    let gpu = Box::leak(Box::new(Gpu::try_from(host).unwrap_or_else(|error| {
         panic!(
             "{}: NOT MEASURED, no host to measure it on: {error}",
             page.name
         )
-    });
+    })));
     let expected = leaves(&fixture.compiled(page));
-    let outcome = measure(&fixture, page, run, expected, &mut gpu, fenced);
-    let baseline = match run {
-        Run::Wheels(count) if count > 0 => {
-            Some(measure(&fixture, page, Run::Wheels(0), expected, &mut gpu, false).picture[1])
-        }
-        Run::Moves(count) if count > 0 => {
-            Some(measure(&fixture, page, Run::Moves(0), expected, &mut gpu, false).picture[1])
-        }
-        _ => None,
+    let app = PageApp::new(page, run);
+    let mut driver: Box<dyn PageHost + 'static> = match &mut *gpu {
+        Gpu::Immediate(gpu) => Box::new(Immediate::new(fixture.compiled(page), page, app, gpu)),
+        Gpu::Retained(gpu) => Box::new(Retained::new(fixture.config(), page, app, gpu)),
     };
-    prove(page.name, &outcome, baseline);
+    driver.place_pointer();
+    for _ in 0..3 {
+        driver.frame();
+    }
+    let picture_before = driver.picture();
+    let reading_before = driver.reading(page.moving);
+    GalleryWork {
+        driver,
+        host,
+        page,
+        run,
+        fenced,
+        expected,
+        picture_before,
+        reading_before,
+        tally: None,
+    }
 }
 
-#[metabench::benchmark(GALLERY_PERF, "gallery", "case")]
+fn teardown_gallery(mut work: GalleryWork) {
+    work.teardown();
+}
+
+#[metabench::benchmark(GALLERY_PERF, "gallery", "case", gungraun_setup = prepare_gallery, gungraun_teardown = teardown_gallery)]
 #[bench::iced_gallery_buttons_plain(0_usize)]
 #[bench::vello_gallery_buttons_plain(1_usize)]
 #[bench::iced_gallery_clock_plain(2_usize)]
@@ -638,8 +723,9 @@ fn execute_gallery(index: usize) {
 #[bench::vello_perf_scroll_vis_wheels_1(77_usize)]
 #[bench::vello_perf_scroll_vis_wheels_4(78_usize)]
 #[bench::vello_perf_scroll_vis_wheels_8(79_usize)]
-fn native_gallery(index: usize) {
-    execute_gallery(index);
+fn native_gallery(mut work: GalleryWork) -> GalleryWork {
+    work.run();
+    work
 }
 
 fn criterion_benchmarks(c: &mut Criterion) {
@@ -661,7 +747,9 @@ fn criterion_benchmarks(c: &mut Criterion) {
         let fenced = if fenced { "_fenced" } else { "" };
         let identity = format!("{host}_{}_{run}{fenced}", page.name).replace('-', "_");
         group.bench_function(BenchmarkId::new("case", identity), |b| {
-            b.iter(|| execute_gallery(index))
+            let mut work = prepare_gallery(index);
+            b.iter(|| work.run());
+            work.teardown();
         });
     }
     group.finish();

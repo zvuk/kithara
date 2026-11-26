@@ -158,9 +158,10 @@ name = "masonry_host"
 required-features = ["masonry"]
 test = true
 
-[[test]]
+[[bench]]
 name = "frame_perf"
 path = "perf/frame/main.rs"
+harness = false
 required-features = ["perf", "iced", "masonry"]
 
 [[bench]]

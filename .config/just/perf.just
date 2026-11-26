@@ -12,24 +12,24 @@ frames:
 
 # Whole-page frame time on both hosts: the control page and the bucket sweep.
 pages:
-    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-(buttons|clock|table|stress)'
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery_(buttons|clock|table|stress)'
 
 # Frame time on the pages that move on their own: posed objects, a sprite sheet
 # and an artwork.
 motion:
-    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-(objects|motion|sprites|lottie|scene)'
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery_(objects|motion|sprites|lottie|scene)'
 
 # Cost per wheel event against cost per frame, swept over wheels per frame.
 scroll:
-    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-(pivot|library2|tree|table-long)|perf-scroll-vis'
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery_(pivot|library2|tree|table_long)|perf_scroll_vis'
 
 # Cost per pointer move against cost per frame, with a fader held under the hand.
 drag:
-    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-faders'
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery_faders'
 
 # The visualiser and document-shader passes, free and fenced (own scenario).
 native:
-    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-(vis|shader)'
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery_(vis|shader)'
 
 [positional-arguments]
 suite *ARGS:

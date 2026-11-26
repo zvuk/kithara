@@ -41,9 +41,8 @@ impl Work {
         }
     }
 
-    fn run(mut self) -> Self {
+    fn run(&mut self) {
         (self.action)();
-        self
     }
 }
 
@@ -110,8 +109,8 @@ fn prepare_decoder(index: usize) -> Work {
 #[bench::decoder_probe(1_usize)]
 #[bench::decoder_f32_conversion(2_usize)]
 #[bench::decoder_throughput(3_usize)]
-fn native_decoder(work: Work) -> Work {
-    work.run()
+fn native_decoder(mut work: Work) {
+    work.run();
 }
 
 fn variants() -> Vec<VariantInfo> {
@@ -185,8 +184,8 @@ fn prepare_abr(index: usize) -> Work {
 #[bench::abr_decision(1_usize)]
 #[bench::abr_pure_decision(2_usize)]
 #[bench::abr_estimator_loop(3_usize)]
-fn native_abr(work: Work) -> Work {
-    work.run()
+fn native_abr(mut work: Work) {
+    work.run();
 }
 
 fn pool_cycle(pools: &Pools) {
@@ -245,8 +244,8 @@ fn prepare_pool(index: usize) -> Work {
 #[bench::pool_scalability_4(5_usize)]
 #[bench::pool_scalability_8(6_usize)]
 #[bench::pool_scalability_16(7_usize)]
-fn native_pool(work: Work) -> Work {
-    work.run()
+fn native_pool(mut work: Work) {
+    work.run();
 }
 
 fn build_resampler(
@@ -358,8 +357,8 @@ fn prepare_resampler(index: usize) -> Work {
 #[bench::resampler_breakdown_4096(7_usize)]
 #[bench::resampler_deinterleave(8_usize)]
 #[bench::resampler_breakdown_2048(9_usize)]
-fn native_resampler(work: Work) -> Work {
-    work.run()
+fn native_resampler(mut work: Work) {
+    work.run();
 }
 
 fn create_test_storage(size: usize) -> (MmapResource, NamedTempFile) {
@@ -386,26 +385,29 @@ fn prepare_storage(index: usize) -> Work {
         7 => (4_096, 7_919 * 4_096),
         _ => unreachable!(),
     };
-    let (storage, _temp) = create_test_storage(100 * 1024 * 1024);
-    Work::new(move || match index {
-        0..=3 => {
-            let mut buffer = vec![0_u8; size];
-            storage
-                .read_at(offset, &mut buffer)
-                .expect("sequential read");
-            std::hint::black_box(buffer);
-        }
-        4..=6 => {
-            let data = vec![42_u8; size];
-            storage.write_at(offset, &data).expect("write");
-        }
-        7 => {
-            let mut buffer = vec![0_u8; 4_096];
-            storage.read_at(offset, &mut buffer).expect("random read");
-            std::hint::black_box(buffer);
-        }
-        _ => {
-            let _ = storage.wait_range(0..4_096);
+    let (storage, temp_file) = create_test_storage(100 * 1024 * 1024);
+    Work::new(move || {
+        let _ = &temp_file;
+        match index {
+            0..=3 => {
+                let mut buffer = vec![0_u8; size];
+                storage
+                    .read_at(offset, &mut buffer)
+                    .expect("sequential read");
+                std::hint::black_box(buffer);
+            }
+            4..=6 => {
+                let data = vec![42_u8; size];
+                storage.write_at(offset, &data).expect("write");
+            }
+            7 => {
+                let mut buffer = vec![0_u8; 4_096];
+                storage.read_at(offset, &mut buffer).expect("random read");
+                std::hint::black_box(buffer);
+            }
+            _ => {
+                let _ = storage.wait_range(0..4_096);
+            }
         }
     })
 }
@@ -420,8 +422,95 @@ fn prepare_storage(index: usize) -> Work {
 #[bench::storage_write_65536(6_usize)]
 #[bench::storage_random_read(7_usize)]
 #[bench::storage_wait_range(8_usize)]
-fn native_storage(work: Work) -> Work {
-    work.run()
+fn native_storage(mut work: Work) {
+    work.run();
+}
+
+fn criterion_case(name: &str, id: &str, b: &mut criterion::Bencher) {
+    let index = match name {
+        "session_decoder" => [
+            "decoder_wav",
+            "decoder_probe",
+            "decoder_f32_conversion",
+            "decoder_throughput",
+        ]
+        .iter()
+        .position(|candidate| *candidate == id)
+        .expect("decoder case"),
+        "session_abr" => [
+            "abr_creation",
+            "abr_decision",
+            "abr_pure_decision",
+            "abr_estimator_loop",
+        ]
+        .iter()
+        .position(|candidate| *candidate == id)
+        .expect("ABR case"),
+        "session_pool" => [
+            "pool_single_thread",
+            "pool_multi_thread",
+            "pool_allocation_rate",
+            "pool_scalability_1",
+            "pool_scalability_2",
+            "pool_scalability_4",
+            "pool_scalability_8",
+            "pool_scalability_16",
+        ]
+        .iter()
+        .position(|candidate| *candidate == id)
+        .expect("pool case"),
+        "session_resampler" => [
+            "resampler_quality_fast",
+            "resampler_quality_normal",
+            "resampler_quality_good",
+            "resampler_quality_high",
+            "resampler_passthrough",
+            "resampler_breakdown_512",
+            "resampler_breakdown_1024",
+            "resampler_breakdown_4096",
+            "resampler_deinterleave",
+            "resampler_breakdown_2048",
+        ]
+        .iter()
+        .position(|candidate| *candidate == id)
+        .expect("resampler case"),
+        _ => [
+            "storage_sequential_4096",
+            "storage_sequential_16384",
+            "storage_sequential_65536",
+            "storage_sequential_262144",
+            "storage_write_4096",
+            "storage_write_16384",
+            "storage_write_65536",
+            "storage_random_read",
+            "storage_wait_range",
+        ]
+        .iter()
+        .position(|candidate| *candidate == id)
+        .expect("storage case"),
+    };
+    match name {
+        "session_decoder" => {
+            let mut work = prepare_decoder(index);
+            b.iter(|| work.run());
+        }
+        "session_abr" => {
+            let mut work = prepare_abr(index);
+            b.iter(|| work.run());
+        }
+        "session_pool" => {
+            let mut work = prepare_pool(index);
+            b.iter(|| work.run());
+        }
+        "session_resampler" => {
+            let mut work = prepare_resampler(index);
+            b.iter(|| work.run());
+        }
+        _ => {
+            let mut work = prepare_storage(index);
+            b.iter(|| work.run());
+        }
+    }
 }
 
 fn criterion_benchmarks(c: &mut Criterion) {
@@ -496,75 +585,7 @@ fn criterion_benchmarks(c: &mut Criterion) {
         group.sample_size(10);
         for id in ids {
             group.bench_function(BenchmarkId::new("case", id), |b| {
-                let index = match name {
-                    "session_decoder" => [
-                        "decoder_wav",
-                        "decoder_probe",
-                        "decoder_f32_conversion",
-                        "decoder_throughput",
-                    ]
-                    .iter()
-                    .position(|candidate| candidate == id)
-                    .expect("decoder case"),
-                    "session_abr" => [
-                        "abr_creation",
-                        "abr_decision",
-                        "abr_pure_decision",
-                        "abr_estimator_loop",
-                    ]
-                    .iter()
-                    .position(|candidate| candidate == id)
-                    .expect("ABR case"),
-                    "session_pool" => [
-                        "pool_single_thread",
-                        "pool_multi_thread",
-                        "pool_allocation_rate",
-                        "pool_scalability_1",
-                        "pool_scalability_2",
-                        "pool_scalability_4",
-                        "pool_scalability_8",
-                        "pool_scalability_16",
-                    ]
-                    .iter()
-                    .position(|candidate| candidate == id)
-                    .expect("pool case"),
-                    "session_resampler" => [
-                        "resampler_quality_fast",
-                        "resampler_quality_normal",
-                        "resampler_quality_good",
-                        "resampler_quality_high",
-                        "resampler_passthrough",
-                        "resampler_breakdown_512",
-                        "resampler_breakdown_1024",
-                        "resampler_breakdown_4096",
-                        "resampler_deinterleave",
-                        "resampler_breakdown_2048",
-                    ]
-                    .iter()
-                    .position(|candidate| candidate == id)
-                    .expect("resampler case"),
-                    _ => [
-                        "storage_sequential_4096",
-                        "storage_sequential_16384",
-                        "storage_sequential_65536",
-                        "storage_sequential_262144",
-                        "storage_write_4096",
-                        "storage_write_16384",
-                        "storage_write_65536",
-                        "storage_random_read",
-                        "storage_wait_range",
-                    ]
-                    .iter()
-                    .position(|candidate| candidate == id)
-                    .expect("storage case"),
-                };
-                match name {
-                    "session_decoder" => b.iter(|| prepare_decoder(index).run()),
-                    "session_abr" => b.iter(|| prepare_abr(index).run()),
-                    "session_pool" => b.iter(|| prepare_pool(index).run()),
-                    "session_resampler" => b.iter(|| prepare_resampler(index).run()),
-                    _ => b.iter(|| prepare_storage(index).run()),
-                }
+                criterion_case(name, id, b);
             });
         }
         group.finish();

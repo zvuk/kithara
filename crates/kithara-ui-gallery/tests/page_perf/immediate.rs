@@ -78,7 +78,7 @@ impl Immediate {
         let before = self.ui.draw_pool_stats();
         self.app.tick();
         let bounds = Size::new(WIDTH, HEIGHT);
-        let element = (self.app.reads(|reads| {
+        let element = self.app.reads(|reads| {
             tree::render(
                 &self.ui.root,
                 &self.ui,
@@ -88,39 +88,35 @@ impl Immediate {
                 Clock::default(),
                 None,
             )
-        }));
-        let mut interface = (UserInterface::build(
+        });
+        let mut interface = UserInterface::build(
             element,
             bounds,
             mem::take(&mut self.cache),
             &mut self.renderer,
-        ));
+        );
         let mut messages: Vec<Published> = Vec::new();
         self.scheduled = !self.pending.is_empty();
         let cursor = self.cursor;
-        ({
-            for event in mem::take(&mut self.pending) {
-                let (state, _statuses) = interface.update(
-                    slice::from_ref(&event),
-                    cursor,
-                    &mut self.renderer,
-                    &mut clipboard::Null,
-                    &mut messages,
-                );
-                self.scheduled |= redraw_asked(&state);
-            }
-        });
-        let base = self.theme.base();
-        ({
-            interface.draw(
-                &mut self.renderer,
-                &self.theme,
-                &Style {
-                    text_color: base.text_color,
-                },
+        for event in mem::take(&mut self.pending) {
+            let (state, _statuses) = interface.update(
+                slice::from_ref(&event),
                 cursor,
+                &mut self.renderer,
+                &mut clipboard::Null,
+                &mut messages,
             );
-        });
+            self.scheduled |= redraw_asked(&state);
+        }
+        let base = self.theme.base();
+        interface.draw(
+            &mut self.renderer,
+            &self.theme,
+            &Style {
+                text_color: base.text_color,
+            },
+            cursor,
+        );
         self.cache = interface.into_cache();
         let mut standing = ViewState::default();
         for published in messages {
