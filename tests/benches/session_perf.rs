@@ -6,7 +6,7 @@ use std::{
     thread,
 };
 
-use criterion::{BenchmarkId, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use kithara::{
     abr::{
         AbrController, AbrMode, AbrSettings, AbrState, AbrView, Estimator, ThroughputEstimator,
@@ -507,8 +507,24 @@ fn criterion_case(name: &str, id: &str, b: &mut criterion::Bencher) {
     };
     match name {
         "session_decoder" => {
-            let mut work = prepare_decoder(index);
-            b.iter(|| work.run());
+            b.iter_batched(
+                || match index {
+                    3 => create_wav_decoder(perf_wav()),
+                    _ => create_wav_decoder(audio_wav_44100()),
+                },
+                |mut decoder| {
+                    let mut chunks = 0;
+                    while let Ok(outcome) = decoder.next_chunk() {
+                        let Ok(chunk) = AudioChunk::try_from(outcome) else {
+                            break;
+                        };
+                        std::hint::black_box(chunk);
+                        chunks += 1;
+                    }
+                    assert!(chunks > 0);
+                },
+                BatchSize::SmallInput,
+            );
         }
         "session_abr" => {
             let mut work = prepare_abr(index);

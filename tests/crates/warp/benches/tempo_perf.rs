@@ -2,7 +2,7 @@
 
 use std::{fs::OpenOptions, io::Write, num::NonZeroU32};
 
-use criterion::{BenchmarkId, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use kithara::{
     platform::time::{Duration, Instant},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec, ExponentialApproach},
@@ -103,6 +103,12 @@ impl TempoWork {
             total(&self.service),
             total(&self.render),
         );
+    }
+}
+
+impl Drop for TempoWork {
+    fn drop(&mut self) {
+        self.teardown();
     }
 }
 
@@ -314,9 +320,11 @@ fn criterion_benchmarks(c: &mut Criterion) {
     .enumerate()
     {
         group.bench_function(BenchmarkId::new("case", id), |b| {
-            let mut work = prepare_tempo(index);
-            b.iter(|| run_tempo(&mut work));
-            work.teardown();
+            b.iter_batched(
+                || prepare_tempo(index),
+                |mut work| run_tempo(&mut work),
+                BatchSize::SmallInput,
+            );
         });
     }
     group.finish();
