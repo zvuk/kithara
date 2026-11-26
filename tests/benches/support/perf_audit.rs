@@ -9,9 +9,8 @@ impl NativeWork {
         }
     }
 
-    fn run(mut self) -> Self {
+    fn run(&mut self) {
         (self.action)();
-        self
     }
 }
 
@@ -22,8 +21,9 @@ fn backend(index: usize) -> StretchKind {
 #[metabench::benchmark(AUDIT_STRETCH_PREPARE, "audit_stretch_prepare", "prepare", gungraun_setup = prepare_engine)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_prepare(work: NativeWork) {
+fn native_stretch_prepare(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn prepare_engine(index: usize) -> NativeWork {
@@ -54,8 +54,9 @@ fn prepare_prime(index: usize) -> NativeWork {
 #[metabench::benchmark(AUDIT_STRETCH_PRIME, "audit_stretch", "prime", gungraun_setup = prepare_prime)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_prime(work: NativeWork) {
+fn native_stretch_prime(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn prepare_steady(index: usize) -> NativeWork {
@@ -81,8 +82,9 @@ fn prepare_steady(index: usize) -> NativeWork {
 #[metabench::benchmark(AUDIT_STRETCH_STEADY, "audit_stretch", "steady_process", gungraun_setup = prepare_steady)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_steady(work: NativeWork) {
+fn native_stretch_steady(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn prepare_control(index: usize) -> NativeWork {
@@ -120,8 +122,9 @@ fn prepare_control(index: usize) -> NativeWork {
 #[metabench::benchmark(AUDIT_STRETCH_CONTROL, "audit_stretch", "live_control_change", gungraun_setup = prepare_control)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_control(work: NativeWork) {
+fn native_stretch_control(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn prepare_stretch_process(index: usize) -> NativeWork {
@@ -160,8 +163,9 @@ fn prepare_stretch_process(index: usize) -> NativeWork {
 #[metabench::benchmark(AUDIT_STRETCH_PROCESS, "audit_stretch_process", "process", gungraun_setup = prepare_stretch_process)]
 #[bench::signalsmith_ratio_1_25(0_usize)]
 #[bench::bungee_ratio_1_25(1_usize)]
-fn native_stretch_process(work: NativeWork) {
+fn native_stretch_process(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn prepare_limiter(index: usize) -> NativeWork {
@@ -236,8 +240,9 @@ fn prepare_limiter(index: usize) -> NativeWork {
 #[bench::overloaded_257_tail_7(13_usize)]
 #[bench::quiet_600(14_usize)]
 #[bench::overloaded_600(15_usize)]
-fn native_limiter(work: NativeWork) {
+fn native_limiter(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn prepare_source_window(index: usize) -> NativeWork {
@@ -281,8 +286,9 @@ fn prepare_source_window(index: usize) -> NativeWork {
 #[bench::downsampled_short(3_usize)]
 #[bench::downsampled_chunk(4_usize)]
 #[bench::downsampled_tail(5_usize)]
-fn native_source_window(work: NativeWork) {
+fn native_source_window(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn prepare_gapless() -> NativeWork {
@@ -331,8 +337,9 @@ fn prepare_gapless() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_GAPLESS, "audit_gapless_trim", "decode_mp3_to_eof", gungraun_setup = prepare_gapless)]
-fn native_gapless(work: NativeWork) {
+fn native_gapless(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 struct AnalysisFixture {
@@ -402,8 +409,9 @@ fn prepare_analysis() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_ANALYSIS, "audit_analysis_worker", "decode_waveform_and_beat_to_settled", gungraun_setup = prepare_analysis)]
-fn native_analysis(work: NativeWork) {
+fn native_analysis(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn prepare_analysis_checkpoint() -> NativeWork {
@@ -429,8 +437,9 @@ fn prepare_analysis_checkpoint() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_CHECKPOINT, "audit_analysis_checkpoint", "serialize_full_update", gungraun_setup = prepare_analysis_checkpoint)]
-fn native_checkpoint(work: NativeWork) {
+fn native_checkpoint(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn prepare_quality_switch() -> NativeWork {
@@ -461,8 +470,9 @@ fn prepare_quality_switch() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_QUALITY, "audit_quality_switch", "manual_hls_join", gungraun_setup = prepare_quality_switch)]
-fn native_quality(work: NativeWork) {
+fn native_quality(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
 
 fn warp_transition_action(
@@ -578,6 +588,7 @@ fn prepare_warp_transition() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_WARP, "audit_warp_transition", "mapped_and_replacement", gungraun_setup = prepare_warp_transition)]
-fn native_warp(work: NativeWork) {
+fn native_warp(mut work: NativeWork) -> NativeWork {
     work.run();
+    work
 }
