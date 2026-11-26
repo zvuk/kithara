@@ -28,7 +28,6 @@ kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "ranged"] }
 kithara-resampler = { workspace = true, optional = true, features = ["resample-glide"] }
 kithara-signal = { workspace = true }
-kithara-test-macros = { workspace = true }
 
 bitflags = { workspace = true }
 bon = { workspace = true }

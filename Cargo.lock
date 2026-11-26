@@ -6461,7 +6461,6 @@ dependencies = [
  "kithara-signal",
  "kithara-test-dylib",
  "kithara-test-fixtures",
- "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
