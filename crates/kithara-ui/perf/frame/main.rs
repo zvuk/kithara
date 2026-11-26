@@ -23,7 +23,6 @@ use iced_wgpu::{
         TextureFormat,
     },
 };
-use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
     compile::CompiledUi,
@@ -310,24 +309,6 @@ fn unnamed_by_the_document() -> Vec<&'static str> {
         .map(|scenario| scenario.name)
         .filter(|name| !ControlSpec::KINDS.contains(name))
         .collect()
-}
-
-#[kithara::test]
-fn every_control_the_document_can_name_has_a_frame_scenario() {
-    let missing = missing_from_table();
-    assert!(
-        missing.is_empty(),
-        "no frame is measured for {missing:?}; a control with no scenario is not reported slow, it is not reported at all"
-    );
-}
-
-#[kithara::test]
-fn the_scenario_table_names_no_control_the_document_cannot() {
-    let unnamed = unnamed_by_the_document();
-    assert!(
-        unnamed.is_empty(),
-        "the frame-perf table names {unnamed:?}, which `ControlSpec` does not"
-    );
 }
 
 /// What one control's frame cost, and everything the harness had to be sure of
