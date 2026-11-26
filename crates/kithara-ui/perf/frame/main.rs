@@ -7,8 +7,8 @@ mod scenarios;
 
 use std::{borrow::Cow, rc::Rc, sync::LazyLock};
 
+use criterion::{BenchmarkId, Criterion};
 use futures_lite::future::block_on;
-use hotpath::HotpathGuardBuilder;
 use iced::{
     Pixels, Theme,
     advanced::graphics::{Shell, text::font_system},
@@ -44,83 +44,8 @@ use crate::{
     scenarios::consts,
 };
 
-/// What a frame is asked to answer for. A drag also presses, so the classes are
-/// tested widest-first wherever one has to be chosen.
-#[derive(Clone, Copy)]
-enum Interaction {
-    Drag,
-    Press,
-    /// A press on the leading part of the box rather than the middle of it, for
-    /// a control whose box is mostly a reading and whose one gesture sits at
-    /// one end. Pressing the middle of such a control is a press on the label,
-    /// which correctly answers nothing on either host.
-    PressLeading,
-    DataChange,
-}
-
-/// One neutral step both hosts translate into their own event vocabulary.
-#[derive(Clone, Copy)]
-enum Step {
-    Move(Pt),
-    Press,
-    Release,
-    Data,
-}
-
-impl Interaction {
-    /// Where a gesture acts, as fractions of the control's own laid-out rect. A
-    /// point derived this way is inside the control whatever size its layout gave
-    /// it; a fixed coordinate is inside only the controls big enough to reach it,
-    /// and a control it misses is measured redrawing while claiming to be dragged.
-    const START: (f32, f32) = (0.25, 0.25);
-    const MIDDLE: (f32, f32) = (0.5, 0.5);
-    const END: (f32, f32) = (0.75, 0.75);
-    /// Far enough in to clear the strip's own padding and its icon, and well short
-    /// of where the reading beside the control starts. At this fixture's 240 that
-    /// is x=48, against a scope chip the skin puts at 30 and runs about 50 wide.
-    const LEADING: (f32, f32) = (0.2, 0.5);
-
-    fn steps(self, rect: Rect) -> Vec<Step> {
-        let at = |fraction| Step::Move(inside(rect, fraction));
-        match self {
-            Self::Drag => vec![
-                at(Self::START),
-                Step::Press,
-                at(Self::MIDDLE),
-                at(Self::END),
-                Step::Release,
-            ],
-            Self::Press => vec![at(Self::MIDDLE), Step::Press, Step::Release],
-            Self::PressLeading => vec![at(Self::LEADING), Step::Press, Step::Release],
-            Self::DataChange => vec![Step::Data],
-        }
-    }
-}
-
-/// One point of the rect, named by where in it the gesture wants to be.
-fn inside(rect: Rect, (x, y): (f32, f32)) -> Pt {
-    Pt {
-        x: rect.x + rect.w * x,
-        y: rect.y + rect.h * y,
-    }
-}
-
-fn contains(rect: Rect, at: Pt) -> bool {
-    at.x >= rect.x && at.x <= rect.x + rect.w && at.y >= rect.y && at.y <= rect.y + rect.h
-}
-
-/// One control, mounted alone, and the interaction its frame is driven by.
-///
-/// `name` is the document name of the control, and `control` is the same RON
-/// the paint and gesture censuses mount it from. `interaction` follows the
-/// gesture census: a control that carries a drag is measured dragging, one that
-/// only presses is measured pressing, and the rest are measured redrawing after
-/// their reading moved.
-struct Scenario {
-    control: &'static str,
-    name: &'static str,
-    interaction: Interaction,
-}
+mod types;
+use types::{Interaction, Scenario, Step};
 
 /// One frame's worth of work on one host, from the input applied to the draw
 /// output produced. Nothing here rasterises: the measurement stops at the
@@ -150,18 +75,6 @@ trait FrameHost {
 enum Host {
     Immediate,
     Retained,
-}
-
-impl Host {
-    /// What one unit of this host's frame output is. The two are different
-    /// quantities of different things: comparing them across hosts says
-    /// nothing, and this exists so a report cannot forget that.
-    const fn unit(self) -> &'static str {
-        match self {
-            Self::Immediate => "draw-pool acquisitions",
-            Self::Retained => "scene-encoding bytes",
-        }
-    }
 }
 
 /// The device is boxed because the other variant carries nothing: a wgpu
@@ -320,114 +233,6 @@ struct Reading {
     gestured: bool,
     scheduled: bool,
     receipts: usize,
-    size: usize,
-}
-
-/// Measures one frame per control on each host. It records durations and makes
-/// no claim about them: the comparison this feeds is between the two hosts on
-/// the same machine, and a threshold here would judge the machine.
-/// An unavailable GPU host stays unmeasured: a software fallback would report
-/// Vis/Shader costs without running those passes.
-#[kithara::test]
-#[case("iced", Host::Immediate)]
-#[case("vello", Host::Retained)]
-fn ui_frame_perf(#[case] label: &'static str, #[case] host: Host) {
-    load_fonts();
-    let backend = match Backend::try_from(host) {
-        Ok(backend) => backend,
-        Err(error) => {
-            let notice = format!("{label}: NOT MEASURED, no host to measure it on: {error}");
-            println!("{notice}");
-            eprintln!("{notice}");
-            return;
-        }
-    };
-    let readings = {
-        let _guard = HotpathGuardBuilder::new(label).functions_limit(0).build();
-        measure(&backend)
-    };
-    report(label, host, &readings);
-    audit(label, &readings);
-}
-
-/// Excludes the first frame's mount, layout and shaping-cache setup from frame cost.
-fn measure(backend: &Backend) -> Vec<Reading> {
-    let geometry = backend.geometry();
-    let mut readings = Vec::with_capacity(consts::SCENARIOS.len());
-    for scenario in consts::SCENARIOS {
-        let fixture = Fixture::new(scenario.control);
-        let reads = Rc::new(CensusReads::default());
-        let rect = laid_out_rect(&fixture, &reads, &geometry);
-        let mut driver = driver(backend, &fixture, Rc::clone(&reads));
-        let _warm = driver.frame();
-        let steps = scenario.interaction.steps(rect);
-        let size = hotpath::measure_block!(scenario.name, {
-            for step in &steps {
-                driver.interact(*step);
-            }
-            driver.frame()
-        });
-        readings.push(Reading {
-            rect,
-            size,
-            gestured: matches!(
-                scenario.interaction,
-                Interaction::Drag | Interaction::Press | Interaction::PressLeading
-            ),
-            name: scenario.name,
-            points: steps
-                .iter()
-                .filter_map(|step| match step {
-                    Step::Move(at) => Some(*at),
-                    Step::Press | Step::Release | Step::Data => None,
-                })
-                .collect(),
-            receipts: driver.receipts(),
-            scheduled: driver.scheduled(),
-        });
-    }
-    readings
-}
-
-/// Prints one row per control, then the two totals that are about the host
-/// rather than about a control.
-fn report(label: &str, host: Host, readings: &[Reading]) {
-    for reading in readings {
-        let rect = reading.rect;
-        println!(
-            "{label} {:<15} rect {:7.2} {:7.2} {:7.2} {:7.2}  points {}  scheduled {:<5}  receipts {:<3}  out {}",
-            reading.name,
-            rect.x,
-            rect.y,
-            rect.w,
-            rect.h,
-            reading.points.len(),
-            reading.scheduled,
-            reading.receipts,
-            reading.size,
-        );
-    }
-    let scheduled = readings.iter().filter(|reading| reading.scheduled).count();
-    let silent: Vec<&str> = readings
-        .iter()
-        .filter(|reading| reading.size == 0)
-        .map(|reading| reading.name)
-        .collect();
-    println!(
-        "{label}: {scheduled} of {} frames the host asked for, {} measured",
-        readings.len(),
-        readings.len()
-    );
-    println!(
-        "{label}: {} {} over {} controls, a unit no other host shares",
-        readings.iter().map(|reading| reading.size).sum::<usize>(),
-        host.unit(),
-        readings.len()
-    );
-    println!(
-        "{label}: {} control(s) whose frame produced nothing: {silent:?}",
-        silent.len()
-    );
 }
 
 /// Fails naming every control the gesture did not land on. A pointer that
@@ -446,6 +251,10 @@ fn audit(label: &str, readings: &[Reading]) {
 
 /// Geometry alone cannot prove a gesture landed. A host with neither receipts nor
 /// a scheduled frame measured an idle redraw instead of the declared gesture.
+fn contains(rect: Rect, at: Pt) -> bool {
+    at.x >= rect.x && at.x <= rect.x + rect.w && at.y >= rect.y && at.y <= rect.y + rect.h
+}
+
 fn miss(reading: &Reading) -> Option<String> {
     let rect = reading.rect;
     let viewport = Rect {
@@ -476,3 +285,204 @@ fn miss(reading: &Reading) -> Option<String> {
     (reading.gestured && reading.receipts == 0 && !reading.scheduled)
         .then(|| format!("the host saw nothing at {:?} in {rect:?}", reading.points))
 }
+
+struct FrameWork {
+    action: Box<dyn FnMut() -> Reading>,
+    reading: Option<Reading>,
+}
+
+impl FrameWork {
+    fn run(&mut self) {
+        self.reading = Some((self.action)());
+    }
+
+    fn teardown(&mut self) {
+        audit(
+            "frame",
+            std::slice::from_ref(self.reading.as_ref().expect("frame reading")),
+        );
+    }
+}
+
+fn prepare_frame(index: usize) -> FrameWork {
+    load_fonts();
+    let host = if index < consts::SCENARIOS.len() {
+        Host::Immediate
+    } else {
+        Host::Retained
+    };
+    let scenario = &consts::SCENARIOS[index % consts::SCENARIOS.len()];
+    let label = if matches!(host, Host::Immediate) {
+        "iced"
+    } else {
+        "vello"
+    };
+    let backend = Backend::try_from(host)
+        .unwrap_or_else(|error| panic!("{label}: NOT MEASURED, no host to measure it on: {error}"));
+    // A driver borrows its fixture. Keep the one fixture for this case alive
+    // for the rest of the process, outside the measured frame and allocation window.
+    let fixture = Box::leak(Box::new(Fixture::new(scenario.control)));
+    let reads = Rc::new(CensusReads::default());
+    let rect = laid_out_rect(fixture, &reads, &backend.geometry());
+    let mut driver = driver(&backend, fixture, Rc::clone(&reads));
+    let _warm = driver.frame();
+    let steps = scenario.interaction.steps(rect);
+    let action = Box::new(move || {
+        for step in &steps {
+            driver.interact(*step);
+        }
+        let _frame = driver.frame();
+        Reading {
+            rect,
+            gestured: matches!(
+                scenario.interaction,
+                Interaction::Drag | Interaction::Press | Interaction::PressLeading
+            ),
+            name: scenario.name,
+            points: steps
+                .iter()
+                .filter_map(|step| match step {
+                    Step::Move(at) => Some(*at),
+                    Step::Press | Step::Release | Step::Data => None,
+                })
+                .collect(),
+            receipts: driver.receipts(),
+            scheduled: driver.scheduled(),
+        }
+    });
+    FrameWork {
+        action,
+        reading: None,
+    }
+}
+
+fn teardown_frame(mut work: FrameWork) {
+    work.teardown();
+}
+
+#[metabench::benchmark(FRAME_PERF, "frame", "case", gungraun_setup = prepare_frame, gungraun_teardown = teardown_frame)]
+#[bench::iced_brand(0_usize)]
+#[bench::iced_spacer(1_usize)]
+#[bench::iced_divider(2_usize)]
+#[bench::iced_presetselector(3_usize)]
+#[bench::iced_settingsbutton(4_usize)]
+#[bench::iced_decksummary(5_usize)]
+#[bench::iced_windowdrag(6_usize)]
+#[bench::iced_titlebar(7_usize)]
+#[bench::iced_windowcontrols(8_usize)]
+#[bench::iced_bpm(9_usize)]
+#[bench::iced_time(10_usize)]
+#[bench::iced_scalar(11_usize)]
+#[bench::iced_wave(12_usize)]
+#[bench::iced_vis(13_usize)]
+#[bench::iced_shader(14_usize)]
+#[bench::iced_custom(15_usize)]
+#[bench::iced_table(16_usize)]
+#[bench::iced_tree(17_usize)]
+#[bench::iced_search(18_usize)]
+#[bench::iced_contextbar(19_usize)]
+#[bench::iced_text(20_usize)]
+#[bench::iced_knob(21_usize)]
+#[bench::iced_chip(22_usize)]
+#[bench::iced_navitem(23_usize)]
+#[bench::iced_button(24_usize)]
+#[bench::iced_glyph(25_usize)]
+#[bench::iced_tablarge(26_usize)]
+#[bench::iced_toggle(27_usize)]
+#[bench::iced_checkbox(28_usize)]
+#[bench::iced_segmented(29_usize)]
+#[bench::iced_select(30_usize)]
+#[bench::iced_statusdot(31_usize)]
+#[bench::iced_swatch(32_usize)]
+#[bench::iced_cell(33_usize)]
+#[bench::iced_readout(34_usize)]
+#[bench::iced_meter(35_usize)]
+#[bench::iced_vuvertical(36_usize)]
+#[bench::iced_vustereo(37_usize)]
+#[bench::iced_fader(38_usize)]
+#[bench::iced_crossfader(39_usize)]
+#[bench::iced_portalmap(40_usize)]
+#[bench::iced_range(41_usize)]
+#[bench::iced_sprite(42_usize)]
+#[bench::iced_lottie(43_usize)]
+#[bench::vello_brand(44_usize)]
+#[bench::vello_spacer(45_usize)]
+#[bench::vello_divider(46_usize)]
+#[bench::vello_presetselector(47_usize)]
+#[bench::vello_settingsbutton(48_usize)]
+#[bench::vello_decksummary(49_usize)]
+#[bench::vello_windowdrag(50_usize)]
+#[bench::vello_titlebar(51_usize)]
+#[bench::vello_windowcontrols(52_usize)]
+#[bench::vello_bpm(53_usize)]
+#[bench::vello_time(54_usize)]
+#[bench::vello_scalar(55_usize)]
+#[bench::vello_wave(56_usize)]
+#[bench::vello_vis(57_usize)]
+#[bench::vello_shader(58_usize)]
+#[bench::vello_custom(59_usize)]
+#[bench::vello_table(60_usize)]
+#[bench::vello_tree(61_usize)]
+#[bench::vello_search(62_usize)]
+#[bench::vello_contextbar(63_usize)]
+#[bench::vello_text(64_usize)]
+#[bench::vello_knob(65_usize)]
+#[bench::vello_chip(66_usize)]
+#[bench::vello_navitem(67_usize)]
+#[bench::vello_button(68_usize)]
+#[bench::vello_glyph(69_usize)]
+#[bench::vello_tablarge(70_usize)]
+#[bench::vello_toggle(71_usize)]
+#[bench::vello_checkbox(72_usize)]
+#[bench::vello_segmented(73_usize)]
+#[bench::vello_select(74_usize)]
+#[bench::vello_statusdot(75_usize)]
+#[bench::vello_swatch(76_usize)]
+#[bench::vello_cell(77_usize)]
+#[bench::vello_readout(78_usize)]
+#[bench::vello_meter(79_usize)]
+#[bench::vello_vuvertical(80_usize)]
+#[bench::vello_vustereo(81_usize)]
+#[bench::vello_fader(82_usize)]
+#[bench::vello_crossfader(83_usize)]
+#[bench::vello_portalmap(84_usize)]
+#[bench::vello_range(85_usize)]
+#[bench::vello_sprite(86_usize)]
+#[bench::vello_lottie(87_usize)]
+fn native_frame(mut work: FrameWork) -> FrameWork {
+    work.run();
+    work
+}
+
+fn criterion_benchmarks(c: &mut Criterion) {
+    assert!(missing_from_table().is_empty());
+    assert!(unnamed_by_the_document().is_empty());
+    let mut group = c.benchmark_group("frame");
+    group.sample_size(10);
+    for index in 0..(2 * consts::SCENARIOS.len()) {
+        let host = if index < consts::SCENARIOS.len() {
+            "iced"
+        } else {
+            "vello"
+        };
+        let scenario = &consts::SCENARIOS[index % consts::SCENARIOS.len()];
+        group.bench_function(
+            BenchmarkId::new(
+                "case",
+                format!("{host}_{}", scenario.name.to_ascii_lowercase()),
+            ),
+            |b| {
+                let mut work = prepare_frame(index);
+                b.iter(|| work.run());
+                work.teardown();
+            },
+        );
+    }
+    group.finish();
+}
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [FRAME_PERF],
+    allocator = std::alloc::System,
+);

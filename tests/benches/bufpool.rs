@@ -52,9 +52,15 @@ fn run_threaded_get_put(pools: &Pools, threads: usize, iterations: usize) -> usi
 
 fn warm_pools() -> Pools {
     let pools = benchmark_pools();
-    for _ in 0..8 {
-        get_u8(&pools, 4 * 1024);
-    }
+    let held: Vec<_> = (0..8)
+        .map(|_| {
+            pools
+                .get_with_len::<u8>(4 * 1024)
+                .expect("warm worker buffer")
+        })
+        .collect();
+    std::hint::black_box(held.len());
+    drop(held);
     get_u8(&pools, 64 * 1024);
     let buffer = pools
         .get_with_len::<f32>(16 * 1024)
@@ -69,10 +75,9 @@ struct MultiWork {
 }
 
 fn multi_prepare() -> MultiWork {
-    MultiWork {
-        pools: warm_pools(),
-        joined: 0,
-    }
+    let pools = warm_pools();
+    run_threaded_get_put(&pools, 8, 1);
+    MultiWork { pools, joined: 0 }
 }
 
 fn get_u8(pools: &Pools, bytes: usize) {
