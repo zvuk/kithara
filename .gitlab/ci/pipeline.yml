@@ -1,6 +1,7 @@
 include:
   - local: .gitlab/ci/common.yml
   - local: .gitlab/ci/apple.yml
+  - local: .gitlab/ci/linux.yml
   - local: .gitlab/ci/host.yml
   - local: .gitlab/ci/android.yml
   - local: .gitlab/ci/windows.yml
@@ -19,6 +20,7 @@ workflow:
 
 stages:
   - apple
+  - linux
   - android
   - windows
   - verdict

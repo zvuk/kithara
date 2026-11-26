@@ -1,0 +1,29 @@
+# Catalog lanes on the Linux pool. Each job runs its lane the way GitHub's
+# `lane.yml` does, so the two providers differ only in which of them a lane's
+# kinds enable.
+.linux-lane:
+  extends: .linux-pool-job
+  stage: linux
+  interruptible: true
+  needs: []
+  rules:
+    - !reference [.linux-pool, rules]
+    - !reference [.rules-verify-and-branch, rules]
+
+linux:lint:
+  extends: .linux-lane
+  timeout: 60 minutes
+  script:
+    - just ci lane linux-lint --kind "$KITHARA_PIPELINE_KIND"
+
+linux:tooling:
+  extends: .linux-lane
+  timeout: 180 minutes
+  script:
+    - just ci lane linux-tooling --kind "$KITHARA_PIPELINE_KIND"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - .ci-artifacts/hang/

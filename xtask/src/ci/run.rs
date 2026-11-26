@@ -1200,12 +1200,14 @@ mod tests {
         for entry in fs::read_dir(&directory).expect("pipeline directory is readable") {
             let path = entry.expect("pipeline entry is readable").path();
             let text = fs::read_to_string(&path).expect("pipeline file is UTF-8");
-            lanes.extend(
-                text.split("ci run ")
-                    .skip(1)
-                    .filter_map(|rest| rest.split_whitespace().next())
-                    .map(str::to_string),
-            );
+            for invocation in ["ci run ", "ci lane "] {
+                lanes.extend(
+                    text.split(invocation)
+                        .skip(1)
+                        .filter_map(|rest| rest.split_whitespace().next())
+                        .map(str::to_string),
+                );
+            }
         }
         lanes
     }

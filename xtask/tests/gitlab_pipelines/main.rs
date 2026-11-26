@@ -20,6 +20,10 @@ const MERGE_REQUEST_KIND: &str = "merge-request";
 const JUST_LANE: &str = "just ci run ";
 /// How the Windows guest, which carries no `just`, runs one.
 const CARGO_LANE: &str = "cargo run --locked -p xtask -- ci run ";
+/// How a Linux pool job runs one: the command GitHub's `lane.yml` runs.
+const POOL_LANE: &str = "just ci lane ";
+/// The tag every Linux pool worker registers under.
+const POOL_TAG: &str = "kithara-cloud-linux";
 const VERDICT_REPORT_DIR: &str = ".ci-artifacts/junit/";
 
 struct GitlabConfig {
@@ -55,11 +59,11 @@ impl GitlabConfig {
     }
 
     /// Every job that runs a declared lane, as (job name, lane name). The
-    /// Windows host carries no `just`, so it reaches xtask through cargo;
-    /// both spellings name the same lane, and the lane name is the first
-    /// word after the subcommand.
+    /// Windows host carries no `just`, so it reaches xtask through cargo, and
+    /// the Linux pool runs the command GitHub runs; every spelling names the
+    /// same lane, and the lane name is the first word after the subcommand.
     fn lane_jobs(&self) -> Vec<(String, String)> {
-        const INVOCATIONS: [&str; 2] = [JUST_LANE, CARGO_LANE];
+        const INVOCATIONS: [&str; 3] = [JUST_LANE, CARGO_LANE, POOL_LANE];
 
         let mut jobs = Vec::new();
         for document in &self.documents {
@@ -900,6 +904,7 @@ fn each_independent_store_has_a_default_branch_source_publisher() {
         assert_eq!(lanes[name]["os"].as_str(), Some(os));
     }
     assert!(gitlab.admitted_kinds("apple:lint").contains("main"));
+    assert!(gitlab.admitted_kinds("linux:lint").contains("main"));
     assert!(
         lanes["linux-lint"]["kinds_github"]
             .as_array()
@@ -1550,23 +1555,67 @@ fn a_provisioning_run_on_the_default_branch_reaches_the_mac_roll_out_alone() {
     );
 }
 
+/// Linux work runs on the native pool, never on a guest of the Mac host. A
+/// job runs a lane the way GitHub does exactly when it is on the pool, since
+/// only the pool's workers carry their cache roots in their own environment,
+/// and the pool switch comes first in its rules so it removes every one.
 #[test]
-fn mac_pipeline_requires_no_linux_guest() {
+fn linux_lanes_run_on_the_native_pool_behind_its_switch() {
     let config = GitlabConfig::load(&workspace_root());
-    for job in config.job_names() {
-        assert!(
-            !job.starts_with("linux:") && !job.starts_with("web:"),
-            "{job} requires the retired guest"
-        );
-    }
-    assert!(!config.job_names().any(|job| job == ".linux-job"));
     assert!(
-        config.definition(".deps-job")["extends"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .any(|base| base.as_str() == Some(".macos-job"))
+        !config.job_names().any(|job| job == ".linux-job"),
+        "the retired guest's template is back"
     );
+    let switch = config.definition(".linux-pool")["rules"]
+        .as_sequence()
+        .expect("the pool switch is a rule list");
+    assert_eq!(switch.len(), 1, "the pool switch only refuses");
+    assert_exact_rule(
+        switch[0].as_mapping().expect("the pool switch is a rule"),
+        "$KITHARA_LINUX_POOL == \"off\"",
+        Some("never"),
+    );
+
+    let pool = Value::Sequence(vec![Value::String(POOL_TAG.to_owned())]);
+    let mut checked = 0;
+    for (job, _) in config.lane_jobs() {
+        let pooled = config.effective_value(&job, "tags") == Some(pool.clone());
+        let native = config.definition(&job)["script"]
+            .as_sequence()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .any(|line| line.trim().starts_with(POOL_LANE));
+        assert_eq!(
+            pooled, native,
+            "`{job}` must run a lane through `{POOL_LANE}` exactly when it is on the pool"
+        );
+        if !pooled {
+            continue;
+        }
+        assert_eq!(
+            config.effective_value(&job, "image"),
+            Some(Value::String("kithara-ci:linux-latest".to_owned())),
+            "`{job}` runs outside the CI image"
+        );
+        let owner = config
+            .rules_owner(&job)
+            .unwrap_or_else(|| panic!("`{job}` has no effective rules"));
+        let first = config.definition(&owner)["rules"]
+            .as_sequence()
+            .and_then(|rules| rules.first())
+            .unwrap_or_else(|| panic!("`{owner}` has no rules"));
+        let Value::Tagged(reference) = first else {
+            panic!("`{job}` does not start with the pool switch");
+        };
+        assert_eq!(
+            reference.value,
+            serde_yaml_ng::from_str::<Value>("[.linux-pool, rules]").unwrap(),
+            "`{job}` does not start with the pool switch"
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "no GitLab job runs on the Linux pool");
 }
 
 #[test]
@@ -1603,12 +1652,10 @@ fn native_dependency_audits_retain_the_linux_fleet_and_host_cache() {
 #[test]
 fn host_independent_apple_jobs_wait_for_full_kinds() {
     let config = GitlabConfig::load(&workspace_root());
-    for job in ["deps:deny", "deps:publish"] {
-        assert_eq!(
-            config.admitted_kinds(job),
-            BTreeSet::from(["weekly".to_owned()])
-        );
-    }
+    assert_eq!(
+        config.admitted_kinds("deps:publish"),
+        BTreeSet::from(["weekly".to_owned()])
+    );
     assert_eq!(
         config.admitted_kinds("apple:test-utils"),
         BTreeSet::from(["platforms", "main", "nightly"].map(str::to_owned))

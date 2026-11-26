@@ -977,8 +977,7 @@ mod tests {
         let root = crate::testing::workspace::root();
         let ext = KitharaExt::load(&root)?;
         for (fleet, kind) in [
-            (Fleet::Github, PipelineKind::Branch),
-            (Fleet::Github, PipelineKind::MergeRequest),
+            (Fleet::Gitlab, PipelineKind::Branch),
             (Fleet::Gitlab, PipelineKind::Quarantine),
         ] {
             for (changed, expected) in [
@@ -1015,7 +1014,7 @@ mod tests {
         }
 
         for (fleet, kind) in [
-            (Fleet::Github, PipelineKind::Main),
+            (Fleet::Gitlab, PipelineKind::Main),
             (Fleet::Gitlab, PipelineKind::Weekly),
         ] {
             let mut args = args("gate", kind, &[]);
@@ -1041,8 +1040,7 @@ mod tests {
 
         let ext = KitharaExt::load(&root)?;
         for (fleet, kind) in [
-            (Fleet::Github, PipelineKind::Branch),
-            (Fleet::Github, PipelineKind::MergeRequest),
+            (Fleet::Gitlab, PipelineKind::Branch),
             (Fleet::Gitlab, PipelineKind::Quarantine),
         ] {
             let mut args = args("gate", kind, &[]);

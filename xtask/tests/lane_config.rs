@@ -599,7 +599,8 @@ fn the_product_suite_lanes_differ_only_in_their_toggles_and_run_one_command_on_e
 /// The suites `just test` does not carry run under their own configuration,
 /// each in a lane of its own that names it alone: whole on a ready pull
 /// request and the default branch, and over the draft scope on a branch push,
-/// which the branch kind alone asks for.
+/// which the branch kind alone asks for. Either provider may be the one that
+/// runs them.
 #[test]
 fn every_own_configuration_suite_is_a_lane_of_every_reviewed_kind() {
     let config = xtask_config();
@@ -638,7 +639,8 @@ fn every_own_configuration_suite_is_a_lane_of_every_reviewed_kind() {
                 "lane `{name}` runs `{suite}` differently on some kind"
             );
         }
-        let kinds = github_membership(lane);
+        let mut kinds = github_membership(lane);
+        kinds.extend(lane.get("kinds").map_or_else(Vec::new, strings));
         for kind in ["branch", "merge-request", "main"] {
             assert!(
                 kinds.contains(&kind),

@@ -1566,6 +1566,11 @@ pr_review_line_limit = 5000
 
 # Lanes that are nothing but the work they ask the executor for. A lane needs a
 # function only when a parameter cannot say what it does.
+#
+# `kinds` places a lane on GitLab and `kinds_github` on GitHub. The dependency
+# audits, the tooling lane and the lint gate run on GitLab's Linux pool, and
+# the bridge shows their results on the pull request; an empty GitHub list
+# turns the GitHub copy off, and restoring its kinds turns it back on.
 [ext.ci.lanes.deps-deny]
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "host"
@@ -1583,8 +1588,17 @@ steps = [
   ], label = "licence and source gate" },
 ]
 role = "gate"
-kinds = ["weekly"]
-kinds_github = ["main", "branch", "merge-request"]
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+  "weekly",
+]
+kinds_github = []
 timeout_minutes = 30
 
 [ext.ci.lanes.deps-advisories]
@@ -1602,8 +1616,8 @@ steps = [
   ], label = "RustSec advisory gate" },
 ]
 role = "gate"
-kinds = ["weekly", "quarantine"]
-kinds_github = ["main", "branch", "merge-request"]
+kinds = ["branch", "quarantine", "main", "weekly"]
+kinds_github = []
 path_globs = ["Cargo.lock", "**/Cargo.toml", "deny.toml", ".cargo/config.toml"]
 timeout_minutes = 30
 
@@ -1616,8 +1630,17 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "machete"], label = "unused manifest entries" }]
 role = "gate"
-kinds = ["weekly"]
-kinds_github = ["main", "branch", "merge-request"]
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+  "weekly",
+]
+kinds_github = []
 timeout_minutes = 30
 
 [ext.ci.lanes.crates-publish]
@@ -2357,7 +2380,7 @@ kinds = [
   "platforms",
   "release",
 ]
-kinds_github = ["main", "nightly", "branch", "merge-request"]
+kinds_github = []
 timeout_minutes = 180
 
 [ext.ci.lanes.linux-harness]
@@ -2511,12 +2534,11 @@ kinds = []
 kinds_github = ["nightly"]
 timeout_minutes = 90
 
-# GitLab already runs its own equivalents of these six under other names; the
-# GitHub fleet's own gate has no such lane yet, so each is reachable only by
-# name until a kind schedules it.
 # This lane records the dependency source layer the lanes of its scope
 # restore: on the default branch it publishes into its own scope's bucket.
-# Sources are platform-independent, so one object serves both fleets.
+# Sources are platform-independent, so one object serves every lane of a
+# store. Reviews run it on GitLab's Linux pool; GitHub keeps the default-branch
+# run because it is the only publisher for the GitHub fleet's store.
 [ext.ci.lanes.linux-lint]
 semantics = { kind = "validation", acceptance = "native-exit" }
 cache_group = "linux"
@@ -2528,7 +2550,16 @@ program = "just"
 publishes_sources = true
 steps = [{ args = ["lint", "full"], label = "workspace lint gate" }]
 role = "gate"
-kinds_github = ["main", "branch", "merge-request"]
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+kinds_github = ["main"]
 timeout_minutes = 60
 
 [ext.ci.lanes.linux-arch]
@@ -3158,6 +3189,9 @@ kinds = [
 timeout_minutes = 60
 
 [ext.ci.lanes.apple-test-utils]
+semantics = { kind = "validation", acceptance = "native-exit", capabilities = [
+  "apple-sdk",
+] }
 cache_group = "macos"
 label = "Apple"
 os = "macos"
@@ -4132,7 +4166,7 @@ timeout_minutes = 180
 ".gitlab/ci/android.yml::android:test" = ["android-test"]
 ".gitlab/ci/apple.yml::apple:ios" = ["apple-ios"]
 ".gitlab/ci/apple.yml::apple:ios-test" = ["apple-ios-test"]
-".gitlab/ci/apple.yml::apple:lint" = ["apple-lint", "linux-tooling"]
+".gitlab/ci/apple.yml::apple:lint" = ["apple-lint"]
 ".gitlab/ci/apple.yml::apple:msrv" = ["apple-msrv"]
 ".gitlab/ci/apple.yml::apple:net-units" = ["apple-net-units"]
 ".gitlab/ci/apple.yml::apple:pr-tests" = ["ci-pr-tests"]
@@ -4140,6 +4174,7 @@ timeout_minutes = 180
 ".gitlab/ci/apple.yml::apple:swift-test" = ["apple-swift-test"]
 ".gitlab/ci/apple.yml::apple:test" = ["apple-test"]
 ".gitlab/ci/apple.yml::apple:test-flash-off" = ["apple-test-flash-off"]
+".gitlab/ci/apple.yml::apple:test-utils" = ["apple-test-utils"]
 ".gitlab/ci/apple.yml::apple:xcframework" = ["apple-xcframework"]
 ".gitlab/ci/deep.yml::deep:bench" = ["deep-bench"]
 ".gitlab/ci/deep.yml::deep:perf" = ["deep-perf"]
@@ -4152,6 +4187,8 @@ timeout_minutes = 180
 ".gitlab/ci/deep.yml::deps:shear" = ["deps-shear"]
 ".gitlab/ci/deep.yml::deps:unused" = ["deps-unused"]
 ".gitlab/ci/host.yml::host:provision" = ["host-provision"]
+".gitlab/ci/linux.yml::linux:lint" = ["linux-lint"]
+".gitlab/ci/linux.yml::linux:tooling" = ["linux-tooling"]
 ".gitlab/ci/release.yml::release:android" = ["release-android"]
 ".gitlab/ci/release.yml::release:app" = ["release-app"]
 ".gitlab/ci/release.yml::release:docs" = ["release-docs"]
