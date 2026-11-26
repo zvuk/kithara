@@ -17,6 +17,7 @@ use kithara_ui::{
     view::ViewState,
 };
 use kithara_ui_gallery::{demo, fixture, sections};
+use pages::{Page, Program};
 
 use crate::{
     app::PageApp,
@@ -88,163 +89,6 @@ impl Run {
             Self::Wheels(count) => count,
         }
     }
-}
-
-/// One page, the program that drives it, and everything the harness has to know
-/// before its numbers mean anything.
-struct Page {
-    /// The hotpath guard each host opens for this page. Stage labels inside are
-    /// the host's, so the guard name is what makes a line `host.page.stage`.
-    name: &'static str,
-    /// The one reading this page moves on its own, if it has one. A run that
-    /// claims to measure an animating page has to show that it animated.
-    moving: Option<&'static str>,
-    /// The document this page is the harness's own, when it is not one of the
-    /// pages the gallery's screen offers.
-    own: Option<&'static str>,
-    /// Which demo state the page's tick advances. The gallery's reads move the
-    /// stress waveforms only on the stress tab and the visualiser only on the
-    /// vis one, so a page measured under the wrong tab is a still picture.
-    tab: sections::Page,
-    program: Program,
-    /// Where a wheel is delivered, in logical page points. A wheel outside the
-    /// viewport measures a page that was never scrolled.
-    pointer_at: Pt,
-    /// Whether this page also runs a fenced variant, which serialises the queue
-    /// and whose totals may never be added to an unfenced frame total.
-    fenced: bool,
-    frames: usize,
-}
-
-impl Page {
-    /// The document this page is read from: the gallery's one screen, unless
-    /// the harness wrote a page of its own.
-    fn document(&self) -> &'static str {
-        self.own.unwrap_or_else(sections::entry)
-    }
-
-    /// Turns a mounted screen to this page. A page the harness wrote is the
-    /// whole document, so there is nothing to turn.
-    fn open(&self, ui: &mut Ui<'_, PageApp>) {
-        if self.own.is_some() {
-            return;
-        }
-        ui.stand(sections::PAGE, self.tab).unwrap_or_else(|error| {
-            panic!("the page-perf fixture must open {}: {error}", self.name)
-        });
-    }
-
-    /// The screen's own state standing at this page, which is how the one
-    /// screen the gallery ships is opened at the page under measurement.
-    fn standing(&self) -> ViewState {
-        let mut view = ViewState::default();
-        if self.own.is_none() {
-            view.stand(sections::PAGE, self.tab);
-        }
-        view
-    }
-}
-
-/// One frame's worth of work on one host, from the input applied to the pixels
-/// produced. Both hosts rasterise: stopping at the recorded commands would
-/// report times for the visualiser passes without running them.
-trait PageHost {
-    /// What [`PageHost::picture`] is a fingerprint of, in one word, for the
-    /// lines that report it. A still scene on a page whose visualiser moves in
-    /// a pass that never enters one is not a still page, and a line that said
-    /// "picture" for both hosts would be claiming it is.
-    fn drawn_as(&self) -> &'static str;
-
-    /// The same, with the queue drained inside each pass. A fenced run
-    /// serialises the GPU into the frame it belongs to; it is its own scenario
-    /// and its totals may never be added to an unfenced total.
-    fn fenced_frame(&mut self) -> Census;
-
-    /// Produces and rasterises one frame.
-    fn frame(&mut self) -> Census;
-
-    /// Moves the pointer along the rail and reports where it landed, so the
-    /// caller can turn it around at the ends rather than measure a clamp.
-    fn move_by(&mut self, dx: f32) -> f32;
-
-    /// A fingerprint of the last frame, taken at the last artefact this host
-    /// owns. Two runs of one page that fingerprint alike drew the same picture,
-    /// so this is what "the page moved" is read from.
-    ///
-    /// It is not the pixels on both hosts, and the reason is measured: the
-    /// retained host hands Vello a scene, and one unchanged scene rasterises to
-    /// as many as six different pixels from one call to the next. Fingerprinting
-    /// its pixels reports the rasteriser's own noise as the page moving — which
-    /// makes the control run flap and makes the wheel and drag assertions pass
-    /// whether or not anything scrolled.
-    fn picture(&mut self) -> u64;
-
-    /// The pixels of the last frame this host rasterised.
-    fn pixels(&mut self) -> Vec<u8>;
-
-    /// Puts the pointer where the wheel will be delivered, once, before the
-    /// warm-up. A wheel is dispatched at wherever the host last saw the
-    /// pointer, so a host never told scrolls the wrong thing, or nothing.
-    fn place_pointer(&mut self);
-
-    /// Puts the button down where the pointer is, for the whole run. A fader
-    /// only tracks the pointer while it is held, so a drag measured without
-    /// this measures a page that ignored every move.
-    fn press(&mut self);
-
-    /// A fingerprint of the page's own moving reading, if the page named one.
-    fn reading(&self, endpoint: Option<&str>) -> Option<u64>;
-
-    /// Lets the button go, once, after the last measured frame.
-    fn release(&mut self);
-
-    /// Delivers one wheel detent at the page's pointer point.
-    fn wheel(&mut self, lines: f32);
-}
-
-fn theme(skin: &Skin) -> Theme {
-    let palette = &skin.palette;
-    Theme::custom(
-        "Kithara".to_owned(),
-        Palette {
-            background: palette.bg.into(),
-            text: palette.text.into(),
-            primary: palette.accent.into(),
-            success: palette.success.into(),
-            danger: palette.danger.into(),
-            warning: palette.warning.into(),
-        },
-    )
-}
-
-fn load_fonts() {
-    static LOADED: LazyLock<()> = LazyLock::new(|| {
-        let mut fonts = font_system()
-            .write()
-            .expect("iced font system lock must not be poisoned");
-        for bytes in FONT_BYTES {
-            fonts.load_font(Cow::Borrowed(bytes));
-        }
-    });
-    LazyLock::force(&LOADED);
-}
-
-/// One run's result: the numbers, and every fact needed to say whether they are
-/// about the thing the run claims to measure.
-struct Outcome<'run> {
-    page: &'run Page,
-    /// Which artefact those two were taken from, for the lines that report them.
-    drawn_as: &'static str,
-    expected: Natives,
-    run: Run,
-    tally: Tally,
-    /// The page's own moving reading, at the same two moments.
-    reading: [Option<u64>; 2],
-    /// The page as its host drew it, before the first measured frame and after
-    /// the last.
-    picture: [u64; 2],
-    /// Whether the last frame is more than one flat colour.
-    painted: bool,
 }
 
 impl TryFrom<Host> for Gpu {
@@ -610,13 +454,18 @@ impl<'run> GalleryWork<'run> {
 }
 
 thread_local! {
-    static GPUS: OnceCell<Box<Gpu>> = OnceCell::new();
+    static ICED_GPUS: OnceCell<Box<Gpu>> = OnceCell::new();
+    static VELLO_GPUS: OnceCell<Box<Gpu>> = OnceCell::new();
     static FIXTURES: std::collections::BTreeMap<usize, Box<Fixture>> =
         std::collections::BTreeMap::new();
 }
 
 fn shared_gpu(host: Host) -> &'static mut Gpu {
-    GPUS.with(|gpu| {
+    let cell = match host {
+        Host::Immediate => &ICED_GPUS,
+        Host::Retained => &VELLO_GPUS,
+    };
+    cell.with(|gpu| {
         gpu.get_or_init(|| {
             Box::new(
                 Gpu::try_from(host)

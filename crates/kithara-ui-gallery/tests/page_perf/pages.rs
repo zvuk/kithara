@@ -6,9 +6,44 @@ use kithara_ui::{
     draw::Pt,
     registry::EndpointRegistry,
     source::{MemResolver, OverlayResolver, UiConfig},
+    view::ViewState,
 };
 
-use crate::{Page, Program, demo, fixture, sections};
+use crate::{demo, fixture, sections};
+
+pub(crate) struct Page {
+    pub(crate) name: &'static str,
+    pub(crate) own: Option<&'static str>,
+    pub(crate) tab: sections::Page,
+    pub(crate) frames: usize,
+    pub(crate) program: Program,
+    pub(crate) moving: Option<&'static str>,
+    pub(crate) pointer_at: Pt,
+    pub(crate) fenced: bool,
+}
+
+impl Page {
+    pub(crate) fn document(&self) -> &'static str {
+        self.own.unwrap_or_else(sections::entry)
+    }
+
+    pub(crate) fn standing(&self) -> ViewState {
+        let mut view = ViewState::default();
+        if self.own.is_none() {
+            view.stand(sections::PAGE, self.tab);
+        }
+        view
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Program {
+    Idle,
+    Buckets(&'static [u16]),
+    Tick,
+    Wheels(&'static [usize]),
+    Drag(&'static [usize]),
+}
 
 /// The constants every host and page of this harness share.
 pub(crate) mod consts {

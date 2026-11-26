@@ -1,6 +1,9 @@
 use kithara_test_utils::kithara;
-use kithara_ui::draw::Pt;
+
+#[path = "page_perf/pages.rs"]
+mod pages;
 use kithara_ui_gallery::{demo, fixture, sections};
+use pages::{Fixture, Program, consts};
 
 fn use_program(program: Program) {
     match program {

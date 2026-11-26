@@ -288,7 +288,7 @@ fn miss(reading: &Reading) -> Option<String> {
 
 struct FrameWork {
     action: Box<dyn FnMut()>,
-    driver: Box<dyn FrameHost>,
+    driver: Rc<std::cell::RefCell<Box<dyn FrameHost>>>,
     rect: Rect,
     name: &'static str,
     steps: Vec<Step>,
@@ -313,7 +313,7 @@ impl FrameWork {
                     Step::Press | Step::Release | Step::Data => None,
                 })
                 .collect(),
-            receipts: self.driver.receipts(),
+            receipts: self.driver.borrow().receipts(),
             scheduled: self.driver.scheduled(),
         };
         audit("frame", std::slice::from_ref(&reading));
@@ -321,13 +321,18 @@ impl FrameWork {
 }
 
 thread_local! {
-    static BACKENDS: OnceCell<Box<Backend>> = OnceCell::new();
+    static ICED_BACKEND: OnceCell<Box<Backend>> = OnceCell::new();
+    static VELLO_BACKEND: OnceCell<Box<Backend>> = OnceCell::new();
     static FIXTURES: std::collections::BTreeMap<usize, Box<Fixture>> =
         std::collections::BTreeMap::new();
 }
 
 fn shared_backend(host: Host) -> &'static Backend {
-    BACKENDS.with(|backend| {
+    let cell = match host {
+        Host::Immediate => &ICED_BACKEND,
+        Host::Retained => &VELLO_BACKEND,
+    };
+    cell.with(|backend| {
         backend.get_or_init(|| {
             Box::new(
                 Backend::try_from(host)
@@ -374,7 +379,7 @@ fn prepare_frame(index: usize) -> FrameWork {
     });
     FrameWork {
         action,
-        driver,
+        driver: Rc::new(std::cell::RefCell::new(driver)),
         rect,
         name: scenario.name,
         steps,
