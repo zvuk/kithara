@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use criterion::{BatchSize, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use kithara::{
     effects::filter::{FilterEffect, FilterKnob, FilterSettings},
     play::{CurveShape, DeckMixSettingsChange, DeckParameter, DeckProgram, ParameterKnot},
@@ -10,7 +10,7 @@ use kithara_command::When;
 use kithara_integration_tests::offline::OfflinePlayer;
 use num_traits::ToPrimitive;
 
-const PRELUDE: usize = 529;
+pub(crate) const PRELUDE: usize = 529;
 const FILTER_WARM: usize = 64;
 
 const START: f64 = -0.2;
@@ -28,7 +28,7 @@ fn at(frame: u64) -> When<SessionFrame> {
 
 /// Centers the knob, then turns it to the program's start and lets the
 /// glide settle, so every iteration starts from the same filter state.
-async fn prepare(harness: &OfflinePlayer) {
+pub(crate) async fn prepare(harness: &OfflinePlayer) {
     harness
         .with_queue(|queue| {
             queue.mix(
@@ -52,7 +52,7 @@ async fn prepare(harness: &OfflinePlayer) {
     assert_eq!(harness.metrics().underruns(), 0);
 }
 
-async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
+pub(crate) async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
     let start = harness.host().position() + u64::try_from(PRELUDE).expect("prelude");
     let end = start + u64::try_from(frames).expect("curve length");
     let program = DeckProgram::new(
@@ -88,7 +88,7 @@ fn position(frame: usize, frames: usize, shape: CurveShape) -> f64 {
     values[0]
 }
 
-async fn oracle(
+pub(crate) async fn oracle(
     harness: &OfflinePlayer,
     shape: CurveShape,
     frames: usize,
@@ -131,33 +131,36 @@ pub(super) fn bench(c: &mut Criterion) {
         ] {
             for frames in [13, 256] {
                 let (expected, target) = rt.block_on(oracle(&harness, shape, frames, 0));
-                group.bench_function(format!("render_{name}/{frames}"), |b| {
-                    let mut last = Vec::new();
-                    b.iter_batched(
-                        || {
-                            rt.block_on(async {
-                                prepare(&harness).await;
-                                submit(&harness, shape, frames).await;
-                                let _ = harness.render(PRELUDE).await;
-                            });
-                        },
-                        |()| {
-                            last = rt.block_on(harness.render(frames));
-                            black_box(&last);
-                        },
-                        BatchSize::PerIteration,
-                    );
-                    assert_eq!(last, expected);
-                    let snapshot = harness.deck_snapshot().filter;
-                    assert_eq!(snapshot.knob().to_bits(), target.to_bits());
-                    assert!(snapshot.program().is_some());
-                    assert_eq!(harness.metrics().underruns(), 0);
-                });
+                group.bench_function(
+                    BenchmarkId::new("case", format!("render_{name}_{frames}")),
+                    |b| {
+                        let mut last = Vec::new();
+                        b.iter_batched(
+                            || {
+                                rt.block_on(async {
+                                    prepare(&harness).await;
+                                    submit(&harness, shape, frames).await;
+                                    let _ = harness.render(PRELUDE).await;
+                                });
+                            },
+                            |()| {
+                                last = rt.block_on(harness.render(frames));
+                                black_box(&last);
+                            },
+                            BatchSize::PerIteration,
+                        );
+                        assert_eq!(last, expected);
+                        let snapshot = harness.deck_snapshot().filter;
+                        assert_eq!(snapshot.knob().to_bits(), target.to_bits());
+                        assert!(snapshot.program().is_some());
+                        assert_eq!(harness.metrics().underruns(), 0);
+                    },
+                );
             }
         }
         let shape = CurveShape::cubic(0.0, 1.0).expect("S shape");
         let (expected, target) = rt.block_on(oracle(&harness, shape, 128, PRELUDE));
-        group.bench_function("public_host_cubic/1024", |b| {
+        group.bench_function(BenchmarkId::new("case", "public_host_cubic_1024"), |b| {
             let mut last = Vec::new();
             b.iter_batched(
                 || rt.block_on(prepare(&harness)),
