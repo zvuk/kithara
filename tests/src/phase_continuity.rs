@@ -8,7 +8,7 @@ use kithara::{
     events::EventBus,
     platform::{
         thread::paced_backoff,
-        time::{Duration, sleep},
+        time::{Duration, Instant, sleep},
     },
     signal::SourceSpan,
     stream::{Stream, StreamType},
@@ -494,6 +494,7 @@ where
     let mut buf = vec![0.0_f32; want_samples];
     let mut anchor: Option<(f64, f64)> = None;
     let mut drifts: Vec<PhaseDrift> = Vec::new();
+    let mut next_pace;
 
     for (i, (payload, at_frac)) in scenario.iter().enumerate() {
         let seek_frame = frame_at(*at_frac);
@@ -508,6 +509,7 @@ where
         let stop_frame = scenario
             .get(i + 1)
             .map_or(scan_end, |(_, next_frac)| frame_at(*next_frac));
+        next_pace = pace.map(|period| (Instant::now(), period));
 
         let label = format!("step#{i}@{seek_secs:.3}s");
         let mut consumed = seek_frame;
@@ -517,8 +519,9 @@ where
             let Some((n, span)) = read_block_async(audio, &mut buf, &label).await else {
                 break;
             };
-            if let Some(p) = pace {
-                consumer_pace(p).await;
+            if let Some((next, period)) = &mut next_pace {
+                consumer_pace(next.saturating_duration_since(Instant::now())).await;
+                *next += *period;
             }
             let frames_this_read = (n / chan) as u64;
             if previous.is_none() && !requested.is_zero() {
