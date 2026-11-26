@@ -349,6 +349,10 @@ fn assert_hosted_authorization(job: &Mapping) {
         .as_mapping()
         .expect("authorization environment is a mapping");
     assert_eq!(
+        mapping_field(env, "EVENT_NAME").as_str(),
+        Some("${{ github.event_name }}")
+    );
+    assert_eq!(
         mapping_field(env, "ACTOR").as_str(),
         Some("${{ github.actor }}")
     );
@@ -2323,6 +2327,34 @@ fn bench_parameters_reach_the_common_executor_as_data() {
             Some(expected.as_str())
         );
     }
+    for (parameter, default) in [
+        ("bench_mode", "timing"),
+        ("bench_allocator_policy", "system"),
+    ] {
+        let dispatch = github_workflow("dispatch.yml");
+        assert_eq!(
+            dispatch["on"]["workflow_dispatch"]["inputs"][parameter]["default"].as_str(),
+            Some(default)
+        );
+        for (caller, job, _, with) in &forwarding {
+            let expected = if caller == "dispatch.yml" {
+                format!("${{{{ inputs.{parameter} || '{default}' }}}}")
+            } else {
+                format!("${{{{ inputs.{parameter} }}}}")
+            };
+            assert_eq!(
+                with.get(parameter).and_then(Value::as_str),
+                Some(expected.as_str()),
+                "{caller}/{job}"
+            );
+        }
+        let expected = format!("${{{{ inputs.{parameter} }}}}");
+        assert_eq!(
+            env.get(parameter.to_ascii_uppercase())
+                .and_then(Value::as_str),
+            Some(expected.as_str())
+        );
+    }
     let script = mapping_field(step, "run").as_str().unwrap();
     assert!(script.contains(
         r#"if [ -n "$BENCH_TARGET" ] && [ -z "$BENCH_PREFLIGHT" ]; then export RUN_BENCHMARKS=1; fi"#
@@ -2462,7 +2494,7 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
     )
     .expect("xtask config is valid TOML");
     let lane = &config["ext"]["ci"]["lanes"]["deep-ui"];
-    for field in ["kinds", "kinds_github"] {
+    for field in ["kinds_gitlab", "kinds_github"] {
         let kinds = lane[field]
             .as_array()
             .unwrap_or_else(|| panic!("deep-ui.{field} is an array"));
@@ -2679,8 +2711,10 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
     );
     assert_eq!(
         mapping_field(job, "runs-on").as_str(),
-        Some("${{ inputs.runner || fromJSON(vars.KITHARA_RUNNER_LABELS) }}"),
-        "a lane runner label overrides only the shared pool selection"
+        Some(
+            "${{ inputs.runner || (inputs.os == 'macos' && fromJSON(vars.KITHARA_MACOS_RUNNER_LABELS)) || fromJSON(vars.KITHARA_RUNNER_LABELS) }}"
+        ),
+        "a lane runner label overrides only the pool its operating system names"
     );
     let upload = named_step(job, "Upload the lane's report");
     let upload_inputs = mapping_field(upload, "with")
@@ -3188,7 +3222,29 @@ fn the_role_runner_reads_its_matrix_from_the_catalog() {
         mapping_field(env, "ONLY").as_str(),
         Some("${{ inputs.only }}")
     );
+    // A pool takes part only while its runner-label variable names runners,
+    // and the profile decides which provider runs the catalog.
+    for (name, value) in [
+        (
+            "LINUX_POOL",
+            "${{ vars.KITHARA_RUNNER_LABELS && 'linux' || '' }}",
+        ),
+        (
+            "MACOS_POOL",
+            "${{ vars.KITHARA_MACOS_RUNNER_LABELS && 'macos' || '' }}",
+        ),
+        (
+            "KITHARA_CI_PROFILE",
+            "${{ vars.KITHARA_CI_PROFILE || 'split' }}",
+        ),
+    ] {
+        assert_eq!(mapping_field(env, name).as_str(), Some(value), "{name}");
+    }
     let render_script = mapping_field(render, "run").as_str().unwrap_or_default();
+    assert!(
+        render_script.contains(r#"--pool "${LINUX_POOL:-},${MACOS_POOL:-}""#),
+        "the selection renders only lanes an enabled pool can run"
+    );
     assert!(
         render_script.contains(r#"just ci lanes --role "$ROLE" --kind "$KIND""#),
         "the selection comes from the catalog"

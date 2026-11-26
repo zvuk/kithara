@@ -6,6 +6,7 @@
 # argument below from the reviewed pins.
 ARG CI_IMAGE
 FROM ${CI_IMAGE}
+USER root
 
 ARG ANDROID_AVD
 ARG ANDROID_BUILD_TOOLS_VERSION

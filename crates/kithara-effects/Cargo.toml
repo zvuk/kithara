@@ -57,6 +57,14 @@ name = "feedback_delay"
 harness = false
 
 [[bench]]
+name = "feedback_delay_guard"
+harness = false
+
+[[bench]]
+name = "feedback_delay_heap"
+harness = false
+
+[[bench]]
 name = "reverb"
 harness = false
 

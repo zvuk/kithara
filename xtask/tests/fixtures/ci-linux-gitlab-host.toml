@@ -1,0 +1,43 @@
+build_cache_size = "25GB"
+cache_root = "/var/lib/kithara-ci"
+image_cache_env_file = "/etc/kithara-ci/cache/images.env"
+compiler_cache_size = "40G"
+network = "kithara-ci"
+subnet = "172.16.240.0/24"
+free_bytes_for_a_job = 40000000000
+
+[gitlab]
+service = "gitlab-runner.service"
+binary = "/usr/bin/gitlab-runner"
+config_file = "/etc/gitlab-runner/config.toml"
+helper_image = "registry.example/runner-helper@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[runners]]
+name = "gitlab-linux-a"
+sccache_s3_env_file = "/etc/kithara-ci/cache/review.env"
+cache_trust = "review"
+cache_scope = "review"
+cpus = 2
+memory = "4g"
+labels = ["kithara-linux"]
+
+[runners.target]
+provider = "gitlab"
+url = "https://gitlab.example"
+project = 42
+token_file = "/etc/kithara-ci/tokens/gitlab-linux-a.json"
+
+[[runners]]
+name = "gitlab-linux-b"
+sccache_s3_env_file = "/etc/kithara-ci/cache/review.env"
+cache_trust = "review"
+cache_scope = "review"
+cpus = 2
+memory = "4g"
+labels = ["kithara-linux"]
+
+[runners.target]
+provider = "gitlab"
+url = "https://gitlab.example"
+project = 42
+token_file = "/etc/kithara-ci/tokens/gitlab-linux-b.json"

@@ -993,3 +993,133 @@ fn bench_preflight_callback_parser_rejects_malformed_records() {
         );
     }
 }
+
+#[test]
+fn bench_staged_sources_keep_own_config_and_target_owned_outputs() {
+    let (temp, ctx, _) = fixture("group/a", "forms/b\ngroup/a");
+    fs::create_dir(ctx.root.join(".cargo")).unwrap();
+    fs::write(
+        ctx.root.join(".cargo/config.toml"),
+        "[env]\nKITHARA_TEST_BENCH_SOURCE_CONFIG = { value = 'tracked', force = true }\n",
+    )
+    .unwrap();
+    let bench = ctx.root.join("benches/kernel.rs");
+    fs::write(&bench, format!(
+        "const _: &str = env!(\"KITHARA_TEST_BENCH_SOURCE_CONFIG\");\nconst _: () = assert!(option_env!(\"KITHARA_TEST_BENCH_HOST_CONFIG\").is_none());\n{}",
+        fs::read_to_string(&bench).unwrap(),
+    )).unwrap();
+    command(
+        &ctx.root,
+        "git",
+        &["add", ".cargo/config.toml", "benches/kernel.rs"],
+    );
+    command(
+        &ctx.root,
+        "git",
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "--quiet",
+            "-m",
+            "source config",
+        ],
+    );
+    let host = temp.path().join("host");
+    fs::create_dir_all(host.join(".cargo")).unwrap();
+    fs::create_dir(host.join("outputs")).unwrap();
+    fs::write(
+        host.join(".cargo/config.toml"),
+        "[env]\nKITHARA_TEST_BENCH_HOST_CONFIG = { value = 'inherited', force = true }\n",
+    )
+    .unwrap();
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args(crate::common::child_test_args(
+            module_path!(),
+            "staged_config_child",
+        ))
+        .env(
+            "KITHARA_TEST_BENCH_ROOT",
+            temp.path().canonicalize().unwrap(),
+        )
+        .env(
+            "CARGO_TARGET_DIR",
+            host.join("outputs").canonicalize().unwrap(),
+        )
+        .env_remove("KITHARA_TEST_BENCH_SOURCE_CONFIG")
+        .env_remove("KITHARA_TEST_BENCH_HOST_CONFIG")
+        .status()
+        .unwrap();
+    assert!(status.success(), "staged config child: {status}");
+}
+
+#[test]
+#[ignore = "invoked by the staged source regression parent"]
+fn staged_config_child() {
+    let root = PathBuf::from(std::env::var_os("KITHARA_TEST_BENCH_ROOT").unwrap());
+    let ctx = Ctx::load_from_manifest(&root.join("repository/Cargo.toml")).unwrap();
+    let commit = command(&ctx.root, "git", &["rev-parse", "HEAD"]);
+    let (request, declaration) = preflight_request(&ctx, &commit, "group/a");
+    let target = ctx.metadata().unwrap().target_directory.as_std_path();
+    let host = root.join("host");
+    let host_config = fs::read(host.join(".cargo/config.toml")).unwrap();
+    let source_config = fs::read(ctx.root.join(".cargo/config.toml")).unwrap();
+    let locked = fs::read(ctx.root.join("Cargo.lock")).unwrap();
+    execute(&ctx, &request, false, Some(&declaration.to_string())).unwrap();
+    let results = fs::read_dir(ctx.root.join("bench-results"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .join(PREFLIGHT_BINARY_DIR);
+    let mut binaries = BTreeSet::new();
+    for arm in ["base", "head"] {
+        let raw = fs::read_to_string(results.join(format!("{arm}.cargo.json"))).unwrap();
+        let artifact = raw
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .find(|entry| entry["executable"].is_string())
+            .unwrap();
+        let binary = PathBuf::from(artifact["executable"].as_str().unwrap());
+        let manifest = PathBuf::from(artifact["manifest_path"].as_str().unwrap());
+        let source = manifest.parent().unwrap();
+        assert!(
+            !source.starts_with(&host),
+            "source inherited host config ancestry: {source:?}"
+        );
+        assert!(
+            binary.starts_with(target),
+            "build escaped configured target: {binary:?}"
+        );
+        assert!(!source.exists(), "source owner did not release {source:?}");
+        assert!(!binary.exists(), "build owner did not release {binary:?}");
+        assert!(
+            !source.parent().unwrap().exists(),
+            "source scratch was not released"
+        );
+        let build_root = target.join(
+            binary
+                .strip_prefix(target)
+                .unwrap()
+                .components()
+                .next()
+                .unwrap()
+                .as_os_str(),
+        );
+        assert!(!build_root.exists(), "build scratch was not released");
+        eprintln!("{arm}: source {source:?}; build {binary:?}; both released");
+        binaries.insert(binary);
+    }
+    assert_eq!(binaries.len(), 2);
+    assert!(target.is_dir());
+    assert_eq!(
+        fs::read(host.join(".cargo/config.toml")).unwrap(),
+        host_config
+    );
+    assert_eq!(
+        fs::read(ctx.root.join(".cargo/config.toml")).unwrap(),
+        source_config
+    );
+    assert_eq!(fs::read(ctx.root.join("Cargo.lock")).unwrap(), locked);
+}

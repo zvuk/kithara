@@ -76,6 +76,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) dead_exports: DeadExportsThreshold,
     #[serde(default)]
+    pub(crate) facade_pool_owner: FacadePoolOwnerThreshold,
+    #[serde(default)]
     pub(crate) field_always_constant: FieldCallSitesThreshold,
     #[serde(default)]
     pub(crate) field_always_equals_other_field: FieldCallSitesThreshold,
@@ -644,6 +646,16 @@ pub(crate) struct FirewheelDspFacadeThreshold {
     pub(crate) allowed_files: Vec<String>,
     #[serde(default)]
     pub(crate) modules: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[serde(deny_unknown_fields)]
+#[config(builder(none), fields(value))]
+pub(crate) struct FacadePoolOwnerThreshold {
+    /// Crates whose dual pool ownership is never flagged: the facade owns the
+    /// pool crate it re-exports, so it names both by design.
+    #[serde(default)]
+    pub(crate) exempt_crates: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]

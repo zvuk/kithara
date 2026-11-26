@@ -12,11 +12,32 @@ ignores:
   - crates/kithara-bufpool/**
   - crates/kithara-test-utils/src/bufpool.rs
   - crates/kithara-devtools/**
+utils:
+  pool-derive:
+    kind: attribute_item
+    regex: '^#\[\s*derive\s*\([^\]]*\bPool\s*[,)]'
+  pool-schema:
+    kind: struct_item
+    any:
+      - follows:
+          matches: pool-derive
+          stopBy:
+            not:
+              any:
+                - kind: attribute_item
+                - kind: line_comment
+                - kind: block_comment
+      - has:
+          kind: field_declaration
+          regex: '\bPoolSlot\s*<'
+          stopBy: end
 rule:
   any:
     - all:
-        - kind: macro_invocation
-        - regex: '(?:^|::)pool_schema!\s*(?:\{|\(|\[)\s*(?:pub(?:\s*\([^)]*\))?\s+)?TestPools\b'
+        - matches: pool-schema
+        - has:
+            field: name
+            regex: '^TestPools$'
     - all:
         - kind: mod_item
         - regex: '\bmod\s+test_pools\s*;'

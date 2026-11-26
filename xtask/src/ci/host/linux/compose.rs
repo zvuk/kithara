@@ -1,12 +1,12 @@
 use std::{fmt::Write as _, path::Path};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use tracing::info;
 
 use super::{
     container::{Container, container},
     cpu,
-    profile::LinuxHost,
+    profile::{LinuxHost, RunnerTarget},
 };
 use crate::{ci::config::CiPins, consts};
 
@@ -34,6 +34,12 @@ pub(super) fn write(host: &LinuxHost, pins: &CiPins, out: &Path) -> Result<()> {
 }
 
 fn project(host: &LinuxHost, pins: &CiPins, cores: usize) -> Result<String> {
+    ensure!(
+        host.runners
+            .iter()
+            .all(|runner| matches!(runner.target, RunnerTarget::Github { .. })),
+        "Compose starts GitHub JIT workers; GitLab workers use their native manager"
+    );
     let mut yaml = String::new();
     writeln!(
         yaml,

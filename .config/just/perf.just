@@ -55,6 +55,11 @@ suite *ARGS:
 compare *ARGS:
     just _xtask perf-compare "$@"
 
+# Timing is the default explicit Metabench/Criterion mode:
+#   just perf bench run --bench-target kithara-effects:feedback_delay
+# Allocation mode retains upstream and canonical JSON/Markdown results:
+#   just perf bench run --bench-target kithara-effects:feedback_delay_heap --bench-mode allocation --bench-allocator-policy counting
+# Untimed preflight uses BENCH_PREFLIGHT and never starts a measurement.
 # Linux: just perf bench dispatch linux --bench-target kithara-dsp:kernels:spectrum --bench-filter '<filter>' --bench-ref '<branch>' --bench-base-ref main
 # Mac: just perf bench dispatch macos --bench-target kithara-dsp:kernels:spectrum --bench-filter '<filter>' --bench-ref '<branch>' --bench-base-ref main
 [positional-arguments]
