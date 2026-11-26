@@ -24,3 +24,21 @@ paths = [
   '''^tests/src/test_server/modeled\.rs$''',
   '''^android/lib/src/androidTest/kotlin/com/kithara/HermeticFixtures\.kt$''',
 ]
+
+[[allowlists]]
+description = "Public content-addressed HLS mux control identity."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^crates/kithara-fixture-gen/src/defs/hls\.rs$''']
+regexTarget = "line"
+regexes = [
+  '''^\s*assert_eq!\(control_key, [\"]1b741cc8a23d0d4dd45952f455f1f65c[\"]\);\s*$''',
+]
+
+[[allowlists]]
+description = "Public content-addressed fMP4 mux control identity."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^crates/kithara-fixture-media/src/fmp4/mux\.rs$''']
+regexTarget = "line"
+regexes = ['''^\s*key, [\"]dd9caf25e476d62211f9f042d662e4a5[\"],\s*$''']
