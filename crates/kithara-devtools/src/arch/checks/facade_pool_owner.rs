@@ -277,7 +277,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary workspace");
         fs::write(
             dir.path().join("Cargo.toml"),
-            "[workspace]\nmembers = [\"consumer\", \"facade\", \"pool\"]\n\
+            "[workspace]\nmembers = [\"consumer\", \"direct\", \"facade\", \"pool\"]\n\
              exclude = [\"previous\"]\nresolver = \"2\"\n\n\
              [workspace.dependencies]\n\
              engine = { package = \"kithara\", path = \"facade\" }\n\
@@ -290,6 +290,12 @@ mod tests {
                 "consumer",
                 "0.0.0",
                 "[dependencies]\nengine.workspace = true\nbuffers.workspace = true\n",
+            ),
+            (
+                "direct",
+                "direct-owner-only",
+                "0.0.0",
+                "[dependencies]\nbuffers.workspace = true\n",
             ),
             (
                 "facade",
