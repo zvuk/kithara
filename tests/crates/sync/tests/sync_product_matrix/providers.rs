@@ -117,10 +117,27 @@ pub(crate) struct PreparedSources {
     provider: Provider,
     pub(crate) server: TestServerHelper,
     pub(crate) paths: Vec<String>,
+    pub(crate) real_network: bool,
     grids: OnceLock<Vec<Arc<BeatGridModel>>>,
 }
 
 impl PreparedSources {
+    pub(crate) fn downloader(&self) -> kithara::download::Downloader {
+        if !self.real_network {
+            return self.server.modeled_downloader();
+        }
+        let client = kithara::net::HttpClient::new(
+            kithara::net::NetOptions::default(),
+            pools(),
+            kithara_test_utils::cancel_token(),
+        );
+        kithara::download::Downloader::new(
+            kithara::download::DownloaderConfig::for_client(client)
+                .runtime(kithara::platform::tokio::runtime::Handle::current())
+                .build(),
+        )
+    }
+
     delegate::delegate! {
         to self {
             #[field(provider)]
@@ -165,6 +182,7 @@ pub(crate) async fn prepared_sources(provider: Provider) -> PreparedSources {
         provider,
         server,
         paths,
+        real_network: false,
         grids: OnceLock::new(),
     }
 }

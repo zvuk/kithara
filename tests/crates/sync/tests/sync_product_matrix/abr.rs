@@ -16,6 +16,7 @@ use super::{
 
 async fn rhythmic_ladder(mode: AbrMode) -> PreparedSources {
     let mut sources = synthetic_sources().await;
+    sources.real_network = true;
     let sample_rate = SEQUENTIAL_SYNC.sample_rate;
     let segment_frames = usize::try_from(sample_rate).expect("fixture sample rate");
     let segment_bytes = segment_frames * usize::from(CHANNELS) * size_of::<i16>();
@@ -41,16 +42,22 @@ async fn rhythmic_ladder(mode: AbrMode) -> PreparedSources {
             ..Default::default()
         }]);
     }
-    let hls = sources
-        .server
-        .create_hls(ladder)
+    // Register delayed responses on the same real clock as ABR's network samples.
+    let hls = kithara::platform::flash::with_ambient(false, sources.server.create_hls(ladder))
         .await
         .expect("local HLS ladder for the authored rhythm");
     sources.paths[0] = hls.master_url().to_string();
     sources
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Long),
+    tracing("kithara_abr=debug,kithara_hls=debug")
+)]
 #[case::manual_then_auto(AbrMode::manual(1))]
 #[case::autonomous(auto(0))]
 async fn a_synced_hls_rung_change_keeps_the_pcm_beat_grid(#[case] mode: AbrMode) {
