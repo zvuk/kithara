@@ -13,6 +13,7 @@ pub(crate) mod dead_exports;
 mod declaration_index;
 pub(crate) mod direction;
 pub(crate) mod duplicate_error_enums;
+pub(crate) mod facade_pool_owner;
 pub(crate) mod field_always_constant;
 pub(crate) mod field_always_equals_other_field;
 pub(crate) mod field_passthrough;

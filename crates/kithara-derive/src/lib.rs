@@ -9,6 +9,7 @@ mod entrypoints;
 mod event;
 mod mirror;
 mod phase;
+mod pool;
 mod ranged;
 mod ui;
 mod vocabulary;
@@ -45,6 +46,8 @@ pub fn skin_walk(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 pub fn phase(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     phase::expand(input)
 }
+
+pool_derives!();
 
 /// Declares a bounded numeric newtype.
 ///

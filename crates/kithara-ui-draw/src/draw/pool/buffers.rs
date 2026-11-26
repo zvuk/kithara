@@ -1,5 +1,5 @@
 use kithara_bufpool::{
-    OverallBudget, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey, VecKey, pool_schema,
+    OverallBudget, Pool, PoolAlias, PoolConfig, PoolError, PoolRegion, PoolSlot, StringKey, VecKey,
 };
 
 use super::{
@@ -20,12 +20,11 @@ type CommandKey = PoolAlias<CommandTag, VecKey<DrawCmd, { consts::SHARDS }>>;
 type PathKey = PoolAlias<PathTag, VecKey<Verb, { consts::SHARDS }>>;
 type TextKey = PoolAlias<TextTag, StringKey<{ consts::SHARDS }>>;
 
-pool_schema! {
-    pub(crate) DrawSchema {
-        commands: CommandKey,
-        paths: PathKey,
-        text: TextKey,
-    }
+#[derive(Pool)]
+pub(crate) struct DrawSchema {
+    commands: PoolSlot<CommandKey>,
+    paths: PoolSlot<PathKey>,
+    text: PoolSlot<TextKey>,
 }
 
 /// Aggregate reuse statistics for every draw buffer kind.

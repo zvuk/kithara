@@ -22,14 +22,13 @@ The public surface centres on one trait - `Decoder`. Concrete backends (Symphoni
 
 ```rust
 use std::io::Cursor;
-use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolSlot};
 use kithara_decode::{DecoderBackend, DecoderConfig, DecoderFactory};
 
-pool_schema! {
-    pub AppPools {
-        bytes: u8,
-        samples: f32,
-    }
+#[derive(Pool)]
+pub struct AppPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
 let pool_config = || PoolConfig::builder().max_buffers(32).build();
