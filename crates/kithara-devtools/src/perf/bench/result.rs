@@ -115,6 +115,8 @@ struct CanonicalCase {
     heap: Option<HeapObservation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     worker: Option<WorkerObservation>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    observations: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -122,6 +124,7 @@ pub(super) struct Observation {
     guard: Option<GuardObservation>,
     heap: Option<HeapObservation>,
     worker: Option<WorkerObservation>,
+    other: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -182,6 +185,11 @@ pub(super) fn read_observations(
         if let Some(worker) = record.observation.get("worker") {
             ensure!(observation.worker.is_none(), "duplicate worker observation");
             observation.worker = Some(serde_json::from_value(worker.clone())?);
+        }
+        for (name, value) in record.observation.as_object().into_iter().flatten() {
+            if !matches!(name.as_str(), "guard" | "heap" | "worker") {
+                observation.other.insert(name.clone(), value.clone());
+            }
         }
     }
     Ok(observations)
@@ -291,6 +299,9 @@ impl AllocationReport {
                     guard: observation.and_then(|value| value.guard.clone()),
                     heap: observation.and_then(|value| value.heap.clone()),
                     worker: observation.and_then(|value| value.worker.clone()),
+                    observations: observation
+                        .map(|value| value.other.clone())
+                        .unwrap_or_default(),
                 })
             })
             .collect::<Result<Vec<_>>>()?;

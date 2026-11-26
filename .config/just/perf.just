@@ -1,51 +1,35 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 set working-directory := "../.."
 
-# Run perf-feature integration tests.
+# Run all migrated session workloads through the canonical benchmark entrypoint.
 [default]
 run:
-    cargo test -p kithara-integration-tests --features perf --release \
-      -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
+    just perf bench run --bench-target kithara-integration-tests:session_perf
 
-# One hotpath guard may be alive at a time and each host case opens its own, so
-# the cases may not share a thread. The metrics server is off: a second worktree
-# measuring at the same moment would take the same port.
 # Per-widget frame time on both UI hosts, immediate and retained.
 frames:
-    HOTPATH_METRICS_SERVER_OFF=1 \
-      cargo test -p kithara-ui --test frame_perf --features perf,iced,masonry --release \
-      -- --test-threads=1 --nocapture 2>&1 | tee ui-frame-perf.txt
+    just perf bench run --bench-target kithara-ui:frame_perf:iced,masonry,perf
 
 # Whole-page frame time on both hosts: the control page and the bucket sweep.
 pages:
-    HOTPATH_METRICS_SERVER_OFF=1 \
-      cargo test -p kithara-ui-gallery --test page_perf --features perf,masonry --release \
-      -- ui_page_perf --test-threads=1 --nocapture 2>&1 | tee ui-page-perf.txt
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-(buttons|clock|table|stress)'
 
 # Frame time on the pages that move on their own: posed objects, a sprite sheet
 # and an artwork.
 motion:
-    HOTPATH_METRICS_SERVER_OFF=1 \
-      cargo test -p kithara-ui-gallery --test page_perf --features perf,masonry --release \
-      -- ui_motion_perf --test-threads=1 --nocapture 2>&1 | tee ui-motion-perf.txt
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-(objects|motion|sprites|lottie|scene)'
 
 # Cost per wheel event against cost per frame, swept over wheels per frame.
 scroll:
-    HOTPATH_METRICS_SERVER_OFF=1 \
-      cargo test -p kithara-ui-gallery --test page_perf --features perf,masonry --release \
-      -- ui_scroll_perf --test-threads=1 --nocapture 2>&1 | tee ui-scroll-perf.txt
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-(pivot|library2|tree|table-long)|perf-scroll-vis'
 
 # Cost per pointer move against cost per frame, with a fader held under the hand.
 drag:
-    HOTPATH_METRICS_SERVER_OFF=1 \
-      cargo test -p kithara-ui-gallery --test page_perf --features perf,masonry --release \
-      -- ui_drag_perf --test-threads=1 --nocapture 2>&1 | tee ui-drag-perf.txt
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-faders'
 
 # The visualiser and document-shader passes, free and fenced (own scenario).
 native:
-    HOTPATH_METRICS_SERVER_OFF=1 \
-      cargo test -p kithara-ui-gallery --test page_perf --features perf,masonry --release \
-      -- ui_native_perf --test-threads=1 --nocapture 2>&1 | tee ui-native-perf.txt
+    just perf bench run --bench-target kithara-ui-gallery:page_perf:masonry,perf --bench-filter 'gallery-(vis|shader)'
 
 [positional-arguments]
 suite *ARGS:

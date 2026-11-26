@@ -67,10 +67,7 @@ impl<'a> Retained<'a> {
         );
         let encoding = frame.scene().encoding();
         let scene = Scene {
-            draw_data: encoding.draw_data.len(),
             draw_tags: encoding.draw_tags.len(),
-            path_data: encoding.path_data.len(),
-            transforms: encoding.transforms.len(),
         };
         // The scene is where this host's own drawing ends: the coordinates, what
         // is painted with them, where each is placed, and the counts that say
@@ -163,10 +160,6 @@ impl PageHost for Retained<'_> {
             Some(at),
             1,
         )));
-    }
-
-    fn published(&self) -> usize {
-        self.ui.app().published
     }
 
     fn reading(&self, endpoint: Option<&str>) -> Option<u64> {

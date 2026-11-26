@@ -216,10 +216,6 @@ impl PageHost for Immediate {
             .push(Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left)));
     }
 
-    fn published(&self) -> usize {
-        self.app.published
-    }
-
     fn reading(&self, endpoint: Option<&str>) -> Option<u64> {
         self.app.digest_of(endpoint?)
     }
