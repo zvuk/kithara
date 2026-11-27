@@ -219,20 +219,29 @@ mod tests {
         assert!(!graph.is_active());
     }
 
-    #[wasm_bindgen_test]
+    #[kithara_test_utils::kithara::hang_watchdog]
+    async fn invoke_context(context: &JsValue, name: &str) -> Result<(), JsValue> {
+        let promise = js_sys::Reflect::get(context, &JsValue::from_str(name))?
+            .dyn_into::<js_sys::Function>()?
+            .call0(context)?
+            .dyn_into::<js_sys::Promise>()?;
+        let mut budget = Duration::ZERO;
+        hang_park!(|remaining| budget = remaining);
+        let message = format!("AudioContext.{name}() did not settle within {budget:?}");
+        kithara_platform::time::timeout(budget, JsFuture::from(promise))
+            .await
+            .map_err(|_| JsValue::from_str(&message))??;
+        Ok(())
+    }
+
+    #[kithara_test_utils::kithara::test(wasm)]
     async fn installed_output_is_ready_only_while_its_actual_context_runs() -> Result<(), JsValue> {
         let probe = OutputStartupProbe::new()?;
         let mut graph = SessionGraph::new(FirewheelConfig::default());
         let output = WebOutput::start::<TestPools>(&mut graph, 44_100, &mut [], None)
             .expect("actual output acquisition");
         let context = js_sys::Reflect::get(output.lease.as_ref(), &JsValue::from_str("context"))?;
-        let invoke = |name: &str| -> Result<js_sys::Promise, JsValue> {
-            js_sys::Reflect::get(&context, &JsValue::from_str(name))?
-                .dyn_into::<js_sys::Function>()?
-                .call0(&context)?
-                .dyn_into()
-        };
-        JsFuture::from(invoke("resume")?).await?;
+        invoke_context(&context, "resume").await?;
         let acquired = wait_until(Duration::from_secs(5), "actual worklet acquisition", || {
             output.lease.acquired()
         })
@@ -254,9 +263,9 @@ mod tests {
         )
         .await
         .expect("processor installed");
-        JsFuture::from(invoke("suspend")?).await?;
+        invoke_context(&context, "suspend").await?;
         assert!(!graph.output_ready().expect("suspended output status"));
-        JsFuture::from(invoke("resume")?).await?;
+        invoke_context(&context, "resume").await?;
         assert!(graph.output_ready().expect("resumed output status"));
         drop(output);
         Ok(())

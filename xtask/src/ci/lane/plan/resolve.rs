@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{
-    catalog::{Catalog, commands, digest, normalize_kind},
+    catalog::{Catalog, canonical_digest, commands, normalize_kind},
     request::{PlacementMode, PlanRequest, PlanningPolicy, Platform, Purpose},
 };
 use crate::{
@@ -65,14 +65,10 @@ pub(super) fn resolve(
             .all(|id| checks.contains_key(id)),
         "qualification names checks outside this selected plan"
     );
-    let contract_digest = digest(&serde_json::to_vec(
-        &json!({"request":request,"checks":checks}),
-    )?);
+    let contract_digest = canonical_digest(&json!({"request":request,"checks":checks}))?;
     let providers = admit_checks(catalog, &checks, policy)?;
     let availability = serde_json::to_value(&policy.pools)?;
-    let generation = digest(&serde_json::to_vec(
-        &json!({"contract":contract_digest,"policy":policy}),
-    )?);
+    let generation = canonical_digest(&json!({"contract":contract_digest,"policy":policy}))?;
     let graph = json!({"definitions":catalog.checks,"entrypoints":catalog.bindings,"non_validation":"comparison only; separate execution authority"});
     Ok(Plan {
         schema: 1,
@@ -267,7 +263,7 @@ fn instantiate_checks(
                     expected_tree: tree.clone(),
                     timeout_minutes,
                     needs,
-                    digest: digest(&serde_json::to_vec(&contract)?),
+                    digest: canonical_digest(&contract)?,
                     contract,
                 };
                 checks.insert(key, check);
@@ -295,7 +291,7 @@ fn instantiate_checks(
         let check = checks.get_mut(&id).context("planned check")?;
         check.needs = needs;
         check.contract["selected_dependencies"] = serde_json::to_value(&check.needs)?;
-        check.digest = digest(&serde_json::to_vec(&check.contract)?);
+        check.digest = canonical_digest(&check.contract)?;
     }
     Ok(checks)
 }

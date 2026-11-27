@@ -104,4 +104,6 @@ window.on_console_warn = __wbgtest_console_warn;
 window.on_console_error = __wbgtest_console_error;
 cx.include_ignored(__INCLUDE_IGNORED__);
 cx.filtered_count(__FILTERED__);
+window.__kithara_tests_ready = true;
+await window.__kithara_user_activation;
 await cx.run(__TESTS__.map(name => wasm[name]));

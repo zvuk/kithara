@@ -48,6 +48,10 @@ kithara = { workspace = true, features = ["test", "stretch-bungee"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["library", "native-fixtures"] }
 
+[dev-dependencies]
+criterion = { workspace = true }
+metabench = { workspace = true }
+
 [lints]
 workspace = true
 
@@ -60,3 +64,9 @@ required-features = ["stretch-signalsmith"]
 name = "warp_playback"
 path = "tests/playback.rs"
 required-features = ["playback", "stretch-signalsmith"]
+
+[[bench]]
+name = "tempo_perf"
+path = "benches/tempo_perf.rs"
+harness = false
+required-features = ["stretch-signalsmith"]

@@ -6,7 +6,6 @@ use std::{
 };
 
 use kithara_platform::sync::Arc;
-use kithara_test_utils::kithara;
 use mmap_io::MemoryMappedFile;
 
 use crate::{
@@ -130,8 +129,6 @@ impl DriverIo for MmapDriver {
         drop(mmap_guard);
         Ok(())
     }
-
-    #[kithara::measure]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         {
             let mmap_guard = self.mmap.lock();
@@ -192,8 +189,6 @@ impl DriverIo for MmapDriver {
         let mmap_guard = self.mmap.lock();
         mmap_guard.len()
     }
-
-    #[kithara::measure]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         let end = offset + data.len() as u64;
         self.retired.lock().collect();

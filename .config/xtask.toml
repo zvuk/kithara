@@ -1113,9 +1113,7 @@ default_backend = "none"
 default_features = [
   "kithara-ui/gpu",
   "kithara-ui/masonry",
-  "kithara-ui/perf",
   "kithara-ui-gallery/masonry",
-  "kithara-ui-gallery/perf",
 ]
 undeclared_toggles = ["flash"]
 cargo.packages = ["kithara-ui", "kithara-ui-gallery"]
@@ -3609,7 +3607,7 @@ name = "perf-suite"
 command = ["just", "perf"]
 tools = ["perf-suite"]
 hard_invariant = true
-expected_artifacts = ["perf-results.txt"]
+expected_artifacts = ["bench-results.txt"]
 
 [[quality.assessment.deep_stages]]
 name = "benchmarks"

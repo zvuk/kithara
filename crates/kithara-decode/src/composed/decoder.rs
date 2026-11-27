@@ -182,7 +182,6 @@ where
     /// A head-trimmed packet keeps its end time, so the missing prefix precedes its PCM. Duration
     /// rounding can leave the frame's end past the target even when the packet is fully pre-target
     /// in sample space.
-    #[kithara::measure(label = "decode.composed.next")]
     #[kithara::hang_watchdog]
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {

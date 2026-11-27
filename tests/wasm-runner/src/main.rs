@@ -33,6 +33,7 @@ use crate::{
 /// The line the harness prints once every selected test has finished.
 const SUMMARY: &str = "test result: ";
 const POLL: Duration = Duration::from_millis(100);
+const PAGE_READY: Duration = Duration::from_secs(5);
 
 /// The flags cargo forwards after `--`.
 #[derive(Parser)]
@@ -140,7 +141,19 @@ async fn within<F: Future>(deadline: Instant, watchdog: Duration, future: F) -> 
 /// Opens the page and reports its results.
 async fn drive(session: &Session, url: &str) -> Result<bool> {
     session.visit(url).await?;
+    activate(session).await?;
     report(session, seconds("WASM_BINDGEN_TEST_TIMEOUT", 20)).await
+}
+
+async fn activate(session: &Session) -> Result<()> {
+    let deadline = Instant::now() + PAGE_READY;
+    while !session.tests_ready().await? {
+        if Instant::now() >= deadline {
+            bail!("the test page did not initialize within {PAGE_READY:?}");
+        }
+        sleep(POLL).await;
+    }
+    session.click("kithara-run-tests").await
 }
 
 /// Streams the page's output until the summary appears or `limit` passes.

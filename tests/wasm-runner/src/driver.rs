@@ -129,6 +129,44 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) async fn tests_ready(&self) -> Result<bool> {
+        let path = format!("/session/{}/execute/sync", self.id);
+        let reply = self
+            .call(
+                reqwest::Method::POST,
+                &path,
+                Some(json!({
+                    "script": "return window.__kithara_tests_ready === true;",
+                    "args": []
+                })),
+            )
+            .await?;
+        reply
+            .get("value")
+            .and_then(Value::as_bool)
+            .context("WebDriver returned a non-boolean test readiness value")
+    }
+
+    pub(crate) async fn click(&self, id: &str) -> Result<()> {
+        let path = format!("/session/{}/element", self.id);
+        let reply = self
+            .call(
+                reqwest::Method::POST,
+                &path,
+                Some(json!({ "using": "css selector", "value": format!("#{id}") })),
+            )
+            .await?;
+        let element = reply
+            .pointer("/value/element-6066-11e4-a52e-4f735466cecf")
+            .or_else(|| reply.pointer("/value/ELEMENT"))
+            .and_then(Value::as_str)
+            .context("WebDriver returned no element id")?;
+        let path = format!("/session/{}/element/{element}/click", self.id);
+        self.call(reqwest::Method::POST, &path, Some(json!({})))
+            .await?;
+        Ok(())
+    }
+
     /// The text of element `id` past `offset`, and the offset after it.
     pub(crate) async fn text_since(&self, id: &str, offset: usize) -> Result<(String, usize)> {
         let script = "const el = document.getElementById(arguments[0]); \
