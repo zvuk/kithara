@@ -554,11 +554,13 @@ kithara-stream v0.0.1 (/workspace/crates/kithara-stream)\n";
 
         assert!(names.contains("kithara-stream"));
         assert!(names.contains("kithara-stream-tests"));
-        // The player reads prepared analysis artifacts, so the analysis and beat
-        // contracts ship with the product even though no detector runs on the
-        // device.
+        // The player and warp hold the beat grid model, so the beat contract
+        // ships with the product; the detector stays behind features the device
+        // does not enable.
         assert!(names.contains("kithara-beat"));
-        assert!(names.contains("kithara-analysis"));
+        // The device computes no analysis, so the analysis crate is not part of
+        // the product.
+        assert!(!names.contains("kithara-analysis"));
         assert!(!names.contains("kithara-app"));
         assert!(!names.contains("kithara-app-tests"));
     }
