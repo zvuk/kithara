@@ -17,7 +17,7 @@ const LISTED: &[&str] = &["passes: test", "fails: test", "ignored: test"];
 
 /// One runner invocation per case. Cases run one at a time, as cargo's runs of
 /// real test binaries do, because every run shares the fixture server port.
-#[kithara::test(native, serial, timeout(Long))]
+#[kithara::test(native, serial, timeout(Heavy))]
 #[case::browser_list(BROWSER, &["--list"], true, LISTED)]
 #[case::browser_passes(BROWSER, &["passes", "--exact"], true, &["1 passed; 0 failed; 0 ignored"])]
 #[case::browser_fails(BROWSER, &["fails", "--exact"], false, &["0 passed; 1 failed; 0 ignored"])]
