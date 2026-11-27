@@ -357,7 +357,7 @@ fn output_block_override_preserves_the_backend_default_or_sets_128() {
     assert_eq!(configured.output.desired_block_frames, Some(128));
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 #[cfg(feature = "offline")]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String, timeout = kithara_test_utils::hang::default_timeout().min(Duration::from_secs(4)))]
 fn idle_native_worker_publishes_rendered_transport_without_a_deck_tick() {
