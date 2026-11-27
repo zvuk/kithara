@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::ValueEnum as _;
 use serde_json::{Value, json};
 
-use super::catalog::{commands, digest};
+use super::catalog::{canonical_digest, commands};
 use crate::{
     ci::{
         lane::select::{self, Fleet, LanesArgs, Profile},
@@ -49,7 +49,7 @@ pub(super) fn fingerprints(config: &CiProjectConfig) -> Result<BTreeMap<String, 
                     }
                 }
                 let key = format!("{}:{role}:{fleet:?}", kind.name());
-                output.insert(key, digest(&serde_json::to_vec(&cases)?));
+                output.insert(key, canonical_digest(&cases)?);
             }
         }
     }
