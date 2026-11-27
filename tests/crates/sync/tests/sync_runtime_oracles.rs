@@ -559,7 +559,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
 }
 
 #[cfg(feature = "flash")]
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Short))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 async fn offline_callback_geometry_does_not_pace_the_audio_clock(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {

@@ -2053,6 +2053,7 @@ fn timeout_source_audit_resolves_named_budgets_from_their_owner() {
         ("Short", TestBudget::Short),
         ("Medium", TestBudget::Medium),
         ("Long", TestBudget::Long),
+        ("Heavy", TestBudget::Heavy),
         ("Network", TestBudget::Network),
     ] {
         let expression = syn::parse_str(name).expect("budget identifier");
@@ -2149,6 +2150,7 @@ fn timeout_seconds(expression: &Expr) -> Option<u64> {
         "Short" => TestBudget::Short,
         "Medium" => TestBudget::Medium,
         "Long" => TestBudget::Long,
+        "Heavy" => TestBudget::Heavy,
         "Network" => TestBudget::Network,
         _ => return None,
     };

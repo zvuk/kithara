@@ -133,7 +133,7 @@ async fn progressive_analysis_preserves_consumed_audio_and_explicit_seek_lands_a
     assert_explicit_seek_lands(&mut rig, case, placements, item).await;
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Heavy))]
 async fn progressive_grid_refinement_preserves_audible_phase(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {

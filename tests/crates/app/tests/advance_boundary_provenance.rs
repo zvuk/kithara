@@ -1580,6 +1580,7 @@ async fn setup_queue_with_sample_rate(
 ) -> QueueSetup {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         render_sample_rate,
@@ -1626,6 +1627,7 @@ async fn setup_queue_with_sample_rate(
 async fn setup_multivariant_flac_queue(sources: &[Url; 2], temp_dir: &TestTempDir) -> QueueSetup {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .build(),
         SAMPLE_RATE,

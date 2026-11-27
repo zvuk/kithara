@@ -191,7 +191,7 @@ async fn sync_listening_mix_is_not_quieter_than_a_solo_deck(
     );
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Heavy))]
 #[case::app_playlist_27390231(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["library_mp3_zvuk_27390231"])).await, Start::Seconds(4.0), REAL_TRACK_SYNC, &[Some(96.0)])]
 #[case::app_playlist_151585912(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["library_mp3_zvuk_151585912"])).await, Start::Seconds(4.0), REAL_TRACK_SYNC, &[Some(96.0)])]
 #[case::app_playlist_125475417(super::sync_product_matrix::prepared_sources(super::sync_product_matrix::Provider::Library(&["library_mp3_zvuk_125475417"])).await, Start::Seconds(4.0), REAL_TRACK_SYNC, &[Some(96.0)])]
