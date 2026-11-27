@@ -5,19 +5,19 @@ mod immediate;
 mod pages;
 mod retained;
 
-use std::{borrow::Cow, sync::LazyLock};
+use std::{
+    borrow::Cow,
+    cell::{OnceCell, RefCell},
+    rc::Rc,
+    sync::LazyLock,
+};
 
-use hotpath::HotpathGuardBuilder;
+use criterion::{BenchmarkId, Criterion};
 use iced::{Theme, advanced::graphics::text::font_system, theme::Palette};
 use kithara_platform::time::WallInstant as WallClock;
-use kithara_test_utils::kithara;
-use kithara_ui::{
-    app::Ui,
-    draw::Pt,
-    render::{Skin, fonts::FONT_BYTES},
-    view::ViewState,
-};
+use kithara_ui::render::{Skin, fonts::FONT_BYTES};
 use kithara_ui_gallery::{demo, fixture, sections};
+use pages::{Page, Program};
 
 use crate::{
     app::PageApp,
@@ -28,25 +28,18 @@ use crate::{
     retained::Retained,
 };
 
-/// What drives a page from one frame to the next.
-#[derive(Clone, Copy)]
-enum Program {
-    /// Nothing at all. The page is measured drawing itself unprompted, which is
-    /// what makes it the control every other page is read against.
-    Idle,
-    /// The page's own animation, at a sweep of waveform bucket counts.
-    Buckets(&'static [u16]),
-    /// The page's own animation.
-    Tick,
-    /// `n` wheel events per frame, at a sweep of `n`.
-    Wheels(&'static [usize]),
-    /// A button held down for the whole run and `n` pointer moves per frame, at
-    /// a sweep of `n`. This is the program the eye complains about: a fader
-    /// under the hand, redrawn as fast as the host can.
-    Drag(&'static [usize]),
+/// One run per sweep step, each named by the value it swept to.
+impl Page {
+    fn open(&self, ui: &mut Ui<'_, PageApp>) {
+        if self.own.is_some() {
+            return;
+        }
+        ui.stand(sections::PAGE, self.tab).unwrap_or_else(|error| {
+            panic!("the page-perf fixture must open {}: {error}", self.name)
+        });
+    }
 }
 
-/// One run per sweep step, each named by the value it swept to.
 impl From<Program> for Vec<Run> {
     fn from(program: Program) -> Self {
         match program {
@@ -91,6 +84,58 @@ impl Run {
     }
 }
 
+trait PageHost {
+    fn drawn_as(&self) -> &'static str;
+    fn fenced_frame(&mut self) -> Census;
+    fn frame(&mut self) -> Census;
+    fn move_by(&mut self, dx: f32) -> f32;
+    fn picture(&mut self) -> u64;
+    fn pixels(&mut self) -> Vec<u8>;
+    fn place_pointer(&mut self);
+    fn press(&mut self);
+    fn reading(&self, endpoint: Option<&str>) -> Option<u64>;
+    fn release(&mut self);
+    fn wheel(&mut self, lines: f32);
+}
+
+fn theme(skin: &Skin) -> Theme {
+    let palette = &skin.palette;
+    Theme::custom(
+        "Kithara".to_owned(),
+        Palette {
+            background: palette.bg.into(),
+            text: palette.text.into(),
+            primary: palette.accent.into(),
+            success: palette.success.into(),
+            danger: palette.danger.into(),
+            warning: palette.warning.into(),
+        },
+    )
+}
+
+fn load_fonts() {
+    static LOADED: LazyLock<()> = LazyLock::new(|| {
+        let mut fonts = font_system()
+            .write()
+            .expect("iced font system lock must not be poisoned");
+        for bytes in FONT_BYTES {
+            fonts.load_font(Cow::Borrowed(bytes));
+        }
+    });
+    LazyLock::force(&LOADED);
+}
+
+struct Outcome<'run> {
+    page: &'run Page,
+    drawn_as: &'static str,
+    expected: Natives,
+    run: Run,
+    tally: Tally,
+    reading: [Option<u64>; 2],
+    picture: [u64; 2],
+    painted: bool,
+}
+
 impl TryFrom<Host> for Gpu {
     type Error = String;
 
@@ -119,23 +164,19 @@ enum Host {
 /// Nothing here judges. Every number is printed; the assertions are only that a
 /// run did the thing it claims to measure, because a device-less, wheel-less or
 /// motionless run otherwise reports a beautiful number for nothing.
-fn measure<'run>(
-    fixture: &Fixture,
-    page: &'run Page,
+fn measure(
+    fixture: Rc<Fixture>,
+    page: &'static Page,
     run: Run,
     expected: Natives,
-    gpu: &mut Gpu,
+    gpu: Rc<RefCell<Gpu>>,
     fenced: bool,
-) -> Outcome<'run> {
+) -> Outcome<'static> {
     /// Frames discarded before measuring. The first carries the mount, the layout,
     /// the shaping caches and every pipeline either host compiles lazily.
     const WARMUP: usize = 3;
 
-    let app = PageApp::new(page, run);
-    let mut driver: Box<dyn PageHost + '_> = match gpu {
-        Gpu::Immediate(gpu) => Box::new(Immediate::new(fixture.compiled(page), page, app, gpu)),
-        Gpu::Retained(gpu) => Box::new(Retained::new(fixture.config(), page, app, gpu)),
-    };
+    let mut driver = page_driver(fixture, page, run, gpu);
     driver.place_pointer();
     for _ in 0..WARMUP {
         driver.frame();
@@ -153,8 +194,6 @@ fn measure<'run>(
         drawn_as: driver.drawn_as(),
         reading: [reading_before, driver.reading(page.moving)],
         painted: painted(&pixels),
-        published: driver.published(),
-        fenced,
     }
 }
 
@@ -202,57 +241,7 @@ fn frames(driver: &mut dyn PageHost, page: &Page, run: Run, fence: bool) -> Tall
     tally
 }
 
-/// One stable line per run, with the counted facts beside the timed ones.
-fn report(label: &str, outcome: &Outcome<'_>) {
-    let tally = &outcome.tally;
-    let [total, mean, min, max] = tally.micros();
-    let scene = tally.scene.map_or_else(
-        || "scene -".to_owned(),
-        |scene| {
-            format!(
-                "tags {} path {} draw {} xform {}",
-                scene.draw_tags, scene.path_data, scene.draw_data, scene.transforms
-            )
-        },
-    );
-    let natives = tally.natives.map_or_else(
-        || "natives -".to_owned(),
-        |natives| {
-            format!(
-                "vis {}/{} shaders {}/{}",
-                natives.vis, outcome.expected.vis, natives.shaders, outcome.expected.shaders
-            )
-        },
-    );
-    println!(
-        "{label} {:<17} {:<14} {:<6} frames {:>3} wanted {:>3} published {:>3}  {scene}  \
-         {natives}  pool miss {} home {} steal {} drop {}  picture {:016x}->{:016x}  \
-         us total {total} mean {mean} min {min} max {max}",
-        outcome.page.name,
-        outcome.run.label(),
-        if outcome.fenced { "fenced" } else { "free" },
-        tally.frames,
-        tally.scheduled,
-        outcome.published,
-        tally.pool.alloc_misses,
-        tally.pool.home_hits,
-        tally.pool.steal_hits,
-        tally.pool.put_drops,
-        outcome.picture[0],
-        outcome.picture[1],
-    );
-    if outcome.fenced {
-        println!(
-            "{label} {:<17} {:<14} fenced: the queue was serialised, so these totals are their \
-             own scenario and may not be added to a free total",
-            outcome.page.name,
-            outcome.run.label(),
-        );
-    }
-}
-
-/// Every assertion this harness makes. Each names the thing a run claims to
-/// measure; none of them is about a duration.
+/// Check the declared frame, input, motion and completion evidence.
 fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
     let page = outcome.page;
     let run = outcome.run.label();
@@ -370,7 +359,6 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
 /// the unmeasured ones are printed rather than asserted away; what is asserted
 /// is that every measured page is one the gallery really has, or the harness's
 /// own, and that it compiles.
-#[kithara::test]
 fn the_page_table_is_pinned_to_the_gallery() {
     let fixture = Fixture::default();
     let tabs = sections::pages();
@@ -407,3 +395,277 @@ fn the_page_table_is_pinned_to_the_gallery() {
         );
     }
 }
+
+fn gallery_case_count() -> usize {
+    consts::PAGES
+        .iter()
+        .map(|page| {
+            usize::from(Vec::<Run>::from(page.program).len()) * 2 * if page.fenced { 2 } else { 1 }
+        })
+        .sum()
+}
+
+fn gallery_case(mut index: usize) -> (usize, Host, Run, bool) {
+    for (page_index, page) in consts::PAGES.iter().enumerate() {
+        for host in [Host::Immediate, Host::Retained] {
+            for run in Vec::<Run>::from(page.program) {
+                for fenced in [false, true] {
+                    if fenced && !page.fenced {
+                        continue;
+                    }
+                    if index == 0 {
+                        return (page_index, host, run, fenced);
+                    }
+                    index -= 1;
+                }
+            }
+        }
+    }
+    panic!("unknown gallery case {index}")
+}
+
+struct GalleryWork {
+    driver: Box<dyn PageHost>,
+    host: Host,
+    page: &'static Page,
+    run: Run,
+    fenced: bool,
+    expected: Natives,
+    picture_before: u64,
+    reading_before: Option<u64>,
+    tally: Option<Tally>,
+}
+
+impl GalleryWork {
+    fn run(&mut self) {
+        self.tally = Some(frames(
+            self.driver.as_mut(),
+            self.page,
+            self.run,
+            self.fenced,
+        ));
+    }
+
+    fn teardown(&mut self) {
+        let outcome = Outcome {
+            page: self.page,
+            run: self.run,
+            tally: self.tally.take().expect("gallery tally"),
+            expected: self.expected,
+            picture: [self.picture_before, self.driver.picture()],
+            drawn_as: self.driver.drawn_as(),
+            reading: [self.reading_before, self.driver.reading(self.page.moving)],
+            painted: painted(&self.driver.pixels()),
+        };
+        let baseline = match self.run {
+            Run::Wheels(count) if count > 0 => Some(
+                measure(
+                    Rc::new(Fixture::default()),
+                    self.page,
+                    Run::Wheels(0),
+                    self.expected,
+                    shared_gpu(self.host),
+                    false,
+                )
+                .picture[1],
+            ),
+            Run::Moves(count) if count > 0 => Some(
+                measure(
+                    Rc::new(Fixture::default()),
+                    self.page,
+                    Run::Moves(0),
+                    self.expected,
+                    shared_gpu(self.host),
+                    false,
+                )
+                .picture[1],
+            ),
+            _ => None,
+        };
+        prove(self.page.name, &outcome, baseline);
+    }
+}
+
+thread_local! {
+    static ICED_GPU: OnceCell<Rc<RefCell<Gpu>>> = OnceCell::new();
+    static VELLO_GPU: OnceCell<Rc<RefCell<Gpu>>> = OnceCell::new();
+}
+
+fn shared_gpu(host: Host) -> Rc<RefCell<Gpu>> {
+    let cell = match host {
+        Host::Immediate => &ICED_GPU,
+        Host::Retained => &VELLO_GPU,
+    };
+    cell.with(|gpu| {
+        Rc::clone(gpu.get_or_init(|| {
+            Rc::new(RefCell::new(Gpu::try_from(host).unwrap_or_else(|error| {
+                panic!("no host to measure on: {error}")
+            })))
+        }))
+    })
+}
+
+fn page_driver(
+    fixture: Rc<Fixture>,
+    page: &'static Page,
+    run: Run,
+    gpu: Rc<RefCell<Gpu>>,
+) -> Box<dyn PageHost> {
+    let app = PageApp::new(page, run);
+    let mut borrowed = gpu.borrow_mut();
+    match &mut *borrowed {
+        Gpu::Immediate(gpu) => Box::new(Immediate::new(fixture.compiled(page), page, app, gpu)),
+        Gpu::Retained(_) => Box::new(Retained::new(fixture, page, app, Rc::clone(&gpu))),
+    }
+}
+
+fn prepare_gallery(index: usize) -> GalleryWork {
+    load_fonts();
+    let (page_index, host, run, fenced) = gallery_case(index);
+    let page = &consts::PAGES[page_index];
+    let fixture = Rc::new(Fixture::default());
+    let gpu = shared_gpu(host);
+    let expected = leaves(&fixture.compiled(page));
+    let mut driver = page_driver(fixture, page, run, gpu);
+    driver.place_pointer();
+    for _ in 0..3 {
+        driver.frame();
+    }
+    let picture_before = driver.picture();
+    let reading_before = driver.reading(page.moving);
+    GalleryWork {
+        driver,
+        host,
+        page,
+        run,
+        fenced,
+        expected,
+        picture_before,
+        reading_before,
+        tally: None,
+    }
+}
+
+fn teardown_gallery(mut work: GalleryWork) {
+    work.teardown();
+}
+
+#[metabench::benchmark(GALLERY_PERF, "gallery", "case", gungraun_setup = prepare_gallery, gungraun_teardown = teardown_gallery)]
+#[bench::iced_gallery_buttons_plain(0_usize)]
+#[bench::vello_gallery_buttons_plain(1_usize)]
+#[bench::iced_gallery_clock_plain(2_usize)]
+#[bench::vello_gallery_clock_plain(3_usize)]
+#[bench::iced_gallery_table_plain(4_usize)]
+#[bench::vello_gallery_table_plain(5_usize)]
+#[bench::iced_gallery_stress_buckets_8192(6_usize)]
+#[bench::iced_gallery_stress_buckets_4096(7_usize)]
+#[bench::iced_gallery_stress_buckets_1024(8_usize)]
+#[bench::iced_gallery_stress_buckets_256(9_usize)]
+#[bench::vello_gallery_stress_buckets_8192(10_usize)]
+#[bench::vello_gallery_stress_buckets_4096(11_usize)]
+#[bench::vello_gallery_stress_buckets_1024(12_usize)]
+#[bench::vello_gallery_stress_buckets_256(13_usize)]
+#[bench::iced_gallery_vis_plain(14_usize)]
+#[bench::iced_gallery_vis_plain_fenced(15_usize)]
+#[bench::vello_gallery_vis_plain(16_usize)]
+#[bench::vello_gallery_vis_plain_fenced(17_usize)]
+#[bench::iced_gallery_shader_plain(18_usize)]
+#[bench::iced_gallery_shader_plain_fenced(19_usize)]
+#[bench::vello_gallery_shader_plain(20_usize)]
+#[bench::vello_gallery_shader_plain_fenced(21_usize)]
+#[bench::iced_gallery_pivot_wheels_0(22_usize)]
+#[bench::iced_gallery_pivot_wheels_1(23_usize)]
+#[bench::iced_gallery_pivot_wheels_4(24_usize)]
+#[bench::iced_gallery_pivot_wheels_8(25_usize)]
+#[bench::vello_gallery_pivot_wheels_0(26_usize)]
+#[bench::vello_gallery_pivot_wheels_1(27_usize)]
+#[bench::vello_gallery_pivot_wheels_4(28_usize)]
+#[bench::vello_gallery_pivot_wheels_8(29_usize)]
+#[bench::iced_gallery_library2_wheels_0(30_usize)]
+#[bench::iced_gallery_library2_wheels_1(31_usize)]
+#[bench::iced_gallery_library2_wheels_4(32_usize)]
+#[bench::iced_gallery_library2_wheels_8(33_usize)]
+#[bench::vello_gallery_library2_wheels_0(34_usize)]
+#[bench::vello_gallery_library2_wheels_1(35_usize)]
+#[bench::vello_gallery_library2_wheels_4(36_usize)]
+#[bench::vello_gallery_library2_wheels_8(37_usize)]
+#[bench::iced_gallery_table_long_wheels_0(38_usize)]
+#[bench::iced_gallery_table_long_wheels_1(39_usize)]
+#[bench::iced_gallery_table_long_wheels_4(40_usize)]
+#[bench::iced_gallery_table_long_wheels_8(41_usize)]
+#[bench::vello_gallery_table_long_wheels_0(42_usize)]
+#[bench::vello_gallery_table_long_wheels_1(43_usize)]
+#[bench::vello_gallery_table_long_wheels_4(44_usize)]
+#[bench::vello_gallery_table_long_wheels_8(45_usize)]
+#[bench::iced_gallery_tree_wheels_0(46_usize)]
+#[bench::iced_gallery_tree_wheels_1(47_usize)]
+#[bench::iced_gallery_tree_wheels_4(48_usize)]
+#[bench::iced_gallery_tree_wheels_8(49_usize)]
+#[bench::vello_gallery_tree_wheels_0(50_usize)]
+#[bench::vello_gallery_tree_wheels_1(51_usize)]
+#[bench::vello_gallery_tree_wheels_4(52_usize)]
+#[bench::vello_gallery_tree_wheels_8(53_usize)]
+#[bench::iced_gallery_faders_moves_0(54_usize)]
+#[bench::iced_gallery_faders_moves_1(55_usize)]
+#[bench::iced_gallery_faders_moves_4(56_usize)]
+#[bench::iced_gallery_faders_moves_8(57_usize)]
+#[bench::vello_gallery_faders_moves_0(58_usize)]
+#[bench::vello_gallery_faders_moves_1(59_usize)]
+#[bench::vello_gallery_faders_moves_4(60_usize)]
+#[bench::vello_gallery_faders_moves_8(61_usize)]
+#[bench::iced_gallery_objects_plain(62_usize)]
+#[bench::vello_gallery_objects_plain(63_usize)]
+#[bench::iced_gallery_motion_plain(64_usize)]
+#[bench::vello_gallery_motion_plain(65_usize)]
+#[bench::iced_gallery_sprites_plain(66_usize)]
+#[bench::vello_gallery_sprites_plain(67_usize)]
+#[bench::iced_gallery_lottie_plain(68_usize)]
+#[bench::vello_gallery_lottie_plain(69_usize)]
+#[bench::iced_gallery_scene_plain(70_usize)]
+#[bench::vello_gallery_scene_plain(71_usize)]
+#[bench::iced_perf_scroll_vis_wheels_0(72_usize)]
+#[bench::iced_perf_scroll_vis_wheels_1(73_usize)]
+#[bench::iced_perf_scroll_vis_wheels_4(74_usize)]
+#[bench::iced_perf_scroll_vis_wheels_8(75_usize)]
+#[bench::vello_perf_scroll_vis_wheels_0(76_usize)]
+#[bench::vello_perf_scroll_vis_wheels_1(77_usize)]
+#[bench::vello_perf_scroll_vis_wheels_4(78_usize)]
+#[bench::vello_perf_scroll_vis_wheels_8(79_usize)]
+fn native_gallery(mut work: GalleryWork) -> GalleryWork {
+    work.run();
+    work
+}
+
+fn criterion_benchmarks(c: &mut Criterion) {
+    the_page_table_is_pinned_to_the_gallery();
+    let mut group = c.benchmark_group("gallery");
+    group.sample_size(10);
+    for index in 0..gallery_case_count() {
+        let (page_index, host, run, fenced) = gallery_case(index);
+        let page = &consts::PAGES[page_index];
+        let host = match host {
+            Host::Immediate => "iced",
+            Host::Retained => "vello",
+        };
+        let run = match run {
+            Run::Plain => "plain".to_owned(),
+            Run::Buckets(count) => format!("buckets_{count}"),
+            Run::Wheels(count) => format!("wheels_{count}"),
+            Run::Moves(count) => format!("moves_{count}"),
+        };
+        let fenced = if fenced { "_fenced" } else { "" };
+        let identity = format!("{host}_{}_{run}{fenced}", page.name).replace('-', "_");
+        group.bench_function(BenchmarkId::new("case", identity), |b| {
+            let mut work = prepare_gallery(index);
+            b.iter(|| work.run());
+            work.teardown();
+        });
+    }
+    group.finish();
+}
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [GALLERY_PERF],
+    allocator = std::alloc::System,
+);

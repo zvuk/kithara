@@ -17,15 +17,18 @@ use crate::{
 
 /// The retained host: the tree stays mounted, input walks it, and a frame is a
 /// refresh plus a paint pass into a Vello scene.
-pub(crate) struct Retained<'fixture> {
+pub(crate) struct Retained {
     published: Rc<Cell<usize>>,
     reads: Rc<CensusReads>,
-    ui: Ui<'fixture, CensusApp>,
+    // Ui borrows the fixture's resolver and registry. Declare it first so it
+    // is dropped before the owner of those references.
+    ui: Ui<'static, CensusApp>,
+    _fixture: Rc<Fixture>,
     scheduled: bool,
 }
 
-impl<'fixture> Retained<'fixture> {
-    pub(crate) fn new(fixture: &'fixture Fixture, reads: Rc<CensusReads>) -> Self {
+impl Retained {
+    pub(crate) fn new(fixture: Rc<Fixture>, reads: Rc<CensusReads>) -> Self {
         let published = Rc::new(Cell::new(0));
         let app = CensusApp {
             published: Rc::clone(&published),
@@ -34,16 +37,20 @@ impl<'fixture> Retained<'fixture> {
         let size = (u32::from(consts::WIDTH), u32::from(consts::HEIGHT));
         let ui = Ui::new(app, fixture.config(), size, 1.0)
             .unwrap_or_else(|error| panic!("the frame-perf fixture must mount: {error}"));
+        // SAFETY: the fixture is reference-counted and stored in this struct.
+        // Its allocation remains stable, and `ui` is dropped before `fixture`.
+        let ui = unsafe { std::mem::transmute::<Ui<'_, CensusApp>, Ui<'static, CensusApp>>(ui) };
         Self {
             published,
             reads,
             ui,
+            _fixture: fixture,
             scheduled: false,
         }
     }
 }
 
-impl FrameHost for Retained<'_> {
+impl FrameHost for Retained {
     /// The seam the window runner draws through: settle, ask whether the
     /// picture would change, paint. The frame is painted either way here so
     /// there is always a cost to report, and whether it was wanted is

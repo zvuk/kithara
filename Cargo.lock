@@ -6665,7 +6665,6 @@ dependencies = [
  "fieldwork",
  "futures-lite",
  "half",
- "hotpath",
  "iced",
  "iced_renderer",
  "iced_runtime",
@@ -6744,11 +6743,11 @@ name = "kithara-ui-gallery"
 version = "0.0.1-alpha5"
 dependencies = [
  "clap",
+ "criterion",
  "delegate",
  "derive_more",
  "fieldwork",
  "futures-lite",
- "hotpath",
  "iced",
  "iced_renderer",
  "iced_runtime",
@@ -6761,6 +6760,7 @@ dependencies = [
  "kithara-ui-gallery",
  "kurbo 0.12.0",
  "masonry",
+ "metabench",
  "num-traits",
  "ron",
  "serde",

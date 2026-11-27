@@ -1,12 +1,13 @@
 use std::{
+    cell::RefCell,
     collections::hash_map::DefaultHasher,
     hash::{Hash as _, Hasher as _},
+    rc::Rc,
 };
 
-use hotpath::measure_block;
 use kithara_platform::time::Duration;
 use kithara_ui::{
-    app::{Config, Ui},
+    app::Ui,
     draw::Pt,
     interact::{Input, MOUSE, PointerButton, PointerInput, PointerPhase, Scroll},
 };
@@ -16,32 +17,40 @@ use crate::{
     app::PageApp,
     census::{Census, Natives, Pool, Scene},
     fixture::consts,
-    gpu::{RetainedGpu, height, readback_vello, width},
+    gpu::{Gpu, height, readback_vello, width},
+    pages::Fixture,
 };
 
 /// The retained host: the tree stays mounted, input walks it, and a frame is a
 /// refresh, a paint into a Vello scene, and the two native passes around it.
-pub(crate) struct Retained<'a> {
-    gpu: &'a mut RetainedGpu,
+pub(crate) struct Retained {
+    gpu: Rc<RefCell<Gpu>>,
     pointer_at: Pt,
-    ui: Ui<'a, PageApp>,
+    // Ui borrows the fixture's resolver and registry. It is dropped before the
+    // fixture owner declared below.
+    ui: Ui<'static, PageApp>,
+    _fixture: Rc<Fixture>,
     pub(crate) scheduled: bool,
     picture: u64,
 }
 
-impl<'a> Retained<'a> {
+impl Retained {
     pub(crate) fn new(
-        config: Config<'a>,
+        fixture: Rc<Fixture>,
         page: &Page,
         app: PageApp,
-        gpu: &'a mut RetainedGpu,
+        gpu: Rc<RefCell<Gpu>>,
     ) -> Self {
-        let mut ui = Ui::new(app, config, (width(), height()), 1.0)
+        let mut ui = Ui::new(app, fixture.config(), (width(), height()), 1.0)
             .unwrap_or_else(|error| panic!("the page-perf fixture must mount: {error}"));
         page.open(&mut ui);
+        // SAFETY: the fixture is reference-counted and stored in this struct.
+        // Its allocation remains stable, and `ui` is dropped before `_fixture`.
+        let ui = unsafe { std::mem::transmute::<Ui<'_, PageApp>, Ui<'static, PageApp>>(ui) };
         Self {
             gpu,
             ui,
+            _fixture: fixture,
             picture: 0,
             scheduled: false,
             pointer_at: page.pointer_at,
@@ -54,23 +63,15 @@ impl<'a> Retained<'a> {
     /// was wanted is counted separately.
     fn draw(&mut self, fence: bool) -> Census {
         let before = self.ui.draw_pool_stats();
-        measure_block!(
-            "vello.frame",
-            self.ui.frame(Duration::from_millis(consts::STRESS_TICK_MS))
-        );
+        self.ui.frame(Duration::from_millis(consts::STRESS_TICK_MS));
         self.scheduled = self.ui.needs_frame();
-        let frame = measure_block!(
-            "vello.render",
-            self.ui
-                .render()
-                .unwrap_or_else(|error| panic!("the retained host must draw: {error}"))
-        );
+        let frame = self
+            .ui
+            .render()
+            .unwrap_or_else(|error| panic!("the retained host must draw: {error}"));
         let encoding = frame.scene().encoding();
         let scene = Scene {
-            draw_data: encoding.draw_data.len(),
             draw_tags: encoding.draw_tags.len(),
-            path_data: encoding.path_data.len(),
-            transforms: encoding.transforms.len(),
         };
         // The scene is where this host's own drawing ends: the coordinates, what
         // is painted with them, where each is placed, and the counts that say
@@ -92,10 +93,11 @@ impl<'a> Retained<'a> {
             shaders: frame.shaders().len(),
             vis: frame.vis().len(),
         };
-        if fence {
-            self.gpu.fenced_passes(&frame);
-        } else {
-            self.gpu.passes(&frame);
+        let mut gpu = self.gpu.borrow_mut();
+        match &mut *gpu {
+            Gpu::Retained(gpu) if fence => gpu.fenced_passes(&frame),
+            Gpu::Retained(gpu) => gpu.passes(&frame),
+            Gpu::Immediate(_) => panic!("retained page host received an immediate GPU"),
         }
         self.ui.complete_frame();
         Census {
@@ -107,7 +109,7 @@ impl<'a> Retained<'a> {
     }
 }
 
-impl PageHost for Retained<'_> {
+impl PageHost for Retained {
     fn drawn_as(&self) -> &'static str {
         "scene"
     }
@@ -140,7 +142,11 @@ impl PageHost for Retained<'_> {
     }
 
     fn pixels(&mut self) -> Vec<u8> {
-        readback_vello(&self.gpu.device, &self.gpu.queue, &self.gpu.texture)
+        let gpu = self.gpu.borrow();
+        match &*gpu {
+            Gpu::Retained(gpu) => readback_vello(&gpu.device, &gpu.queue, &gpu.texture),
+            Gpu::Immediate(_) => panic!("retained page host received an immediate GPU"),
+        }
     }
 
     fn place_pointer(&mut self) {
@@ -163,10 +169,6 @@ impl PageHost for Retained<'_> {
             Some(at),
             1,
         )));
-    }
-
-    fn published(&self) -> usize {
-        self.ui.app().published
     }
 
     fn reading(&self, endpoint: Option<&str>) -> Option<u64> {
