@@ -59,9 +59,7 @@ async fn progressive_analysis_preserves_consumed_audio_and_explicit_seek_lands_a
         .expect("known media origin");
     assert_eq!(snapshot.track.position, previous.position - origin);
     let placements = rig.decks[0].observe(|observation| observation.placements.len());
-    let kithara::play::ArtifactSource::Value(authored) = rig.provider_grid(0) else {
-        panic!("materialized authored grid");
-    };
+    let authored = rig.provider_grid(0);
     let tolerance = 2.0 * f64::from(LinkConfig::default().epsilon());
     for (revision, shift, beats) in [(2, 0.125, 12), (3, 0.06, 16), (4, 0.18, 20), (5, 0.0, 24)] {
         let mut raw = authored.as_raw().clone();
@@ -171,9 +169,7 @@ async fn progressive_grid_refinement_preserves_audible_phase(
         let lead = u64::try_from(i64::from(entry)).expect("future entry") - rig.host.position();
         let warm = usize::try_from(lead).expect("short entry lead") + 2 * second;
         let _ = rig.capture_frames(case, warm, 128).await;
-        let kithara::play::ArtifactSource::Value(authored) = rig.provider_grid(0) else {
-            panic!("materialized authored grid");
-        };
+        let authored = rig.provider_grid(0);
         let sounding = rig.decks[0].track_snapshot(item).expect("playing track");
         assert!(sounding.track.position > Duration::from_millis(1500));
         rig.request_sync(case).await;
@@ -343,9 +339,7 @@ async fn a_manual_seek_replaces_an_applied_source_programme_with_the_same_tail_s
     .await;
     let item = rig.decks[0].current().expect("real loaded track").id;
     let target = rig.decks[0].id();
-    let kithara::play::ArtifactSource::Value(authored) = rig.provider_grid(0) else {
-        panic!("materialized source grid");
-    };
+    let authored = rig.provider_grid(0);
     let mut raw = authored.as_raw().clone();
     raw.revision += 1;
     raw.meter = None;

@@ -82,9 +82,16 @@ impl BodyStream {
     /// fetch), which is the single owner of stall detection — so this
     /// wrapper only races the body against the per-fetch cancel and never
     /// imposes a second, conflicting idle timer.
-    pub(super) fn wrap_http(byte_stream: ByteStream, cancel: CancelGroup) -> Self {
+    /// Received bytes past `limit` end the stream with
+    /// [`NetError::TooLarge`], so a body without a declared length is held to
+    /// the same bound as one with it.
+    pub(super) fn wrap_http(
+        byte_stream: ByteStream,
+        cancel: CancelGroup,
+        limit: Option<u64>,
+    ) -> Self {
         Self {
-            inner: wrap_with_cancel(byte_stream, cancel),
+            inner: wrap_with_cancel(byte_stream, cancel, limit),
         }
     }
 
@@ -122,18 +129,26 @@ impl Stream for BodyStream {
 struct WrapState {
     stream: ByteStream,
     cancel: CancelGroup,
+    limit: Option<u64>,
+    received: u64,
     done: bool,
 }
 
-/// Wrap a [`ByteStream`] with per-chunk cancellation. The idle/stall
-/// timeout (and its retry/resume) is owned by the net crate's resilient
-/// body one layer down, so there is no second idle timer here — only the
-/// per-fetch cancel races the body.
-fn wrap_with_cancel(byte_stream: ByteStream, cancel: CancelGroup) -> InnerStream {
+/// Wrap a [`ByteStream`] with per-chunk cancellation and the request's byte
+/// limit. The idle/stall timeout (and its retry/resume) is owned by the net
+/// crate's resilient body one layer down, so there is no second idle timer
+/// here — only the per-fetch cancel races the body.
+fn wrap_with_cancel(
+    byte_stream: ByteStream,
+    cancel: CancelGroup,
+    limit: Option<u64>,
+) -> InnerStream {
     Box::pin(stream::unfold(
         WrapState {
             cancel,
+            limit,
             stream: byte_stream,
+            received: 0,
             done: false,
         },
         |mut state| async {
@@ -148,7 +163,23 @@ fn wrap_with_cancel(byte_stream: ByteStream, cancel: CancelGroup) -> InnerStream
                 },
                 c = state.stream.next() => c,
             };
-            chunk.map(|item| (item, state))
+            let item = match chunk? {
+                Ok(bytes) => {
+                    state.received += bytes.len() as u64;
+                    match state.limit {
+                        Some(limit) if state.received > limit => {
+                            state.done = true;
+                            Err(NetError::TooLarge {
+                                bytes: state.received,
+                                limit,
+                            })
+                        }
+                        _ => Ok(bytes),
+                    }
+                }
+                Err(error) => Err(error),
+            };
+            Some((item, state))
         },
     ))
 }

@@ -116,6 +116,16 @@ where
         self.inner.set_retained();
         self
     }
+
+    delegate::delegate! {
+        to self.inner {
+            /// Wait until the writer this reader joined lets go of the
+            /// resource, committed or not; a reader that joined no writer
+            /// returns at once. Acquire again afterwards: the store then hands
+            /// out the stored resource or a fresh writer.
+            pub async fn writer_released(&self);
+        }
+    }
 }
 
 impl<W, L> LeaseWriter<CachedWriter<W>, L>

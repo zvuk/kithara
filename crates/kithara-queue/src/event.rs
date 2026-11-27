@@ -69,6 +69,13 @@ pub enum QueueEvent {
     TrackMetadataChanged {
         id: TrackId,
     },
+    /// A track's analysis read state changed: the read of its document
+    /// began, was answered with the analysis, or failed, or the source it
+    /// changed to requests no document. The entry's
+    /// [`TrackEntry::analysis`](crate::TrackEntry::analysis) holds the state.
+    TrackAnalysisChanged {
+        id: TrackId,
+    },
     /// The currently playing track changed.
     CurrentTrackChanged {
         id: Option<TrackId>,

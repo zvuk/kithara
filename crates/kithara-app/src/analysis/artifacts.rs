@@ -1,17 +1,12 @@
 use kithara::{
     analysis::{AnalysisToken, BeatGridModel, MusicalKey, TrackAnalysis, Waveform},
     link::GridRefusal,
-    platform::sync::Arc,
 };
 
-use super::supply::{Prepared, Supply};
-
-/// Identity of an artifact a publication carries. A supplied artifact is
-/// identified by the value the caller handed over, which never changes under
-/// the track; an analysed one by the pass revision that produced it.
+/// Identity of an artifact a publication carries: the pass revision that
+/// produced it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ArtifactId {
-    Supplied(usize),
     Analysed(AnalysisToken, u64),
 }
 
@@ -23,74 +18,39 @@ pub(crate) enum GridState<'a> {
     Refused(GridRefusal),
 }
 
-/// One track's published artifacts, whatever their origin: a beat grid or a
-/// waveform the caller supplied, a local analysis result, or one of each.
-///
-/// A consumer asks for an artifact, not for where it came from. A prepared
-/// value outranks an analysed one for the same artifact: analysis is only ever
-/// opened for what no prepared value covers, so the two cannot disagree.
+/// One track's published artifacts: its local analysis result, and whether
+/// the pass that was to produce it failed.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TrackArtifacts {
     analysis: Option<TrackAnalysis>,
-    prepared: Prepared,
     pass_failed: bool,
 }
 
 impl TrackArtifacts {
-    pub(crate) fn new(
-        analysis: Option<TrackAnalysis>,
-        prepared: Prepared,
-        pass_failed: bool,
-    ) -> Self {
+    pub(crate) const fn new(analysis: Option<TrackAnalysis>, pass_failed: bool) -> Self {
         Self {
             analysis,
-            prepared,
             pass_failed,
         }
     }
 
     delegate::delegate! {
         to self.analysis {
-            /// The local analysis result, when a pass produced one. Facts that belong
-            /// to the pass itself — coverage, extent, what it settled on — are read
-            /// from here; artifacts are read from this type instead, which does not
-            /// care which origin served them.
+            /// The local analysis result, when a pass produced one.
             #[call(as_ref)]
             pub(crate) const fn analysis(&self) -> Option<&TrackAnalysis>;
             /// The beat grid to paint and to clock against.
-            #[expr(Self::grid_from($, &self.prepared))]
+            #[expr($.and_then(TrackAnalysis::grid))]
             #[call(as_ref)]
             pub(crate) fn grid(&self) -> Option<&BeatGridModel>;
-            /// The track's key: the supplied one, else the analysed one.
-            #[expr(Self::key_from($, &self.prepared))]
+            /// The track's analysed key.
+            #[expr(key_of($))]
             #[call(as_ref)]
             pub(crate) fn key(&self) -> Option<MusicalKey>;
-        }
-    }
-
-    pub(super) fn grid_from<'a>(
-        analysis: Option<&'a TrackAnalysis>,
-        prepared: &'a Prepared,
-    ) -> Option<&'a BeatGridModel> {
-        prepared
-            .beat_grid
-            .value()
-            .map(Arc::as_ref)
-            .or_else(|| analysis.and_then(TrackAnalysis::grid))
-    }
-
-    /// The track's key: the supplied one, else the analysed one while nothing
-    /// was supplied.
-    pub(super) fn key_from(
-        analysis: Option<&TrackAnalysis>,
-        prepared: &Prepared,
-    ) -> Option<MusicalKey> {
-        match &prepared.key {
-            Supply::Ready(key) => Some(**key),
-            Supply::Missing => analysis
-                .and_then(TrackAnalysis::key)
-                .map(|estimate| estimate.key()),
-            Supply::Pending | Supply::Failed => None,
+            /// The waveform to draw.
+            #[expr($.and_then(TrackAnalysis::waveform))]
+            #[call(as_ref)]
+            pub(crate) fn waveform(&self) -> Option<&Waveform>;
         }
     }
 
@@ -101,55 +61,38 @@ impl TrackArtifacts {
                 reason: reason.to_owned(),
             })
         };
-        match &self.prepared.beat_grid {
-            Supply::Ready(grid) => GridState::Ready(grid.as_ref()),
-            Supply::Pending => GridState::Pending,
-            Supply::Failed => refused("the supplied beat grid did not load"),
-            Supply::Missing => match self.analysis.as_ref().and_then(TrackAnalysis::grid) {
-                Some(grid) => GridState::Ready(grid),
-                None if self.pass_failed => refused("the analysis pass failed"),
-                None if self
-                    .analysis
-                    .as_ref()
-                    .is_some_and(TrackAnalysis::is_settled) =>
-                {
-                    refused("the analysis found no beat grid")
-                }
-                None => GridState::Pending,
-            },
+        match self.grid() {
+            Some(grid) => GridState::Ready(grid),
+            None if self.pass_failed => refused("the analysis pass failed"),
+            None if self
+                .analysis
+                .as_ref()
+                .is_some_and(TrackAnalysis::is_settled) =>
+            {
+                refused("the analysis found no beat grid")
+            }
+            None => GridState::Pending,
         }
-    }
-
-    /// The waveform to draw.
-    pub(crate) fn waveform(&self) -> Option<&Waveform> {
-        self.prepared
-            .waveform
-            .value()
-            .map(Arc::as_ref)
-            .or_else(|| self.analysis.as_ref().and_then(TrackAnalysis::waveform))
     }
 
     /// What names the waveform this publication draws.
     pub(crate) fn waveform_id(&self) -> Option<ArtifactId> {
-        self.prepared.waveform.value().map(supplied).or_else(|| {
-            self.analysis
-                .as_ref()
-                .filter(|analysis| analysis.waveform().is_some())
-                .map(analysed)
-        })
+        self.analysis
+            .as_ref()
+            .filter(|analysis| analysis.waveform().is_some())
+            .map(|analysis| ArtifactId::Analysed(analysis.token().clone(), analysis.revision()))
     }
 }
 
-fn supplied<T>(value: &Arc<T>) -> ArtifactId {
-    ArtifactId::Supplied(Arc::as_ptr(value).cast::<()>() as usize)
-}
-
-fn analysed(analysis: &TrackAnalysis) -> ArtifactId {
-    ArtifactId::Analysed(analysis.token().clone(), analysis.revision())
+/// The key an analysis heard, when it heard one.
+pub(super) fn key_of(analysis: Option<&TrackAnalysis>) -> Option<MusicalKey> {
+    analysis
+        .and_then(TrackAnalysis::key)
+        .map(|estimate| estimate.key())
 }
 
 impl From<TrackAnalysis> for TrackArtifacts {
     fn from(analysis: TrackAnalysis) -> Self {
-        Self::new(Some(analysis), Prepared::default(), false)
+        Self::new(Some(analysis), false)
     }
 }

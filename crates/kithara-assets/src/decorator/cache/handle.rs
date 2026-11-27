@@ -3,7 +3,7 @@
 use std::{ops::Range, path::Path};
 
 use dashmap::DashSet;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, sync::Arc, tokio::sync::watch};
 use kithara_storage::{ResourceStatus, StorageResult, WaitOutcome};
 
 use crate::{
@@ -12,6 +12,47 @@ use crate::{
 };
 
 pub(super) type EnforceCapacity = Arc<dyn Fn() + Send + Sync>;
+
+/// The "writer live" marker of one generation, held by its writer. Dropping
+/// it is the only change it ever carries: every [`WriterWatch`] of the
+/// generation then reads the writer as gone, and only then are the waiting
+/// readers woken.
+pub(super) struct WriterLive {
+    _sender: watch::Sender<()>,
+}
+
+/// A view of one generation's [`WriterLive`]: the cache entry reads whether
+/// the writer is still live, and a reader that joined it waits for its end.
+#[derive(Clone)]
+pub(super) struct WriterWatch(watch::Receiver<()>);
+
+impl std::fmt::Debug for WriterWatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriterWatch")
+            .field("live", &self.is_live())
+            .finish()
+    }
+}
+
+impl WriterLive {
+    /// A live marker and the watch its generation is seen through.
+    pub(super) fn new() -> (Self, WriterWatch) {
+        let (sender, watch) = watch::channel(());
+        (Self { _sender: sender }, WriterWatch(watch))
+    }
+}
+
+impl WriterWatch {
+    /// The watch of a generation no writer holds.
+    pub(super) fn none() -> Self {
+        WriterLive::new().1
+    }
+
+    /// Whether the generation's writer still holds it.
+    pub(super) fn is_live(&self) -> bool {
+        self.0.has_changed().is_ok()
+    }
+}
 
 #[derive(Clone)]
 struct CacheHandle<T> {
@@ -27,7 +68,7 @@ struct CacheHandle<T> {
 #[debug("{:?}", handle.inner)]
 pub struct CachedWriter<W> {
     handle: CacheHandle<W>,
-    _writing: Arc<()>,
+    _live: WriterLive,
 }
 
 /// Reader (Ready) wrapper returned by [`super::CachedAssets`]. Cheap to clone.
@@ -37,6 +78,7 @@ pub struct CachedWriter<W> {
 #[debug("{:?}", handle.inner)]
 pub struct CachedReader<R> {
     handle: CacheHandle<R>,
+    writer: WriterWatch,
 }
 
 impl<T> CacheHandle<T> {
@@ -65,11 +107,11 @@ impl<W> CachedWriter<W> {
         key: ResourceKey,
         inner: W,
         enforce_capacity: Option<EnforceCapacity>,
-        writing: Arc<()>,
+        live: WriterLive,
     ) -> Self {
         Self {
             handle: CacheHandle::new(pinned, key, inner, enforce_capacity),
-            _writing: writing,
+            _live: live,
         }
     }
 
@@ -92,10 +134,22 @@ impl<R> CachedReader<R> {
         key: ResourceKey,
         inner: R,
         enforce_capacity: Option<EnforceCapacity>,
+        writer: WriterWatch,
     ) -> Self {
         Self {
             handle: CacheHandle::new(pinned, key, inner, enforce_capacity),
+            writer,
         }
+    }
+
+    /// Wait until the writer this reader joined lets go of the resource,
+    /// committed or not; a reader that joined no writer returns at once.
+    /// The writer is gone before this wakes, so an acquire after it gets the
+    /// stored resource or a fresh writer, never the generation that ended.
+    pub async fn writer_released(&self) {
+        let mut watch = self.writer.0.clone();
+        // The marker never sends: its drop is the one change this awaits.
+        let _ = watch.changed().await;
     }
 
     /// Unpin this resource, making it eligible for LRU eviction.
@@ -132,13 +186,14 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
                     key,
                     inner,
                 },
-            _writing,
+            _live,
         } = self;
         let reader = CachedReader::new(
             pinned,
             key,
             inner.commit(final_len)?,
             enforce_capacity.clone(),
+            WriterWatch::none(),
         );
         if let Some(enforce) = enforce_capacity {
             enforce();
@@ -152,6 +207,7 @@ impl<W: WriteSide> WriteSide for CachedWriter<W> {
             self.handle.key.clone(),
             self.handle.inner.reader(),
             self.handle.enforce_capacity.clone(),
+            WriterWatch::none(),
         )
     }
 
@@ -174,7 +230,7 @@ impl<R: ReadSide> ReadSide for CachedReader<R> {
             self.handle.key.clone(),
             self.handle.inner.reactivate()?,
             self.handle.enforce_capacity.clone(),
-            Arc::new(()),
+            WriterLive::new().0,
         ))
     }
 

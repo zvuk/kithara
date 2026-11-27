@@ -1,6 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_command::{Seq, When};
 use kithara_events::TrackId;
+use kithara_platform::time::Duration;
 use kithara_play::{
     Outbox, OutputSnapshot, PlayError, Player, PlayerConfig, Position, Slot, Track, TrackCommand,
     TrackFactory, TrackStatus as PlayingStatus,
@@ -44,6 +45,7 @@ where
         };
         self.navigation.insert(id, self.current);
         self.announce(QueueEvent::TrackAdded { id, index });
+        self.read_analysis(id);
     }
 
     pub(super) fn arm_initial_load(
@@ -411,6 +413,45 @@ where
             load,
         });
         Ok(seq)
+    }
+}
+
+/// The analysis reads of the queue's tracks: started as a track enters the
+/// queue and when a committed source changes its request.
+impl<S, F> Queue<S, F>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    F: TrackFactory,
+{
+    /// Commit `id`'s staged source. A source with another analysis request
+    /// drops the old read and starts its own; the same request keeps the
+    /// state the track has.
+    pub(super) fn commit_staged_source(&mut self, id: TrackId, duration: Option<Duration>) -> bool {
+        let request = self.tracks.analysis_request(id);
+        let changed = self.tracks.commit_source(id, duration);
+        if changed && self.tracks.analysis_request(id) != request {
+            self.read_analysis(id);
+        }
+        changed
+    }
+
+    /// Read `id`'s analysis document for the request its source carries now.
+    /// The read runs beside the track: no load or play waits for it, and no
+    /// load or replay reads it again.
+    pub(super) fn read_analysis(&mut self, id: TrackId) {
+        let Some(read) = self.tracks.begin_analysis(id, &self.shutdown) else {
+            return;
+        };
+        let number = read.number;
+        let started = self
+            .loader
+            .as_ref()
+            .ok_or(QueueError::NoRuntime)
+            .and_then(|loader| loader.read_analysis(read));
+        if let Err(error) = started {
+            warn!(?id, %error, "the track's analysis document cannot be read");
+            self.tracks.place_analysis(id, number, None);
+        }
     }
 }
 
@@ -1209,5 +1250,578 @@ mod tests {
             events.try_recv().is_err(),
             "config failure must not emit Loading"
         );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod analysis_tests {
+    use std::num::NonZeroU32;
+
+    use axum::{Router, http::StatusCode, routing::get};
+    use kithara_analysis::{AnalysisToken, TrackAnalysis};
+    use kithara_assets::AssetStore;
+    use kithara_audio::{AudioObserver, AudioObserverSlot};
+    use kithara_download::{Downloader, DownloaderConfig};
+    use kithara_events::EventReceiver;
+    use kithara_net::{HttpClient, NetOptions};
+    use kithara_platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        time::{WallInstant, sleep},
+        tokio::{runtime::Handle, sync::watch},
+    };
+    use kithara_play::{
+        ArtifactRequest, ArtifactState, ResourceConfig, ResourceSrc, mock, mock::DeckRig,
+    };
+    use kithara_test_utils::{TestHttpServer, kithara};
+
+    use super::*;
+    use crate::{
+        loading::LoadReport,
+        queue::{
+            QueueCommand,
+            state::tests::{WorkerOwner, apply, make_queue, make_store, with_outbox, worker_owner},
+        },
+        test_pools::{TestPools, pools},
+    };
+
+    fn document(revision: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        TrackAnalysis::builder()
+            .token(AnalysisToken::from("served"))
+            .source_sample_rate(NonZeroU32::new(44_100).expect("BUG: non-zero rate"))
+            .media_origin(Duration::ZERO)
+            .extent(44_100)
+            .settled(true)
+            .revision(revision)
+            .build()
+            .write_to(&mut bytes)
+            .expect("BUG: a small snapshot encodes");
+        bytes
+    }
+
+    /// A one-way signal the tests and the served routes give each other.
+    #[derive(Clone)]
+    struct Latch(watch::Sender<bool>);
+
+    impl Latch {
+        fn new() -> Self {
+            Self(watch::channel(false).0)
+        }
+
+        fn open(&self) {
+            self.0.send_replace(true);
+        }
+
+        async fn opened(&self) {
+            let mut rx = self.0.subscribe();
+            assert!(
+                rx.wait_for(|open| *open).await.is_ok(),
+                "BUG: the latch outlives its waiters"
+            );
+        }
+    }
+
+    /// Analysis documents served for as long as the server lives: `/a`, `/b`
+    /// and `/c` answer at once with revisions 1, 2 and 3, `/held` answers
+    /// revision 9 once released, and `/missing` is an error.
+    struct Served {
+        server: TestHttpServer,
+        seen: Arc<Mutex<Vec<&'static str>>>,
+        arrived: Latch,
+        release: Latch,
+    }
+
+    impl Served {
+        async fn new() -> Self {
+            let seen: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+            let (arrived, release) = (Latch::new(), Latch::new());
+            let at_once = |name: &'static str, revision: u64| {
+                let seen = Arc::clone(&seen);
+                get(move || {
+                    seen.lock().push(name);
+                    async move { document(revision) }
+                })
+            };
+            let held = {
+                let (seen, arrived, release) =
+                    (Arc::clone(&seen), arrived.clone(), release.clone());
+                get(move || {
+                    seen.lock().push("held");
+                    arrived.open();
+                    let release = release.clone();
+                    async move {
+                        release.opened().await;
+                        document(9)
+                    }
+                })
+            };
+            let missing = {
+                let seen = Arc::clone(&seen);
+                get(move || {
+                    seen.lock().push("missing");
+                    async { StatusCode::NOT_FOUND }
+                })
+            };
+            let router = Router::new()
+                .route("/a", at_once("a", 1))
+                .route("/b", at_once("b", 2))
+                .route("/c", at_once("c", 3))
+                .route("/held", held)
+                .route("/missing", missing);
+            Self {
+                server: TestHttpServer::new(router).await,
+                seen,
+                arrived,
+                release,
+            }
+        }
+
+        fn url(&self, path: &str) -> ResourceSrc {
+            ResourceSrc::Url(self.server.url(path))
+        }
+
+        fn hits(&self, name: &str) -> usize {
+            self.seen
+                .lock()
+                .iter()
+                .filter(|seen| **seen == name)
+                .count()
+        }
+
+        async fn arrived(&self) {
+            self.arrived.opened().await;
+        }
+    }
+
+    fn downloader(max_concurrent: usize) -> Downloader {
+        let client = HttpClient::new(NetOptions::default(), pools(), CancelToken::never());
+        Downloader::new(
+            DownloaderConfig::for_client(client)
+                .runtime(Handle::current())
+                .max_concurrent(max_concurrent)
+                .build(),
+        )
+    }
+
+    /// A track at `audio` whose settings request `analysis`, if any.
+    fn source(
+        audio: &str,
+        analysis: Option<ResourceSrc>,
+        store: &AssetStore<TestPools>,
+        downloader: &Downloader,
+    ) -> TrackSource<TestPools> {
+        ResourceConfig::for_src(ResourceSrc::parse(audio).expect("BUG: valid audio URL"))
+            .store(store.clone())
+            .downloader(downloader.clone())
+            .maybe_analysis(analysis.map(|src| ArtifactRequest { src, headers: None }))
+            .build()
+            .into()
+    }
+
+    fn analysis(queue: &Queue<TestPools>, id: TrackId) -> ArtifactState<TrackAnalysis> {
+        queue
+            .tracks
+            .records()
+            .iter()
+            .find(|record| record.id == id)
+            .expect("BUG: the track is queued")
+            .entry()
+            .analysis()
+            .clone()
+    }
+
+    fn revision(state: &ArtifactState<TrackAnalysis>) -> Option<u64> {
+        match state {
+            ArtifactState::Ready(analysis) => Some(analysis.revision()),
+            ArtifactState::NotRequested | ArtifactState::Loading | ArtifactState::Failed => None,
+        }
+    }
+
+    /// Every analysis change the queue announced on `events` since the last
+    /// call; the queue announces what it recorded when it publishes.
+    fn analysis_changes(
+        queue: &mut Queue<TestPools>,
+        events: &mut EventReceiver<QueueEvent>,
+    ) -> Vec<TrackId> {
+        queue.publish();
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|envelope| match envelope.event {
+                QueueEvent::TrackAnalysisChanged { id } => Some(id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The reports the queue's tasks posted, as they arrive.
+    #[kithara::flash(io)]
+    #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
+    async fn next_reports(queue: &mut Queue<TestPools>) -> Vec<QueueCommand<TestPools>> {
+        let deadline = WallInstant::now() + Duration::from_secs(5);
+        loop {
+            hang_tick!();
+            let posts: Vec<_> = queue.mailbox.drain().map(|post| post.command).collect();
+            if !posts.is_empty() {
+                hang_reset!();
+                return posts;
+            }
+            assert!(WallInstant::now() < deadline, "no report arrived");
+            sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    /// Apply the queue's reports until none of `ids` is loading.
+    async fn answered(queue: &mut Queue<TestPools>, rig: &mut DeckRig<TestPools>, ids: &[TrackId]) {
+        while ids
+            .iter()
+            .any(|id| matches!(analysis(queue, *id), ArtifactState::Loading))
+        {
+            for command in next_reports(queue).await {
+                apply(queue, rig, command).expect("BUG: a report applies");
+            }
+        }
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn a_track_added_with_a_request_is_read_before_any_play(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let served = Served::new().await;
+        let (store, downloader) = (make_store(), downloader(5));
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
+        let mut events = queue.bus.subscribe::<QueueEvent>();
+        let id = TrackId(1);
+
+        queue.insert_entry(
+            id,
+            source(
+                "https://audio.example/a.mp3",
+                Some(served.url("/a")),
+                &store,
+                &downloader,
+            ),
+            Position::ZERO,
+            Placement::Append,
+        );
+        assert!(
+            matches!(analysis(&queue, id), ArtifactState::Loading),
+            "the read starts as the track is added, before any load"
+        );
+        answered(&mut queue, &mut rig, &[id]).await;
+
+        assert_eq!(revision(&analysis(&queue, id)), Some(1));
+        assert_eq!(
+            analysis_changes(&mut queue, &mut events),
+            [id, id],
+            "loading, then ready"
+        );
+        assert!(queue.current.is_none(), "nothing was played");
+    }
+
+    /// The document belongs to the track's request, not to a load: loading
+    /// the track again and again reads nothing.
+    #[kithara::test(native, tokio)]
+    async fn loading_a_read_track_again_requests_nothing(#[by_ref] worker_owner: &WorkerOwner) {
+        let served = Served::new().await;
+        let (store, downloader) = (make_store(), downloader(5));
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
+        let id = TrackId(1);
+        let track = source(
+            "https://audio.example/a.mp3",
+            Some(served.url("/a")),
+            &store,
+            &downloader,
+        );
+        queue.insert_entry(id, track.clone(), Position::ZERO, Placement::Append);
+        answered(&mut queue, &mut rig, &[id]).await;
+        let output = mock::output(None).get();
+        let observer = || Box::new(AudioObserverSlot::default().relay()) as Box<dyn AudioObserver>;
+
+        for _ in 0..2 {
+            let loader = queue
+                .loader
+                .as_ref()
+                .expect("BUG: the queue prepares loads");
+            drop(
+                loader
+                    .start(id, track.clone(), observer(), &output)
+                    .expect("BUG: the track loads"),
+            );
+        }
+
+        assert_eq!(served.hits("a"), 1);
+        assert_eq!(revision(&analysis(&queue, id)), Some(1));
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn a_track_without_a_request_is_not_requested(#[by_ref] worker_owner: &WorkerOwner) {
+        let (mut queue, _rig) = make_queue(&worker_owner.0);
+        let mut events = queue.bus.subscribe::<QueueEvent>();
+        let id = TrackId(1);
+
+        queue.insert_entry(
+            id,
+            "https://audio.example/a.mp3".into(),
+            Position::ZERO,
+            Placement::Append,
+        );
+
+        assert!(matches!(analysis(&queue, id), ArtifactState::NotRequested));
+        assert!(analysis_changes(&mut queue, &mut events).is_empty());
+    }
+
+    /// A failed read is final and leaves playback alone: the track is failed
+    /// for its analysis and still loads.
+    #[kithara::test(native, tokio)]
+    async fn a_failed_read_leaves_the_track_playable(#[by_ref] worker_owner: &WorkerOwner) {
+        let served = Served::new().await;
+        let (store, downloader) = (make_store(), downloader(5));
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
+        let id = TrackId(1);
+        let track = source(
+            "https://audio.example/a.mp3",
+            Some(served.url("/missing")),
+            &store,
+            &downloader,
+        );
+        queue.insert_entry(id, track.clone(), Position::ZERO, Placement::Append);
+
+        answered(&mut queue, &mut rig, &[id]).await;
+
+        assert!(matches!(analysis(&queue, id), ArtifactState::Failed));
+        assert!(
+            !matches!(queue.tracks.status(id), Some(TrackStatus::Failed(_))),
+            "a failed analysis read failed the track"
+        );
+        let loader = queue
+            .loader
+            .as_ref()
+            .expect("BUG: the queue prepares loads");
+        assert!(
+            loader
+                .start(
+                    id,
+                    track,
+                    Box::new(AudioObserverSlot::default().relay()),
+                    &mock::output(None).get(),
+                )
+                .is_ok(),
+            "a failed analysis read must not stop the track from loading"
+        );
+        assert_eq!(
+            served.hits("missing"),
+            1,
+            "a failed read is not tried again"
+        );
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn removing_a_track_mid_download_cancels_the_read(#[by_ref] worker_owner: &WorkerOwner) {
+        let served = Served::new().await;
+        let (store, downloader) = (make_store(), downloader(5));
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
+        let mut events = queue.bus.subscribe::<QueueEvent>();
+        let id = TrackId(1);
+        queue.insert_entry(
+            id,
+            source(
+                "https://audio.example/a.mp3",
+                Some(served.url("/held")),
+                &store,
+                &downloader,
+            ),
+            Position::ZERO,
+            Placement::Append,
+        );
+        served.arrived().await;
+        drop(analysis_changes(&mut queue, &mut events));
+
+        with_outbox(&mut queue, &mut rig, |queue, _, out| {
+            queue.remove_entry(id, None, out)
+        })
+        .expect("BUG: the queued track is removed");
+        let reports = next_reports(&mut queue).await;
+
+        assert!(
+            matches!(
+                reports.as_slice(),
+                [QueueCommand::Load(LoadReport::Analysis {
+                    analysis: None,
+                    ..
+                })]
+            ),
+            "the download was not cancelled: it answered while the server still held it"
+        );
+        for command in reports {
+            apply(&mut queue, &mut rig, command).expect("BUG: a report applies");
+        }
+        assert!(
+            analysis_changes(&mut queue, &mut events).is_empty(),
+            "a removed track's read placed its answer"
+        );
+        served.release.open();
+    }
+
+    /// Closing the queue cancels the reads in flight, and each track still
+    /// in the queue ends failed for its analysis rather than loading forever.
+    #[kithara::test(native, tokio)]
+    async fn closing_the_queue_fails_the_reads_in_flight(#[by_ref] worker_owner: &WorkerOwner) {
+        let served = Served::new().await;
+        let (store, downloader) = (make_store(), downloader(5));
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
+        let mut events = queue.bus.subscribe::<QueueEvent>();
+        let id = TrackId(1);
+        queue.insert_entry(
+            id,
+            source(
+                "https://audio.example/a.mp3",
+                Some(served.url("/held")),
+                &store,
+                &downloader,
+            ),
+            Position::ZERO,
+            Placement::Append,
+        );
+        served.arrived().await;
+        drop(analysis_changes(&mut queue, &mut events));
+
+        with_outbox(&mut queue, &mut rig, |queue, _, out| {
+            queue.close_tracks(out)
+        })
+        .expect("BUG: the queue closes");
+
+        assert!(matches!(analysis(&queue, id), ArtifactState::Failed));
+        assert_eq!(analysis_changes(&mut queue, &mut events), [id]);
+        served.release.open();
+    }
+
+    /// answer is then past news, and states the new read.
+    #[kithara::test(native, tokio)]
+    async fn a_source_with_another_request_drops_the_old_read(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let served = Served::new().await;
+        let (store, downloader) = (make_store(), downloader(5));
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
+        let id = TrackId(1);
+        queue.insert_entry(
+            id,
+            source(
+                "https://audio.example/a.mp3",
+                Some(served.url("/held")),
+                &store,
+                &downloader,
+            ),
+            Position::ZERO,
+            Placement::Append,
+        );
+        served.arrived().await;
+
+        queue
+            .tracks
+            .stage_source(
+                id,
+                source(
+                    "https://audio.example/b.mp3",
+                    Some(served.url("/b")),
+                    &store,
+                    &downloader,
+                ),
+                Position::ZERO,
+            )
+            .expect("BUG: the track takes a replacement");
+        assert!(queue.commit_staged_source(id, None));
+        answered(&mut queue, &mut rig, &[id]).await;
+        served.release.open();
+        let late = document(9);
+        queue.tracks.apply_report(LoadReport::Analysis {
+            id,
+            read: 1,
+            analysis: Some(Arc::new(
+                TrackAnalysis::try_from(late.as_slice()).expect("BUG: the late document reads"),
+            )),
+        });
+
+        assert_eq!(
+            revision(&analysis(&queue, id)),
+            Some(2),
+            "the old read's late answer replaced the new one"
+        );
+    }
+
+    #[kithara::test(native, tokio)]
+    async fn a_source_with_the_same_request_starts_no_read(#[by_ref] worker_owner: &WorkerOwner) {
+        let served = Served::new().await;
+        let (store, downloader) = (make_store(), downloader(5));
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
+        let id = TrackId(1);
+        queue.insert_entry(
+            id,
+            source(
+                "https://audio.example/a.mp3",
+                Some(served.url("/a")),
+                &store,
+                &downloader,
+            ),
+            Position::ZERO,
+            Placement::Append,
+        );
+        answered(&mut queue, &mut rig, &[id]).await;
+        let mut events = queue.bus.subscribe::<QueueEvent>();
+
+        queue
+            .tracks
+            .stage_source(
+                id,
+                source(
+                    "https://audio.example/b.mp3",
+                    Some(served.url("/a")),
+                    &store,
+                    &downloader,
+                ),
+                Position::ZERO,
+            )
+            .expect("BUG: the track takes a replacement");
+        assert!(queue.commit_staged_source(id, None));
+
+        assert_eq!(revision(&analysis(&queue, id)), Some(1));
+        assert!(analysis_changes(&mut queue, &mut events).is_empty());
+        assert!(queue.mailbox.drain().next().is_none(), "a read started");
+        assert_eq!(served.hits("a"), 1);
+    }
+
+    /// Reads past the downloader's admission wait for a free slot; every
+    /// track ends ready.
+    #[kithara::test(native, tokio)]
+    async fn more_tracks_than_the_downloader_admits_all_end_ready(
+        #[by_ref] worker_owner: &WorkerOwner,
+    ) {
+        let served = Served::new().await;
+        let (store, downloader) = (make_store(), downloader(1));
+        let (mut queue, mut rig) = make_queue(&worker_owner.0);
+        let tracks = [
+            (TrackId(1), "/a", 1),
+            (TrackId(2), "/b", 2),
+            (TrackId(3), "/c", 3),
+        ];
+        for (id, path, _) in tracks {
+            queue.insert_entry(
+                id,
+                source(
+                    &format!("https://audio.example/{}.mp3", id.as_u64()),
+                    Some(served.url(path)),
+                    &store,
+                    &downloader,
+                ),
+                Position::ZERO,
+                Placement::Append,
+            );
+        }
+
+        answered(&mut queue, &mut rig, &tracks.map(|(id, ..)| id)).await;
+
+        for (id, _, expected) in tracks {
+            assert_eq!(revision(&analysis(&queue, id)), Some(expected));
+        }
     }
 }

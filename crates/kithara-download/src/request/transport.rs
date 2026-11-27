@@ -48,6 +48,7 @@ impl<'a> RequestContext<'a> {
             range,
             headers,
             validator,
+            max_bytes,
             ..
         } = cmd;
 
@@ -94,8 +95,21 @@ impl<'a> RequestContext<'a> {
             return Err(e);
         }
 
+        if let Some(limit) = max_bytes
+            && let Some(declared) = byte_stream
+                .headers
+                .get("content-length")
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|declared| *declared > limit)
+        {
+            return Err(NetError::TooLarge {
+                bytes: declared,
+                limit,
+            });
+        }
+
         let resp_headers = byte_stream.headers.clone();
-        let body = BodyStream::wrap_http(byte_stream, cancel.clone());
+        let body = BodyStream::wrap_http(byte_stream, cancel.clone(), max_bytes);
         Ok(FetchResponse {
             body,
             headers: resp_headers,

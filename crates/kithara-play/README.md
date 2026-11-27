@@ -72,7 +72,14 @@ For a playlist with crossfade use `kithara-queue`, which drives a player.
 ## Integration
 
 `ResourceConfig` carries source and decoder inputs and per-track buffer
-preferences. `ResourcePrep` binds the worker, session geometry and Warp policy
+preferences. Its `analysis` field is an `ArtifactRequest`: the address of the
+track's analysis document and the headers its download sends, never the
+audio's. `ArtifactFetch::read` stores that document in the track's asset store
+under `AssetResource::Url(<request URL>)` inside the track's own scope: a
+stored document is read without the network, a missing one is downloaded once
+and kept only when it reads, a stored one that no longer reads is removed and
+downloaded again, and concurrent reads share one download.
+`ArtifactState` is what a track knows of the document. `ResourcePrep` binds the worker, session geometry and Warp policy
 and creates a `ResourceLoad`; direct `Resource` readers use source inputs alone.
 `kithara-queue` owns playlist progression and crossfades. The output graph and
 audio device belong to `kithara-host`; the audio-thread deck to `kithara-render`.

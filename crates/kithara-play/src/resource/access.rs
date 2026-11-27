@@ -1,34 +1,32 @@
 use std::num::NonZeroU32;
 
 use kithara_assets::{AssetResource, AssetSource, AssetStore, ResourceKey};
-use kithara_beat::BeatGridModel;
 use kithara_bufpool::HasPool;
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_file::File;
 use kithara_hls::Hls;
-use kithara_key::MusicalKey;
 use kithara_platform::CancelToken;
-use kithara_waveform::Waveform;
 
-use super::{ArtifactFetch, ArtifactSource, ResourceConfig, ResourceSrc, SourceType};
+use super::{ArtifactFetch, ArtifactRequest, ResourceConfig, ResourceSrc, SourceType};
 
 impl<S, B: Default> ResourceConfig<S, B>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    /// The I/O a prepared artifact of this track is read over: the same
-    /// downloader, the same headers policy, and the same cancel epoch as the
-    /// audio. Loading an artifact through this is what keeps a `remove` or a
-    /// reload from publishing a stale document.
+    /// The I/O an artifact document of this track is read over: the same
+    /// downloader, the same asset store scope, and the same headers policy as
+    /// the audio.
     #[must_use]
-    pub const fn artifact_fetch(&self) -> ArtifactFetch<'_> {
-        ArtifactFetch::new(
-            &self.src,
-            self.downloader.as_ref(),
-            self.headers.as_ref(),
-            self.cancel.as_ref(),
-        )
+    pub const fn artifact_fetch(&self) -> ArtifactFetch<'_, S, B> {
+        ArtifactFetch::new(self)
+    }
+
+    /// Where this track's analysis document is read from, when its settings
+    /// request one.
+    #[must_use]
+    pub const fn analysis(&self) -> Option<&ArtifactRequest> {
+        self.analysis.as_ref()
     }
 
     /// Where this track's encoded cover image is read from, when it has one.
@@ -67,12 +65,6 @@ where
         scope.key(resource).map_err(DecodeError::backend)
     }
 
-    /// The prepared beat grid this track was opened with, when it has one.
-    #[must_use]
-    pub const fn beat_grid(&self) -> Option<&ArtifactSource<BeatGridModel>> {
-        self.beat_grid.as_ref()
-    }
-
     /// Event bus attached to this resource, when one was configured.
     #[must_use]
     pub const fn bus(&self) -> Option<&EventBus> {
@@ -102,12 +94,6 @@ where
         self.discriminator.as_deref()
     }
 
-    /// The prepared musical key this track was opened with, when it has one.
-    #[must_use]
-    pub const fn key(&self) -> Option<&ArtifactSource<MusicalKey>> {
-        self.key.as_ref()
-    }
-
     /// Replace the event bus attached to this resource.
     pub fn set_bus(&mut self, bus: EventBus) {
         self.bus = Some(bus);
@@ -133,11 +119,5 @@ where
     #[must_use]
     pub const fn store(&self) -> &AssetStore<S> {
         &self.store
-    }
-
-    /// The prepared waveform this track was opened with, when it has one.
-    #[must_use]
-    pub const fn waveform(&self) -> Option<&ArtifactSource<Waveform>> {
-        self.waveform.as_ref()
     }
 }

@@ -5,7 +5,7 @@ use std::{
 };
 
 use kithara::{
-    analysis::{AnalysisProducer, AnalysisProgress},
+    analysis::{AnalysisDemand, AnalysisFingerprint, AnalysisProducer, AnalysisProgress},
     events::TrackId,
     platform::tokio::{
         self,
@@ -17,7 +17,6 @@ use tracing::{debug, warn};
 
 use super::{
     entry::{Entry, Stage},
-    load::LoadReply,
     service::Owner,
 };
 use crate::{
@@ -40,8 +39,6 @@ pub(super) struct Run {
 /// What woke the owner's one loop.
 enum Woke {
     Unheld(usize),
-    /// An artifact its own source answered for.
-    Load(LoadReply),
     /// The pass in flight published a revision.
     Progress,
     /// The pass in flight is over.
@@ -56,7 +53,6 @@ impl Owner {
         let changed = !matches!(&woke, Woke::Progress);
         match woke {
             Woke::Unheld(index) => self.entries[index].release(),
-            Woke::Load(reply) => self.take_load(reply),
             Woke::Progress => self.publish(),
             Woke::Finished => {
                 self.finish_run();
@@ -130,7 +126,7 @@ impl Owner {
         let seed = entry.value_for(axis);
         if seed
             .as_ref()
-            .is_some_and(|progress| entry.prepared().settled_for(progress, fingerprint))
+            .is_some_and(|progress| settled(progress, fingerprint))
         {
             debug!(
                 ?track_id,
@@ -140,11 +136,11 @@ impl Owner {
             entry.release();
             return None;
         }
-        let demand = entry.prepared().demand(fingerprint);
+        let demand = demand(fingerprint);
         if demand.is_empty() {
             debug!(
                 ?track_id,
-                held, "analysis: every artifact is prepared or published; no pass opened"
+                held, "analysis: this build analyses nothing; no pass opened"
             );
             entry.set_stage(Stage::Ended(axis));
             entry.release();
@@ -232,35 +228,22 @@ impl Owner {
         );
     }
 
-    /// Wait for a subscriber leaving, an artifact read, or the active pass.
-    /// Artifact reads precede pass progress because prepared artifacts remove work.
+    /// Wait for a subscriber leaving or the active pass.
     async fn wake(&mut self) -> Woke {
         let Self {
-            active,
-            replies,
-            entries,
-            ..
+            active, entries, ..
         } = self;
         let activity = async {
             match active {
-                Some(Activity::Running(run)) => tokio::select! {
-                    biased;
-                    Some(reply) = replies.recv() => Woke::Load(reply),
-                    changed = run.rx.changed() => if changed.is_err() {
+                Some(Activity::Running(run)) => {
+                    if run.rx.changed().await.is_err() {
                         Woke::Finished
                     } else {
                         Woke::Progress
-                    },
-                },
-                Some(Activity::Committing(task)) => tokio::select! {
-                    biased;
-                    Some(reply) = replies.recv() => Woke::Load(reply),
-                    result = task => Woke::Committed(result),
-                },
-                None => match replies.recv().await {
-                    Some(reply) => Woke::Load(reply),
-                    None => std::future::pending().await,
-                },
+                    }
+                }
+                Some(Activity::Committing(task)) => Woke::Committed(task.await),
+                None => std::future::pending().await,
             }
         };
         tokio::select! {
@@ -291,4 +274,26 @@ async fn closed_publication(entries: &[Entry]) -> usize {
 fn deliver(queue: &AppQueueControl, track_id: TrackId) -> impl FnOnce(AnalysisProducer) {
     let queue = queue.clone();
     move |producer| queue.attach_observer(track_id, producer)
+}
+
+/// The artifacts a pass is opened for: everything this build analyses. A
+/// checkpoint does not narrow this: a resumed pass continues the very
+/// artifacts it was opened for.
+fn demand(fingerprint: &AnalysisFingerprint) -> AnalysisDemand {
+    let mut demand = AnalysisDemand::empty();
+    demand.set(AnalysisDemand::BEAT, fingerprint.beat().is_some());
+    demand.set(AnalysisDemand::WAVEFORM, fingerprint.waveform().is_some());
+    demand.set(AnalysisDemand::KEY, fingerprint.key().is_some());
+    demand
+}
+
+/// Whether a track needs nothing further: the pass ran its course and
+/// published every artifact this build analyses. An analysed key is published
+/// once the snapshot carries its tag, with or without a key.
+pub(super) fn settled(progress: &AnalysisProgress, fingerprint: &AnalysisFingerprint) -> bool {
+    let analysis = progress.analysis();
+    let beat = fingerprint.beat().is_none() || analysis.beat().is_some();
+    let waveform = fingerprint.waveform().is_none() || analysis.waveform().is_some();
+    let key = fingerprint.key().is_none() || analysis.fingerprint().key().is_some();
+    analysis.is_settled() && beat && waveform && key
 }

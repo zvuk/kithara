@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara::{analysis::AnalysisProgress, events::TrackId, platform::tokio::sync::watch};
 
-use super::{artifacts::TrackArtifacts, load::Loaded, supply::Prepared};
+use super::artifacts::TrackArtifacts;
 use crate::{
     pools::{AppQueueControl, AppResourceConfig},
     wave_cache::AnalysisTarget,
@@ -18,18 +18,11 @@ pub(crate) struct Entry {
     #[field(get)]
     config: AppResourceConfig,
     held: Option<AnalysisProgress>,
-    #[field(get)]
-    prepared: Prepared,
     tx: watch::Sender<Option<TrackArtifacts>>,
     #[field(get, copy)]
     stage: Stage,
     #[field(get, copy)]
     track_id: TrackId,
-    /// Which load this entry is on. Every artifact read is tagged with it, so
-    /// an answer that arrives after the entry was re-pointed is dropped
-    /// instead of overwriting the track that holds it now.
-    #[field(get, copy)]
-    epoch: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,31 +43,17 @@ impl Entry {
     ) -> Self {
         Self {
             target,
-            prepared: Prepared::for_config(&config),
             config,
             queue,
             track_id,
             tx: watch::channel(None).0,
             held: None,
             stage: Stage::Idle,
-            epoch: 0,
         }
-    }
-
-    /// Take in an artifact its own source answered with, and republish: one
-    /// publication carries every origin the track has.
-    pub(super) fn accept(&mut self, loaded: Loaded) {
-        match loaded {
-            Loaded::BeatGrid(result) => self.prepared.beat_grid = result.into(),
-            Loaded::Key(result) => self.prepared.key = result.into(),
-            Loaded::Waveform(result) => self.prepared.waveform = result.into(),
-        }
-        self.republish();
     }
 
     /// Publish what this track holds. A pass result is accepted only when it
-    /// outranks the one already published; a prepared artifact is republished
-    /// with it, so one publication carries both origins.
+    /// outranks the one already published.
     pub(crate) fn offer(&mut self, progress: AnalysisProgress) -> bool {
         let same = self.held.as_ref().is_some_and(|held| {
             let held = held.analysis();
@@ -94,10 +73,7 @@ impl Entry {
         config: AppResourceConfig,
         queue: AppQueueControl,
         track_id: TrackId,
-        epoch: u64,
     ) {
-        self.epoch = epoch;
-        self.prepared = Prepared::for_config(&config);
         self.config = config;
         self.queue = queue;
         self.track_id = track_id;
@@ -124,15 +100,15 @@ impl Entry {
         }
     }
 
-    /// Publish the prepared artifacts alone, before or without a pass.
+    /// Publish what the track holds: its pass result, or its failed pass.
     pub(crate) fn republish(&self) {
         let analysis = self
             .held
             .as_ref()
             .map(|progress| progress.analysis().clone());
         let failed = self.pass_failed();
-        let published = (analysis.is_some() || failed || !self.prepared.is_empty())
-            .then(|| TrackArtifacts::new(analysis, self.prepared.clone(), failed));
+        let published =
+            (analysis.is_some() || failed).then(|| TrackArtifacts::new(analysis, failed));
         self.tx.send_replace(published);
     }
 

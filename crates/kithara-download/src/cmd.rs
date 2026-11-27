@@ -87,6 +87,10 @@ pub struct FetchCmd {
     /// Scheduling priority for proactive peer fetches.
     #[debug(skip)]
     pub(crate) priority: Option<RequestPriority>,
+    /// Most body bytes the response may carry. A declared length past it
+    /// refuses the response before its body; received bytes past it end the
+    /// transfer. Either ends the request with [`NetError::TooLarge`].
+    pub(crate) max_bytes: Option<u64>,
     /// Optional byte range (HTTP Range request).
     pub(crate) range: Option<RangeSpec>,
     /// Optional per-request response validator.

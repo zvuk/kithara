@@ -51,6 +51,11 @@ pub enum NetError {
     NoTransport,
     #[error("request refused: {0}")]
     Refused(String),
+    /// The response declared or delivered more body bytes than the request
+    /// allows; the transfer ended there. `bytes` is the declared length, or
+    /// what had arrived when the transfer ended.
+    #[error("response body of {bytes} bytes, past the {limit} the request allows")]
+    TooLarge { bytes: u64, limit: u64 },
 }
 
 /// Whether a failed request is worth retrying. Decided from the typed
@@ -129,7 +134,8 @@ impl From<&NetError> for Retryability {
             | NetError::InvalidContentType(_)
             | NetError::Protocol(_)
             | NetError::NoTransport
-            | NetError::Refused(_) => Self::Fatal,
+            | NetError::Refused(_)
+            | NetError::TooLarge { .. } => Self::Fatal,
         }
     }
 }
@@ -198,6 +204,7 @@ mod tests {
     #[case::protocol(NetError::Protocol("a second response".to_string()), Retryability::Fatal)]
     #[case::no_transport(NetError::NoTransport, Retryability::Fatal)]
     #[case::refused(NetError::Refused("cleartext not permitted".to_string()), Retryability::Fatal)]
+    #[case::too_large(NetError::TooLarge { bytes: 9, limit: 8 }, Retryability::Fatal)]
     async fn test_retryability(#[case] error: NetError, #[case] expected: Retryability) {
         assert_eq!(error.retryability(), expected);
     }

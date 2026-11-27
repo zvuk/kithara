@@ -82,10 +82,11 @@ perf = [
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
+# The analysis document reader only: no analyzer feature is enabled here.
+kithara-analysis = { workspace = true }
 kithara-assets = { workspace = true }
 # Kithara sub-crates
 kithara-audio = { workspace = true, default-features = false }
-kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-command = { workspace = true }
 kithara-config = { workspace = true }
@@ -97,7 +98,6 @@ kithara-effects = { workspace = true }
 kithara-events = { workspace = true }
 kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
-kithara-key = { workspace = true }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
 kithara-render = { workspace = true }
@@ -107,7 +107,6 @@ kithara-sync = { workspace = true }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false, features = ["render"] }
-kithara-waveform = { workspace = true, default-features = false }
 kithara-worker = { workspace = true }
 
 # Utilities
@@ -126,7 +125,6 @@ num-traits = { workspace = true }
 
 # Async & channels
 serde = { workspace = true }
-serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -142,7 +140,6 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["usdt", "mock"] }
-kithara-beat = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-dsp = { workspace = true }
 kithara-play = { path = ".", default-features = false, features = ["mock", "usdt"] }

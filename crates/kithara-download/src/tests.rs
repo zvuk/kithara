@@ -2007,3 +2007,42 @@ async fn a_peer_registered_outside_a_runtime_leaves_the_loop_serving() {
         "fetch must succeed"
     );
 }
+
+/// A request's byte limit holds whatever the response declares: a body that
+/// declares no length and never ends is cut off once it passes the limit, and
+/// a declared length past it is refused before any of its body.
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[case::endless_undeclared("/endless")]
+#[case::declared_past_the_limit("/declared")]
+async fn a_body_past_the_request_limit_ends_the_download(#[case] path: &str) {
+    const LIMIT: u64 = 64 * 1024;
+    const CHUNK: usize = 4096;
+    let server = TestHttpServer::new(
+        Router::new()
+            .route(
+                "/endless",
+                get(|| async {
+                    Body::from_stream(futures::stream::repeat_with(|| {
+                        Ok::<_, Infallible>(vec![0_u8; CHUNK])
+                    }))
+                }),
+            )
+            .route("/declared", get(|| async { vec![0_u8; 2 * 64 * 1024] })),
+    )
+    .await;
+    let config = DownloaderConfig::for_client(test_client())
+        .runtime(kithara_platform::tokio::runtime::Handle::current())
+        .build();
+    let dl = Downloader::new(config);
+    let handle = dl.register(Arc::new(MockPeer::new()), None);
+
+    let error = handle
+        .execute(FetchCmd::get(server.url(path)).max_bytes(LIMIT).build())
+        .await
+        .expect_err("a body past the limit must end the download");
+
+    assert!(
+        matches!(error, FetchError::TooLarge { bytes, limit } if limit == LIMIT && bytes > LIMIT),
+        "{error:?}"
+    );
+}

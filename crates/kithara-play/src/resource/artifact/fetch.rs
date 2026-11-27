@@ -1,38 +1,43 @@
-use std::{fs::File, io::Read, path::PathBuf};
+use std::{fmt::Display, fs::File, io::Read, path::PathBuf};
 
-use bytes::Bytes;
-use futures::StreamExt;
 use kithara_abr::Abr;
-use kithara_download::{Downloader, FetchCmd, Peer};
-use kithara_net::{Headers, NetError, NetResult};
-use kithara_platform::{CancelScope, CancelToken, sync::Arc, tokio::task};
+use kithara_assets::{
+    AcquisitionResult, AssetReader, AssetResource, AssetWriter, ReadSide, ResourceKey, WriteSide,
+};
+use kithara_bufpool::HasPool;
+use kithara_download::{FetchCmd, Peer};
+use kithara_net::{Headers, NetError};
+use kithara_platform::{
+    CancelScope, CancelToken,
+    sync::Arc,
+    tokio::{self, task},
+};
 use thiserror::Error;
+use tracing::warn;
 use url::Url;
 
-use super::ArtifactDocument;
-use crate::resource::ResourceSrc;
+use super::{ArtifactDocument, ArtifactRequest};
+use crate::resource::{PlaybackResamplerBackend, ResourceConfig, ResourceSrc};
 
-/// Largest document any artifact may arrive as. A prepared grid, waveform or
+/// Largest document any artifact may arrive as. An analysis document or a
 /// cover is a summary of a track, not a second copy of it: anything past this
 /// is a wrong URL, not a big artifact, and it is refused as soon as its
 /// declared length or its received bytes pass the cap.
 pub const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 
-/// Why a prepared artifact never reached the resource it was configured for.
+/// Why an artifact document never reached the track it was read for.
 ///
-/// Every variant is terminal for that artifact: a track opened with an
-/// explicit source asked for that artifact, so a failure to read it is
-/// reported, never quietly turned into local analysis.
+/// Every variant is terminal for that read: nothing is read in its place.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum ArtifactLoadError {
-    /// The artifact was cancelled with the load it belonged to.
+    /// The read was cancelled with the token it ran under.
     #[error("the {kind} artifact load was cancelled")]
     Cancelled { kind: &'static str },
     /// The bytes arrived but are not a document of this kind.
     #[error("the {kind} artifact is not a document this build reads: {reason}")]
     Decode { kind: &'static str, reason: String },
-    /// The bytes never arrived.
+    /// The bytes never arrived, or the store could not hold them.
     #[error("the {kind} artifact at {src} could not be read: {reason}")]
     Fetch {
         kind: &'static str,
@@ -55,48 +60,42 @@ pub enum ArtifactLoadError {
     Scheme { kind: &'static str, scheme: String },
 }
 
-/// The I/O a resource lends its prepared artifacts: the shared downloader, the
-/// headers the audio source is read with, and the load's own cancel token.
+/// The I/O a track lends its artifact documents: its shared downloader, its
+/// asset store, the headers its audio is read with, and its own cancel token.
 ///
-/// Built from a [`ResourceConfig`](crate::ResourceConfig), so an artifact load
-/// rides the same transport, the same cancel epoch, and the same credentials
-/// policy as the audio it belongs to.
-pub struct ArtifactFetch<'a> {
-    audio: &'a ResourceSrc,
-    cancel: Option<&'a CancelToken>,
-    downloader: Option<&'a Downloader>,
-    headers: Option<&'a Headers>,
+/// Built from a [`ResourceConfig`], so a document rides the same transport and
+/// lands in the same store scope as the audio it belongs to.
+pub struct ArtifactFetch<'a, S, B: Default = PlaybackResamplerBackend>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    config: &'a ResourceConfig<S, B>,
 }
 
-impl<'a> ArtifactFetch<'a> {
+impl<'a, S, B: Default> ArtifactFetch<'a, S, B>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     #[must_use]
-    pub const fn new(
-        audio: &'a ResourceSrc,
-        downloader: Option<&'a Downloader>,
-        headers: Option<&'a Headers>,
-        cancel: Option<&'a CancelToken>,
-    ) -> Self {
-        Self {
-            audio,
-            cancel,
-            downloader,
-            headers,
-        }
+    pub const fn new(config: &'a ResourceConfig<S, B>) -> Self {
+        Self { config }
     }
 
-    /// Headers to send for `url`. The audio source's credentials are the
-    /// audio host's: an artifact served from anywhere else is fetched plain,
-    /// so configuring an artifact URL can never leak a token to a third host.
+    /// Headers a track artifact sends to `url`. The audio source's credentials
+    /// are the audio host's: an artifact served from anywhere else is fetched
+    /// plain, so configuring an artifact URL can never leak a token to a third
+    /// host.
     pub(super) fn headers_for(&self, url: &Url) -> Option<Headers> {
-        let ResourceSrc::Url(audio) = self.audio else {
+        let ResourceSrc::Url(audio) = self.config.source() else {
             return None;
         };
         (audio.host_str() == url.host_str() && audio.scheme() == url.scheme())
-            .then(|| self.headers.cloned())
+            .then(|| self.config.headers.clone())
             .flatten()
     }
 
-    /// Read one artifact document from `src`.
+    /// Read one artifact document of the track from `src`, under the track's
+    /// own token, so it ends with the load it was read beside.
     ///
     /// # Errors
     ///
@@ -105,112 +104,321 @@ impl<'a> ArtifactFetch<'a> {
         &self,
         src: &ResourceSrc,
     ) -> Result<T, ArtifactLoadError> {
-        if self.cancel.is_some_and(CancelToken::is_cancelled) {
+        let cancel = self.config.cancel();
+        if cancel.is_some_and(CancelToken::is_cancelled) {
             return Err(ArtifactLoadError::Cancelled { kind: T::KIND });
         }
         let bytes = match src {
-            ResourceSrc::Path(path) => self.read_file::<T>(path.clone()).await?,
-            ResourceSrc::Url(url) => self.read_url::<T>(url).await?,
+            ResourceSrc::Path(path) => read_file::<T>(path.clone()).await?,
+            ResourceSrc::Url(url) => {
+                check_scheme::<T>(url)?;
+                self.download::<T>(url, self.headers_for(url), cancel)
+                    .await?
+            }
         };
-        T::decode(bytes).map_err(|reason| ArtifactLoadError::Decode {
-            reason,
-            kind: T::KIND,
-        })
+        decode(bytes)
     }
 
-    async fn read_file<T: ArtifactDocument>(
+    /// Read the document `request` names, under `cancel`.
+    ///
+    /// A URL document goes through the track's asset store, keyed by the
+    /// request's URL inside the track's own scope. A stored document is read
+    /// without the network; one past [`MAX_ARTIFACT_BYTES`] or one that does
+    /// not read is removed, so the next read downloads it again. A missing
+    /// one is downloaded with exactly the request's headers and stored only
+    /// once it reads and `cancel` has not fired. A read that finds the same
+    /// document downloading waits, without holding a thread, until that
+    /// download lets go, then acquires again. A path is read from its file.
+    ///
+    /// # Errors
+    ///
+    /// Returns why the document could not be read, stored, or parsed.
+    pub async fn read<T>(
         &self,
-        path: PathBuf,
-    ) -> Result<Vec<u8>, ArtifactLoadError> {
-        let display = path.display().to_string();
-        let read = task::spawn_blocking(move || read_capped(&path))
+        request: &ArtifactRequest,
+        cancel: &CancelToken,
+    ) -> Result<T, ArtifactLoadError>
+    where
+        T: ArtifactDocument + Send + 'static,
+    {
+        if cancel.is_cancelled() {
+            return Err(ArtifactLoadError::Cancelled { kind: T::KIND });
+        }
+        match &request.src {
+            ResourceSrc::Path(path) => decode(read_file::<T>(path.clone()).await?),
+            ResourceSrc::Url(url) => {
+                self.read_stored(url, request.headers.as_ref(), cancel)
+                    .await
+            }
+        }
+    }
+
+    async fn read_stored<T>(
+        &self,
+        url: &Url,
+        headers: Option<&Headers>,
+        cancel: &CancelToken,
+    ) -> Result<T, ArtifactLoadError>
+    where
+        T: ArtifactDocument + Send + 'static,
+    {
+        check_scheme::<T>(url)?;
+        let store = self.config.store();
+        let key = self
+            .config
+            .asset_key(&AssetResource::Url(url.clone()))
+            .map_err(|error| fetch_failure::<T>(url, error))?;
+        loop {
+            match store
+                .acquire_resource(&key, None)
+                .map_err(|error| fetch_failure::<T>(url, error))?
+            {
+                AcquisitionResult::Ready(reader) => {
+                    return self.take_stored(reader, &key, url).await;
+                }
+                AcquisitionResult::Pending(writer) => {
+                    return self.fill(writer, url, headers, cancel).await;
+                }
+                AcquisitionResult::Joined(reader) => {
+                    // Another read is downloading this document. Its writer is
+                    // gone before this wakes, so the next acquire finds the
+                    // stored document or a fresh writer.
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => {
+                            return Err(ArtifactLoadError::Cancelled { kind: T::KIND });
+                        }
+                        () = reader.writer_released() => {}
+                    }
+                }
+                _ => {
+                    return Err(fetch_failure::<T>(
+                        url,
+                        "the store answered with an acquisition this build does not read",
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Read the stored document. One past the cap, or one that does not read,
+    /// is removed from the store, so the next read downloads it again.
+    async fn take_stored<T>(
+        &self,
+        reader: AssetReader<S>,
+        key: &ResourceKey,
+        url: &Url,
+    ) -> Result<T, ArtifactLoadError>
+    where
+        T: ArtifactDocument + Send + 'static,
+    {
+        let stored_url = url.clone();
+        let read = task::spawn_blocking(move || stored_bytes::<T, _>(&reader, &stored_url))
             .await
             .map_err(|_| ArtifactLoadError::Cancelled { kind: T::KIND })?;
-        match read {
-            Ok(Capped::Bytes(bytes)) => Ok(bytes),
-            Ok(Capped::TooLarge { bytes }) => Err(ArtifactLoadError::TooLarge {
-                bytes,
-                kind: T::KIND,
-                limit: MAX_ARTIFACT_BYTES,
-            }),
-            Err(error) => Err(ArtifactLoadError::Fetch {
-                kind: T::KIND,
-                src: display,
-                reason: error.to_string(),
-            }),
+        let rejected = match read.and_then(decode::<T>) {
+            Ok(document) => return Ok(document),
+            Err(
+                error @ (ArtifactLoadError::Decode { .. } | ArtifactLoadError::TooLarge { .. }),
+            ) => error,
+            Err(error) => return Err(error),
+        };
+        if let Err(error) = self.config.store().remove_resource(key) {
+            warn!(%url, %error, "a stored document that does not read could not be removed");
         }
+        Err(rejected)
     }
 
-    async fn read_url<T: ArtifactDocument>(&self, url: &Url) -> Result<Vec<u8>, ArtifactLoadError> {
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(ArtifactLoadError::Scheme {
-                kind: T::KIND,
-                scheme: url.scheme().to_owned(),
-            });
-        }
-        let downloader = self
-            .downloader
-            .ok_or_else(|| ArtifactLoadError::NoDownloader {
-                kind: T::KIND,
-                url: url.clone(),
-            })?;
-        let scope = CancelScope::new(self.cancel.cloned());
-        let handle = downloader.register(
-            Arc::new(ArtifactPeer {
-                cancel: scope.token(),
-            }),
-            None,
-        );
-        let cmd = FetchCmd::get(url.clone())
-            .cancel(scope.token())
-            .maybe_headers(self.headers_for(url))
-            .validator(reject_oversized_artifact)
-            .build();
-        let mut body = handle
-            .execute(cmd)
+    /// Download the document into `writer` and commit it only once it reads
+    /// and `cancel` has not fired; any other end fails the writer.
+    async fn fill<T>(
+        &self,
+        writer: AssetWriter<S>,
+        url: &Url,
+        headers: Option<&Headers>,
+        cancel: &CancelToken,
+    ) -> Result<T, ArtifactLoadError>
+    where
+        T: ArtifactDocument + Send + 'static,
+    {
+        let downloaded = self
+            .download::<T>(url, headers.cloned(), Some(cancel))
+            .await;
+        let (url, cancel) = (url.clone(), cancel.clone());
+        task::spawn_blocking(move || settle(writer, downloaded, &url, &cancel))
             .await
-            .map_err(|error| fetch_error::<T>(url, error))?
-            .body;
-        let mut chunks: Vec<Bytes> = Vec::new();
-        let mut received = 0;
-        while let Some(chunk) = body.next().await {
-            let chunk = chunk.map_err(|error| fetch_error::<T>(url, error))?;
-            received += chunk.len();
-            if received > MAX_ARTIFACT_BYTES {
-                return Err(ArtifactLoadError::TooLarge {
-                    bytes: received as u64,
+            .map_err(|_| ArtifactLoadError::Cancelled { kind: T::KIND })?
+    }
+
+    async fn download<T: ArtifactDocument>(
+        &self,
+        url: &Url,
+        headers: Option<Headers>,
+        cancel: Option<&CancelToken>,
+    ) -> Result<Vec<u8>, ArtifactLoadError> {
+        let downloader =
+            self.config
+                .downloader
+                .as_ref()
+                .ok_or_else(|| ArtifactLoadError::NoDownloader {
                     kind: T::KIND,
-                    limit: MAX_ARTIFACT_BYTES,
-                });
-            }
-            chunks.push(chunk);
+                    url: url.clone(),
+                })?;
+        let scope = CancelScope::new(cancel.cloned());
+        let token = scope.token();
+        // The downloader races an imperative fetch only against its peer, so
+        // the fetch races the token here: ending it drops the peer, which
+        // aborts the transfer in flight.
+        let fetch = async {
+            let handle = downloader.register(
+                Arc::new(ArtifactPeer {
+                    cancel: scope.token(),
+                }),
+                None,
+            );
+            let cmd = FetchCmd::get(url.clone())
+                .cancel(scope.token())
+                .maybe_headers(headers)
+                .max_bytes(MAX_ARTIFACT_BYTES as u64)
+                .build();
+            let body = handle
+                .execute(cmd)
+                .await
+                .map_err(|error| net_failure::<T>(url, error))?
+                .body;
+            body.collect()
+                .await
+                .map(Vec::from)
+                .map_err(|error| net_failure::<T>(url, error))
+        };
+        tokio::select! {
+            biased;
+            () = token.cancelled() => Err(ArtifactLoadError::Cancelled { kind: T::KIND }),
+            downloaded = fetch => downloaded,
         }
-        Ok(chunks.concat())
     }
 }
 
-fn fetch_error<T: ArtifactDocument>(url: &Url, error: NetError) -> ArtifactLoadError {
+/// The stored document's bytes, refused past [`MAX_ARTIFACT_BYTES`].
+fn stored_bytes<T, R>(reader: &R, url: &Url) -> Result<Vec<u8>, ArtifactLoadError>
+where
+    T: ArtifactDocument,
+    R: ReadSide,
+{
+    let len = reader
+        .len()
+        .ok_or_else(|| fetch_failure::<T>(url, "the stored document has no length"))?;
+    if len > MAX_ARTIFACT_BYTES as u64 {
+        return Err(ArtifactLoadError::TooLarge {
+            bytes: len,
+            kind: T::KIND,
+            limit: MAX_ARTIFACT_BYTES,
+        });
+    }
+    let mut bytes = vec![0; usize::try_from(len).map_err(|error| fetch_failure::<T>(url, error))?];
+    let read = reader
+        .read_at(0, &mut bytes)
+        .map_err(|error| fetch_failure::<T>(url, error))?;
+    bytes.truncate(read);
+    Ok(bytes)
+}
+
+/// Store a downloaded document only once it reads and `cancel` has not
+/// fired; fail the writer otherwise.
+fn settle<T, S>(
+    writer: AssetWriter<S>,
+    downloaded: Result<Vec<u8>, ArtifactLoadError>,
+    url: &Url,
+    cancel: &CancelToken,
+) -> Result<T, ArtifactLoadError>
+where
+    T: ArtifactDocument,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    let bytes = match downloaded {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            writer.fail(error.to_string());
+            return Err(error);
+        }
+    };
+    let len = bytes.len() as u64;
+    if let Err(error) = writer.write_at(0, &bytes) {
+        writer.fail(error.to_string());
+        return Err(fetch_failure::<T>(url, error));
+    }
+    match decode::<T>(bytes) {
+        Ok(_) if cancel.is_cancelled() => {
+            writer.fail("the read was cancelled".to_owned());
+            Err(ArtifactLoadError::Cancelled { kind: T::KIND })
+        }
+        Ok(document) => {
+            writer
+                .commit(Some(len))
+                .map_err(|error| fetch_failure::<T>(url, error))?;
+            Ok(document)
+        }
+        Err(error) => {
+            writer.fail(error.to_string());
+            Err(error)
+        }
+    }
+}
+
+fn decode<T: ArtifactDocument>(bytes: Vec<u8>) -> Result<T, ArtifactLoadError> {
+    T::decode(bytes).map_err(|reason| ArtifactLoadError::Decode {
+        reason,
+        kind: T::KIND,
+    })
+}
+
+fn check_scheme<T: ArtifactDocument>(url: &Url) -> Result<(), ArtifactLoadError> {
+    if matches!(url.scheme(), "http" | "https") {
+        return Ok(());
+    }
+    Err(ArtifactLoadError::Scheme {
+        kind: T::KIND,
+        scheme: url.scheme().to_owned(),
+    })
+}
+
+fn fetch_failure<T: ArtifactDocument>(url: &Url, reason: impl Display) -> ArtifactLoadError {
+    ArtifactLoadError::Fetch {
+        kind: T::KIND,
+        src: url.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+fn net_failure<T: ArtifactDocument>(url: &Url, error: NetError) -> ArtifactLoadError {
     match error {
         NetError::Cancelled => ArtifactLoadError::Cancelled { kind: T::KIND },
-        error => ArtifactLoadError::Fetch {
+        NetError::TooLarge { bytes, .. } => ArtifactLoadError::TooLarge {
+            bytes,
             kind: T::KIND,
-            src: url.to_string(),
-            reason: error.to_string(),
+            limit: MAX_ARTIFACT_BYTES,
         },
+        error => fetch_failure::<T>(url, error),
     }
 }
 
-/// Refuse a response whose declared length is past the artifact cap, before
-/// any of its body is buffered.
-fn reject_oversized_artifact(headers: &Headers) -> NetResult<()> {
-    let declared = headers
-        .get("content-length")
-        .and_then(|value| value.parse::<u64>().ok());
-    match declared {
-        Some(bytes) if bytes > MAX_ARTIFACT_BYTES as u64 => Err(NetError::InvalidContentType(
-            format!("artifact document of {bytes} bytes"),
-        )),
-        _ => Ok(()),
+async fn read_file<T: ArtifactDocument>(path: PathBuf) -> Result<Vec<u8>, ArtifactLoadError> {
+    let display = path.display().to_string();
+    let read = task::spawn_blocking(move || read_capped(&path))
+        .await
+        .map_err(|_| ArtifactLoadError::Cancelled { kind: T::KIND })?;
+    match read {
+        Ok(Capped::Bytes(bytes)) => Ok(bytes),
+        Ok(Capped::TooLarge { bytes }) => Err(ArtifactLoadError::TooLarge {
+            bytes,
+            kind: T::KIND,
+            limit: MAX_ARTIFACT_BYTES,
+        }),
+        Err(error) => Err(ArtifactLoadError::Fetch {
+            kind: T::KIND,
+            src: display,
+            reason: error.to_string(),
+        }),
     }
 }
 
@@ -241,7 +449,7 @@ fn read_capped(path: &PathBuf) -> std::io::Result<Capped> {
 
 /// The downloader peer one artifact document is read over. It has no variants
 /// and no buffer to report: it exists so the fetch rides the shared client and
-/// dies with the load's cancel epoch.
+/// dies with the token it was read under.
 struct ArtifactPeer {
     cancel: CancelToken,
 }

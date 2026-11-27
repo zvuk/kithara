@@ -15,9 +15,7 @@ pub(super) use kithara::{
         sync::{Arc, Mutex},
         time::{self, Duration, Instant},
     },
-    play::{
-        ArtifactSource, PlayWorker, PlayWorkerConfig, ResourceConfig, ResourcePrep, ResourceSrc,
-    },
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourcePrep, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, TrackStatus},
     signal::{AudioSpec, SessionFrame},
     sync::SessionBeat,
