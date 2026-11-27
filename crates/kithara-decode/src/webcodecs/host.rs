@@ -7,9 +7,9 @@ use std::{
 use js_sys::{Float32Array, Object, Uint8Array};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{
-    sync::mpsc::{self, TryRecvError},
+    sync::mpsc,
     thread::{assert_not_main_thread, keep_worker_alive, spawn_named},
-    time::{self, Duration},
+    time::Duration,
     tokio::task::spawn as task_spawn,
 };
 use kithara_signal::AudioSpec;
@@ -189,23 +189,10 @@ where
     keep_worker_alive();
 
     task_spawn(async move {
-        const POLL_IDLE: Duration = Duration::from_millis(4);
         let mut decoders = HashMap::new();
 
-        'outer: loop {
-            let mut worked = false;
-            loop {
-                match cmd_rx.try_recv() {
-                    Ok(cmd) => {
-                        worked = true;
-                        dispatch(cmd, &mut decoders, &pools).await;
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(_) => break 'outer,
-                }
-            }
-            let pause = if worked { Duration::ZERO } else { POLL_IDLE };
-            time::sleep(pause).await;
+        while let Ok(cmd) = cmd_rx.recv_async().await {
+            dispatch(cmd, &mut decoders, &pools).await;
         }
 
         for (decoder_id, state) in decoders {
