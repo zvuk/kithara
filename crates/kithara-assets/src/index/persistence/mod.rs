@@ -12,6 +12,6 @@ pub(crate) use file::IndexTarget;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use file::{IndexFile, read_archived, write_record};
 pub use flush::{FlushHub, FlushPolicy, FlushPolicyPatch};
-pub(crate) use flush::{Flushable, flush_sync};
+pub(crate) use flush::{Flushable, flush_source, flush_sync, flush_sync_locked};
 #[cfg(target_arch = "wasm32")]
 use stub::{self as file, self as worker};
