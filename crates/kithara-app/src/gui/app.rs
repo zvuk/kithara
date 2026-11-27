@@ -153,37 +153,40 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::theme::Palette;
+    use crate::{gui::test_fixture, theme::Palette};
 
     #[kithara::test]
-    async fn opening_the_app_also_requests_window_focus() {
-        let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
-        let (commands, _) = mpsc::unbounded_channel();
-        let boot = Boot::builder()
-            .settings(&UiConfig::default())
-            .tracks(Vec::new())
-            .palette(Palette::default())
-            .snapshots(snapshots)
-            .commands(commands)
-            .runtime(::kithara::platform::tokio::runtime::Handle::current())
-            .build()
-            .unwrap();
+    fn opening_the_app_also_requests_window_focus() {
+        let runtime = test_fixture::runtime();
+        runtime.block_on(async {
+            let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
+            let (commands, _) = mpsc::unbounded_channel();
+            let boot = Boot::builder()
+                .settings(&UiConfig::default())
+                .tracks(Vec::new())
+                .palette(Palette::default())
+                .snapshots(snapshots)
+                .commands(commands)
+                .runtime(runtime.handle().clone())
+                .build()
+                .unwrap();
 
-        let (state, open) = Kithara::new(boot);
-        let expected = state.window_id;
-        let mut actions = task::into_stream(open).expect("window open is an effectful task");
+            let (state, open) = Kithara::new(boot);
+            let expected = state.window_id;
+            let mut actions = task::into_stream(open).expect("window open is an effectful task");
 
-        let opened = actions.next().await.expect("open action");
-        let Action::Window(window::Action::Open(id, _, completion)) = opened else {
-            panic!("expected window open before focus");
-        };
-        assert_eq!(id, expected);
-        completion.send(id).expect("open completion is accepted");
+            let opened = actions.next().await.expect("open action");
+            let Action::Window(window::Action::Open(id, _, completion)) = opened else {
+                panic!("expected window open before focus");
+            };
+            assert_eq!(id, expected);
+            completion.send(id).expect("open completion is accepted");
 
-        let focused = actions.next().await.expect("focus action");
-        let Action::Window(window::Action::GainFocus(id)) = focused else {
-            panic!("expected gain focus after window open");
-        };
-        assert_eq!(id, expected);
+            let focused = actions.next().await.expect("focus action");
+            let Action::Window(window::Action::GainFocus(id)) = focused else {
+                panic!("expected gain focus after window open");
+            };
+            assert_eq!(id, expected);
+        });
     }
 }
