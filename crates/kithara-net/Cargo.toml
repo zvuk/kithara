@@ -34,7 +34,6 @@ tls-native = ["reqwest?/native-tls"]
 mock = ["dep:unimock"]
 flash = ["kithara-platform/flash"]
 no-block = ["kithara-platform/no-block"]
-perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
 kithara-bufpool = { workspace = true }
@@ -79,9 +78,7 @@ kithara-apple = { workspace = true, optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 brotli = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
-# hotpath drives the `perf`/`memprof` profiling knobs and does not build on
 # wasm32; gate it here so the `perf` feature stays inert on wasm.
-hotpath = { workspace = true, optional = true }
 tower-layer = { workspace = true, optional = true }
 tower-service = { workspace = true, optional = true }
 # `client-wreq` backend (native only — BoringSSL has no wasm target).

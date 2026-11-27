@@ -51,10 +51,7 @@ impl Pool {
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Scene {
-    pub(crate) draw_data: usize,
     pub(crate) draw_tags: usize,
-    pub(crate) path_data: usize,
-    pub(crate) transforms: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -72,7 +69,6 @@ pub(crate) struct Tally {
     /// scene every frame, so this is a snapshot, not a total.
     pub(crate) scene: Option<Scene>,
     pub(crate) pool: Pool,
-    durations: Vec<Duration>,
     /// Whether any frame declared a different number of native draws than the
     /// first. One page cannot be measured as two.
     pub(crate) natives_varied: bool,
@@ -81,25 +77,6 @@ pub(crate) struct Tally {
 }
 
 impl Tally {
-    /// Total, mean, shortest and longest frame, in microseconds.
-    pub(crate) fn micros(&self) -> [u128; 4] {
-        let total: u128 = self.durations.iter().map(Duration::as_micros).sum();
-        let count = u128::try_from(self.durations.len().max(1)).unwrap_or(1);
-        let min = self
-            .durations
-            .iter()
-            .map(Duration::as_micros)
-            .min()
-            .unwrap_or_default();
-        let max = self
-            .durations
-            .iter()
-            .map(Duration::as_micros)
-            .max()
-            .unwrap_or_default();
-        [total, total / count, min, max]
-    }
-
     pub(crate) fn push(&mut self, census: Census, elapsed: Duration) {
         self.frames += 1;
         self.scheduled += usize::from(census.scheduled);
@@ -109,7 +86,7 @@ impl Tally {
         self.natives = self.natives.or(census.natives);
         self.scene = census.scene;
         self.pool.add(census.pool);
-        self.durations.push(elapsed);
+        let _ = elapsed;
     }
 }
 

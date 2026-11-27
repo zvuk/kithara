@@ -258,7 +258,6 @@ where
     B: ResamplerBackend,
     S: HasPool<f32>,
 {
-    #[kithara::measure(label = "decode.resampled.next")]
     fn prepare_chunk(&mut self, wait: PrepareWait) -> DecodeResult<DecoderChunkOutcome> {
         if let Some(output) = self.drain_ready()? {
             return Ok(DecoderChunkOutcome::Chunk(Box::new(output)));

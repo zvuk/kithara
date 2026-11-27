@@ -11,6 +11,7 @@ use kithara_decode::{
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{ConstructionGate, MediaInfo};
+#[cfg(test)]
 use kithara_test_utils::kithara;
 use tracing::warn;
 
@@ -330,8 +331,6 @@ impl DecoderGeneration {
         self.holdback = None;
         self.staged.pop_front().or_else(|| self.gapless.next())
     }
-
-    #[kithara::measure(label = "audio.decoder.next")]
     pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         if self.finished {
             return Ok(DecoderChunkOutcome::Eof);
@@ -453,7 +452,6 @@ pub(super) fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFai
 #[cfg(test)]
 mod tests {
     use std::{
-        cell::Cell,
         num::NonZeroU32,
         sync::atomic::{AtomicU64, Ordering},
     };
@@ -466,7 +464,6 @@ mod tests {
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_stream::{MediaInfo, PrerollHint};
     use kithara_test_fixtures::unit_fixtures::decode_quarter;
-    use kithara_test_utils::kithara;
 
     use super::*;
     use crate::test_pools::{Pools, pools, sample_buffer};

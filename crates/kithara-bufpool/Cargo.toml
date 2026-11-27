@@ -10,7 +10,6 @@ keywords = ["buffer", "pool", "audio", "performance", "sharded"]
 categories = ["memory-management", "concurrency"]
 
 [features]
-perf = ["dep:hotpath", "hotpath/hotpath"]
 flash = ["kithara-platform/flash"]
 no-block = ["kithara-platform/no-block"]
 
@@ -19,7 +18,6 @@ kithara-config = { workspace = true }
 kithara-derive = { workspace = true, features = ["patch", "pool"] }
 kithara-platform = { workspace = true }
 kithara-ring = { workspace = true }
-kithara-test-macros = { workspace = true }
 
 crossbeam-queue = { workspace = true }
 delegate = { workspace = true }
@@ -30,8 +28,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
-hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "hang", "mock"] }

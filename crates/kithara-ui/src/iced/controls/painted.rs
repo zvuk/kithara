@@ -17,7 +17,6 @@ use iced::{
     widget::canvas::Action,
 };
 use kithara_platform::time::Instant;
-use kithara_test_macros as kithara;
 
 use crate::{
     atoms::{
@@ -281,8 +280,6 @@ where
             IcedSize::new(measured.width, measured.height),
         ))
     }
-
-    #[kithara::measure(label = "iced.control.paint")]
     fn paint_indexed_into(
         &self,
         state: &PaintState<ControlKey<Painter>>,
@@ -305,7 +302,6 @@ where
     ///
     /// The kept geometry is dropped only when the drawn list changed, so a
     /// control that did not change is not tessellated again.
-    #[kithara::measure(label = "iced.control.paint")]
     fn paint_into(
         &self,
         state: &PaintState<ControlKey<Painter>>,

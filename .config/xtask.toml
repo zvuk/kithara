@@ -1113,16 +1113,14 @@ default_backend = "none"
 default_features = [
   "kithara-ui/gpu",
   "kithara-ui/masonry",
-  "kithara-ui/perf",
   "kithara-ui-gallery/masonry",
-  "kithara-ui-gallery/perf",
 ]
 undeclared_toggles = ["flash"]
 cargo.packages = ["kithara-ui", "kithara-ui-gallery"]
 cargo.profile = "test-release"
 runner.nextest.test_threads = 1
 runner.nextest.ignore_default_filter = true
-runner.nextest.filter = "binary(frame_perf) | binary(page_perf)"
+runner.nextest.filter = "binary(frame_perf_oracle) | binary(page_perf_oracle)"
 
 [test.lanes.ui-doc]
 default_backend = "none"
@@ -3609,7 +3607,7 @@ name = "perf-suite"
 command = ["just", "perf"]
 tools = ["perf-suite"]
 hard_invariant = true
-expected_artifacts = ["perf-results.txt"]
+expected_artifacts = ["bench-results.txt"]
 
 [[quality.assessment.deep_stages]]
 name = "benchmarks"

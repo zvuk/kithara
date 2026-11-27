@@ -1,14 +1,13 @@
 #![forbid(unsafe_code)]
 
-mod support;
+include!("support/crossover_biquad.rs");
 
 use std::{
     f64::consts::{FRAC_1_SQRT_2, TAU},
-    hint::black_box,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
 };
 
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
 use kithara_dsp::{
     curve::CurveShape,
     filter::{Biquad, Coefficients, Hertz, Response, StateVariableFilter, SvfDesign, Type},
@@ -41,9 +40,20 @@ fn last_loud(c: &mut Criterion) {
             group.throughput(Throughput::Elements(u64::try_from(size).expect("size")));
             for (name, search) in implementations {
                 assert_eq!(search(&samples, 1e-6), expected);
-                group.bench_function(BenchmarkId::new(format!("{shape}/{name}"), size), |b| {
-                    b.iter(|| black_box(search(black_box(&samples), black_box(1e-6))));
-                });
+                group.bench_function(
+                    BenchmarkId::new(
+                        "case",
+                        canonical_id(format!("{}_{}", format!("{shape}/{name}"), size)),
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            std::hint::black_box(search(
+                                std::hint::black_box(&samples),
+                                std::hint::black_box(1e-6),
+                            ))
+                        });
+                    },
+                );
             }
         }
     }
@@ -120,7 +130,10 @@ fn svf_fixed(c: &mut Criterion) {
             for prepared in [true, false] {
                 let mode = if prepared { "fixed" } else { "per_frame" };
                 group.bench_function(
-                    BenchmarkId::new(format!("2ch_{response:?}/{mode}"), frames),
+                    BenchmarkId::new(
+                        "case",
+                        canonical_id(format!("{}_{}", format!("2ch_{response:?}/{mode}"), frames)),
+                    ),
                     |b| {
                         b.iter_batched_ref(
                             || (StateVariableFilter::<2>::new(), template.clone()),
@@ -128,24 +141,24 @@ fn svf_fixed(c: &mut Criterion) {
                                 if prepared {
                                     filter
                                         .process_fixed(
-                                            black_box(&mut *planes),
+                                            std::hint::black_box(&mut *planes),
                                             0..frames,
-                                            black_box(&design),
+                                            std::hint::black_box(&design),
                                         )
                                         .expect("shape");
                                 } else {
                                     filter
                                         .process(
-                                            black_box(&mut *planes),
+                                            std::hint::black_box(&mut *planes),
                                             0..frames,
-                                            black_box(&cutoffs),
+                                            std::hint::black_box(&cutoffs),
                                             rate,
                                             FRAC_1_SQRT_2,
                                             response,
                                         )
                                         .expect("shape");
                                 }
-                                black_box(planes);
+                                std::hint::black_box(planes);
                             },
                             BatchSize::SmallInput,
                         );
@@ -166,18 +179,21 @@ fn svf_fixed(c: &mut Criterion) {
                     && (actual - expected).abs() <= 1e-6
             ));
             group.bench_function(
-                BenchmarkId::new(format!("2ch_{response:?}/scalar"), frames),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!("{}_{}", format!("2ch_{response:?}/scalar"), frames)),
+                ),
                 |b| {
                     b.iter_batched_ref(
                         || (template.clone(), [[0.0_f64; 2]; 2]),
                         |(planes, state)| {
                             scalar_svf_fixed(
-                                black_box(planes),
-                                black_box(state),
-                                black_box(&coefficients),
+                                std::hint::black_box(planes),
+                                std::hint::black_box(state),
+                                std::hint::black_box(&coefficients),
                                 response,
                             );
-                            black_box(planes);
+                            std::hint::black_box(planes);
                         },
                         BatchSize::SmallInput,
                     );
@@ -211,12 +227,19 @@ fn kernels(c: &mut Criterion) {
         for channels in [consts::TWO, consts::SIX] {
             let mut interleaved = vec![0.0_f32; channels.get() * frames];
             group.bench_with_input(
-                BenchmarkId::new(format!("fi_interleave_{channels}ch"), frames),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!(
+                        "{}_{}",
+                        format!("fi_interleave_{channels}ch"),
+                        frames
+                    )),
+                ),
                 &frames,
                 |b, _| {
                     b.iter(|| {
                         fast_interleave::interleave_variable(
-                            black_box(&planes[..channels.get()]),
+                            std::hint::black_box(&planes[..channels.get()]),
                             0..frames,
                             &mut interleaved,
                             channels,
@@ -225,12 +248,19 @@ fn kernels(c: &mut Criterion) {
                 },
             );
             group.bench_with_input(
-                BenchmarkId::new(format!("fi_deinterleave_{channels}ch"), frames),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!(
+                        "{}_{}",
+                        format!("fi_deinterleave_{channels}ch"),
+                        frames
+                    )),
+                ),
                 &frames,
                 |b, _| {
                     b.iter(|| {
                         fast_interleave::deinterleave_variable(
-                            black_box(&interleaved),
+                            std::hint::black_box(&interleaved),
                             channels,
                             &mut restored,
                             0..frames,
@@ -239,12 +269,15 @@ fn kernels(c: &mut Criterion) {
                 },
             );
             group.bench_with_input(
-                BenchmarkId::new(format!("interleave_{channels}ch"), frames),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!("{}_{}", format!("interleave_{channels}ch"), frames)),
+                ),
                 &frames,
                 |b, _| {
                     b.iter(|| {
                         kithara_dsp::interleave_channel_major(
-                            black_box(&planar[..channels.get() * frames]),
+                            std::hint::black_box(&planar[..channels.get() * frames]),
                             stride,
                             0..frames,
                             &mut interleaved,
@@ -254,12 +287,19 @@ fn kernels(c: &mut Criterion) {
                 },
             );
             group.bench_with_input(
-                BenchmarkId::new(format!("deinterleave_{channels}ch"), frames),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!(
+                        "{}_{}",
+                        format!("deinterleave_{channels}ch"),
+                        frames
+                    )),
+                ),
                 &frames,
                 |b, _| {
                     b.iter(|| {
                         kithara_dsp::deinterleave_variable(
-                            black_box(&interleaved),
+                            std::hint::black_box(&interleaved),
                             channels,
                             &mut restored,
                             0..frames,
@@ -269,9 +309,13 @@ fn kernels(c: &mut Criterion) {
             );
         }
         let mut noisy = vec![f32::from_bits(1); frames];
-        group.bench_with_input(BenchmarkId::new("sanitize", frames), &frames, |b, _| {
-            b.iter(|| kithara_dsp::sanitize(black_box(&mut noisy)));
-        });
+        group.bench_with_input(
+            BenchmarkId::new("case", canonical_id(format!("{}_{}", "sanitize", frames))),
+            &frames,
+            |b, _| {
+                b.iter(|| kithara_dsp::sanitize(std::hint::black_box(&mut noisy)));
+            },
+        );
     }
     group.finish();
 }
@@ -301,9 +345,13 @@ fn vector(c: &mut Criterion) {
             u64::try_from(size).expect("size fits u64"),
         ));
         let samples = tone(size);
-        group.bench_with_input(BenchmarkId::new("sum_squares", size), &size, |b, _| {
-            b.iter(|| kithara_dsp::sum_squares(black_box(&samples)));
-        });
+        group.bench_with_input(
+            BenchmarkId::new("case", canonical_id(format!("{}_{}", "sum_squares", size))),
+            &size,
+            |b, _| {
+                b.iter(|| kithara_dsp::sum_squares(std::hint::black_box(&samples)));
+            },
+        );
     }
     group.finish();
 }
@@ -324,16 +372,30 @@ fn curve(c: &mut Criterion) {
                 .collect();
             for native in [true, false] {
                 group.bench_with_input(
-                    BenchmarkId::new(if native { "native" } else { "scalar" }, frames),
+                    BenchmarkId::new(
+                        "case",
+                        canonical_id(format!(
+                            "{}_{}",
+                            if native { "native" } else { "scalar" },
+                            frames
+                        )),
+                    ),
                     &positions,
                     |b, positions| {
                         b.iter_batched_ref(
                             || positions.clone(),
                             |values| {
                                 if native {
-                                    shape.process(black_box(values), black_box([0.75, 0.25]));
+                                    shape.process(
+                                        std::hint::black_box(values),
+                                        std::hint::black_box([0.75, 0.25]),
+                                    );
                                 } else {
-                                    scalar_curve(name, black_box(values), black_box([0.75, 0.25]));
+                                    scalar_curve(
+                                        name,
+                                        std::hint::black_box(values),
+                                        std::hint::black_box([0.75, 0.25]),
+                                    );
                                 }
                             },
                             BatchSize::SmallInput,
@@ -348,12 +410,17 @@ fn curve(c: &mut Criterion) {
                 .chain(linear.filter(|_| name == "linear"))
             {
                 group.bench_with_input(
-                    BenchmarkId::new(form, frames),
+                    BenchmarkId::new("case", canonical_id(format!("{}_{}", form, frames))),
                     &positions,
                     |b, positions| {
                         b.iter_batched_ref(
                             || positions.clone(),
-                            |values| kernel(black_box(values), black_box([0.75, 0.25])),
+                            |values| {
+                                kernel(
+                                    std::hint::black_box(values),
+                                    std::hint::black_box([0.75, 0.25]),
+                                )
+                            },
                             BatchSize::SmallInput,
                         );
                     },
@@ -407,15 +474,18 @@ fn ratio_ramp(c: &mut Criterion) {
         let native: kithara_dsp::routes::ratio_ramp::Kernel = kithara_dsp::ratio_ramp;
         for (name, kernel) in kithara_dsp::routes::ratio_ramp::routes().chain([("native", native)])
         {
-            group.bench_function(BenchmarkId::new(name, frames), |b| {
-                b.iter(|| {
-                    kernel(
-                        black_box(&mut output),
-                        black_box((1_u64 << 25) + 3),
-                        black_box(NonZeroU64::new(997).expect("positive")),
-                    );
-                });
-            });
+            group.bench_function(
+                BenchmarkId::new("case", canonical_id(format!("{}_{}", name, frames))),
+                |b| {
+                    b.iter(|| {
+                        kernel(
+                            std::hint::black_box(&mut output),
+                            std::hint::black_box((1_u64 << 25) + 3),
+                            std::hint::black_box(NonZeroU64::new(997).expect("positive")),
+                        );
+                    });
+                },
+            );
         }
     }
     group.finish();
@@ -428,10 +498,20 @@ fn narrow_f64(c: &mut Criterion) {
         let mut output = vec![0.0; frames];
         for native in [true, false] {
             group.bench_function(
-                BenchmarkId::new(if native { "native" } else { "scalar" }, frames),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!(
+                        "{}_{}",
+                        if native { "native" } else { "scalar" },
+                        frames
+                    )),
+                ),
                 |b| {
                     b.iter(|| {
-                        let (input, output) = (black_box(&input), black_box(&mut output));
+                        let (input, output) = (
+                            std::hint::black_box(&input),
+                            std::hint::black_box(&mut output),
+                        );
                         if native {
                             kithara_dsp::narrow_f64(input, output);
                         } else {
@@ -455,13 +535,23 @@ fn multiply_squared(c: &mut Criterion) {
         let gains = vec![0.3; frames];
         for native in [true, false] {
             group.bench_function(
-                BenchmarkId::new(if native { "native" } else { "scalar" }, frames),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!(
+                        "{}_{}",
+                        if native { "native" } else { "scalar" },
+                        frames
+                    )),
+                ),
                 |b| {
                     b.iter_batched_ref(
                         || input.clone(),
                         |output| {
-                            let (output, square, gains) =
-                                (black_box(output), black_box(&square), black_box(&gains));
+                            let (output, square, gains) = (
+                                std::hint::black_box(output),
+                                std::hint::black_box(&square),
+                                std::hint::black_box(&gains),
+                            );
                             if native {
                                 kithara_dsp::multiply_squared_in_place(output, square, gains);
                             } else {
@@ -486,9 +576,18 @@ fn routed_ramp(c: &mut Criterion) {
     for frames in [128, 512] {
         let mut output = vec![0.0; frames];
         for (name, kernel) in kithara_dsp::routes::ramp::routes() {
-            group.bench_function(BenchmarkId::new(name, frames), |b| {
-                b.iter(|| kernel(black_box(&mut output), black_box(0.25), black_box(0.001)));
-            });
+            group.bench_function(
+                BenchmarkId::new("case", canonical_id(format!("{}_{}", name, frames))),
+                |b| {
+                    b.iter(|| {
+                        kernel(
+                            std::hint::black_box(&mut output),
+                            std::hint::black_box(0.25),
+                            std::hint::black_box(0.001),
+                        )
+                    });
+                },
+            );
         }
     }
     group.finish();
@@ -499,13 +598,16 @@ fn routed_div(c: &mut Criterion) {
     for frames in [128, 512] {
         let input = tone(frames);
         for (name, kernel) in kithara_dsp::routes::div::routes() {
-            group.bench_function(BenchmarkId::new(name, frames), |b| {
-                b.iter_batched_ref(
-                    || input.clone(),
-                    |samples| kernel(black_box(samples), black_box(1.25)),
-                    BatchSize::SmallInput,
-                );
-            });
+            group.bench_function(
+                BenchmarkId::new("case", canonical_id(format!("{}_{}", name, frames))),
+                |b| {
+                    b.iter_batched_ref(
+                        || input.clone(),
+                        |samples| kernel(std::hint::black_box(samples), std::hint::black_box(1.25)),
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
         }
     }
     group.finish();
@@ -517,13 +619,22 @@ fn routed_mul_add(c: &mut Criterion) {
         let input = tone(frames);
         let acc = vec![0.25; frames];
         for (name, kernel) in kithara_dsp::routes::mul_add::routes() {
-            group.bench_function(BenchmarkId::new(name, frames), |b| {
-                b.iter_batched_ref(
-                    || acc.clone(),
-                    |acc| kernel(black_box(&input), black_box(&input), black_box(acc)),
-                    BatchSize::SmallInput,
-                );
-            });
+            group.bench_function(
+                BenchmarkId::new("case", canonical_id(format!("{}_{}", name, frames))),
+                |b| {
+                    b.iter_batched_ref(
+                        || acc.clone(),
+                        |acc| {
+                            kernel(
+                                std::hint::black_box(&input),
+                                std::hint::black_box(&input),
+                                std::hint::black_box(acc),
+                            )
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
         }
     }
     group.finish();
@@ -539,10 +650,19 @@ fn downmix(c: &mut Criterion) {
         for channels in [consts::TWO, consts::SIX] {
             let interleaved = tone(channels.get() * frames);
             group.bench_with_input(
-                BenchmarkId::new(format!("{channels}ch"), frames),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!("{}_{}", format!("{channels}ch"), frames)),
+                ),
                 &frames,
                 |b, _| {
-                    b.iter(|| kithara_dsp::downmix(black_box(&interleaved), channels, &mut mono));
+                    b.iter(|| {
+                        kithara_dsp::downmix(
+                            std::hint::black_box(&interleaved),
+                            channels,
+                            &mut mono,
+                        )
+                    });
                 },
             );
         }
@@ -561,26 +681,37 @@ fn spectrum(c: &mut Criterion) {
         let fft =
             Fft::new(FftLen::new(len).expect("bench lengths are f·2ⁿ")).expect("the FFT builds");
         let mut bins = fft.spectrum(&region).expect("the planes fit the region");
-        group.bench_with_input(BenchmarkId::new("fft", len), &len, |b, _| {
-            b.iter(|| fft.forward(black_box(&frame), &mut bins).is_ok());
-        });
+        group.bench_with_input(
+            BenchmarkId::new("case", canonical_id(format!("{}_{}", "fft", len))),
+            &len,
+            |b, _| {
+                b.iter(|| fft.forward(std::hint::black_box(&frame), &mut bins).is_ok());
+            },
+        );
         let window = hann(len);
         let reference: RealToComplexEven<f32> =
             RealToComplexEven::new(len, &mut rustfft::FftPlanner::new());
         let mut input = reference.make_input_vec();
         let mut output = reference.make_output_vec();
         let mut scratch = reference.make_scratch_vec();
-        group.bench_with_input(BenchmarkId::new("realfft", len), &len, |b, _| {
-            b.iter(|| {
-                for ((slot, sample), weight) in input.iter_mut().zip(black_box(&frame)).zip(&window)
-                {
-                    *slot = sample * weight;
-                }
-                reference
-                    .process_with_scratch(&mut input, &mut output, &mut scratch)
-                    .is_ok()
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("case", canonical_id(format!("{}_{}", "realfft", len))),
+            &len,
+            |b, _| {
+                b.iter(|| {
+                    for ((slot, sample), weight) in input
+                        .iter_mut()
+                        .zip(std::hint::black_box(&frame))
+                        .zip(&window)
+                    {
+                        *slot = sample * weight;
+                    }
+                    reference
+                        .process_with_scratch(&mut input, &mut output, &mut scratch)
+                        .is_ok()
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -592,14 +723,20 @@ fn prediction(c: &mut Criterion) {
         let re = tone(size);
         let im: Vec<f32> = re.iter().rev().copied().collect();
         let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; size + 1]);
-        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter(|| {
-                prediction_difference(
-                    [black_box(&re), black_box(&im)],
-                    black_box(&mut history).each_mut().map(Vec::as_mut_slice),
-                )
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("case", canonical_id(size)),
+            &size,
+            |b, _| {
+                b.iter(|| {
+                    prediction_difference(
+                        [std::hint::black_box(&re), std::hint::black_box(&im)],
+                        std::hint::black_box(&mut history)
+                            .each_mut()
+                            .map(Vec::as_mut_slice),
+                    )
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -618,9 +755,13 @@ fn autocorrelation(c: &mut Criterion) {
         )
         .expect("the padding fits the region");
         let mut output = vec![0.0_f32; size];
-        group.bench_with_input(BenchmarkId::new("process", size), &size, |b, _| {
-            b.iter(|| acf.process(black_box(&frame), &mut output));
-        });
+        group.bench_with_input(
+            BenchmarkId::new("case", canonical_id(format!("{}_{}", "process", size))),
+            &size,
+            |b, _| {
+                b.iter(|| acf.process(std::hint::black_box(&frame), &mut output));
+            },
+        );
     }
     group.finish();
 }
@@ -654,10 +795,17 @@ fn biquad(c: &mut Criterion) {
             }
             let mut planes = vec![vec![0.25_f32; FRAMES]; channels];
             group.bench_with_input(
-                BenchmarkId::new(format!("{channels}ch"), sections),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!("{}_{}", format!("{channels}ch"), sections)),
+                ),
                 &sections,
                 |b, _| {
-                    b.iter(|| filter.process(black_box(&mut planes), 0..FRAMES).is_ok());
+                    b.iter(|| {
+                        filter
+                            .process(std::hint::black_box(&mut planes), 0..FRAMES)
+                            .is_ok()
+                    });
                 },
             );
         }
@@ -698,22 +846,25 @@ fn svf(c: &mut Criterion) {
             assert!(probe.iter().flatten().any(|sample| *sample != 0.0));
             filter.reset();
             group.bench_with_input(
-                BenchmarkId::new(format!("2ch_{response:?}"), frames),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!("{}_{}", format!("2ch_{response:?}"), frames)),
+                ),
                 &frames,
                 |b, &frames| {
                     b.iter_batched_ref(
                         || template.clone(),
                         |planes| {
                             let result = filter.process(
-                                black_box(&mut *planes),
+                                std::hint::black_box(&mut *planes),
                                 0..frames,
-                                black_box(&cutoffs),
+                                std::hint::black_box(&cutoffs),
                                 rate,
                                 FRAC_1_SQRT_2,
                                 response,
                             );
-                            black_box(result.is_ok());
-                            black_box(planes);
+                            std::hint::black_box(result.is_ok());
+                            std::hint::black_box(planes);
                         },
                         BatchSize::SmallInput,
                     );
@@ -738,14 +889,17 @@ fn biquad_decay(c: &mut Criterion) {
         .collect();
     let template = vec![burst; consts::TWO.get()];
     let mut planes = template.clone();
-    group.bench_function("burst_into_silence_2ch", |b| {
-        b.iter(|| {
-            planes.clone_from(&template);
-            for start in (0..FRAMES).step_by(64) {
-                let _ = black_box(filter.process(&mut planes, start..start + 64));
-            }
-        });
-    });
+    group.bench_function(
+        BenchmarkId::new("case", canonical_id("burst_into_silence_2ch")),
+        |b| {
+            b.iter(|| {
+                planes.clone_from(&template);
+                for start in (0..FRAMES).step_by(64) {
+                    let _ = std::hint::black_box(filter.process(&mut planes, start..start + 64));
+                }
+            });
+        },
+    );
     group.finish();
 }
 
@@ -773,14 +927,17 @@ fn interp(c: &mut Criterion) {
             Interpolation::Watte,
         ] {
             group.bench_with_input(
-                BenchmarkId::new(format!("{method:?}"), ratio),
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!("{}_{}", format!("{method:?}"), ratio)),
+                ),
                 &ratio,
                 |b, _| {
                     b.iter(|| {
                         interpolate(
                             method,
-                            black_box(&window),
-                            black_box(&positions),
+                            std::hint::black_box(&window),
+                            std::hint::black_box(&positions),
                             &mut output,
                         )
                         .is_ok()
@@ -856,7 +1013,7 @@ fn crossfade(c: &mut Criterion) {
             let old = vec![old_sample; frames * channels.get() + tail];
             let apply = |output: &mut [f32]| {
                 let mut processed = 0;
-                for (outgoing, incoming) in black_box(&old)
+                for (outgoing, incoming) in std::hint::black_box(&old)
                     .chunks(chunk * channels.get())
                     .zip(output.chunks_mut(chunk * channels.get()))
                 {
@@ -881,13 +1038,19 @@ fn crossfade(c: &mut Criterion) {
             group.throughput(Throughput::Elements(
                 u64::try_from(frames).expect("frame count"),
             ));
-            group.bench_function(BenchmarkId::new(format!("{channels}ch"), shape), |b| {
-                b.iter_batched_ref(
-                    || vec![input_sample; old.len()],
-                    |output| black_box(apply(black_box(output))),
-                    BatchSize::SmallInput,
-                );
-            });
+            group.bench_function(
+                BenchmarkId::new(
+                    "case",
+                    canonical_id(format!("{}_{}", format!("{channels}ch"), shape)),
+                ),
+                |b| {
+                    b.iter_batched_ref(
+                        || vec![input_sample; old.len()],
+                        |output| std::hint::black_box(apply(std::hint::black_box(output))),
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
         }
         group.finish();
     }
@@ -904,57 +1067,113 @@ fn source_frames(c: &mut Criterion) {
         group.throughput(Throughput::Elements(
             u64::try_from(channels).expect("channels"),
         ));
-        group.bench_function(BenchmarkId::new("interpolate", channels), |b| {
-            b.iter(|| {
-                interpolate_frame(
-                    black_box(&samples[..channels]),
-                    black_box(&samples[channels..2 * channels]),
-                    black_box(0.531_589_7),
-                    &mut frame,
-                );
-                black_box(&frame);
-            });
-        });
-        group.bench_function(BenchmarkId::new("weighted", channels), |b| {
-            b.iter(|| {
-                weighted_frames(
-                    black_box(&samples),
-                    black_box(&offsets),
-                    black_box(&weights),
-                    channels,
-                    &mut sums,
-                )
-                .expect("resolved taps");
-                black_box(&sums);
-            });
-        });
+        group.bench_function(
+            BenchmarkId::new(
+                "case",
+                canonical_id(format!("{}_{}", "interpolate", channels)),
+            ),
+            |b| {
+                b.iter(|| {
+                    interpolate_frame(
+                        std::hint::black_box(&samples[..channels]),
+                        std::hint::black_box(&samples[channels..2 * channels]),
+                        std::hint::black_box(0.531_589_7),
+                        &mut frame,
+                    );
+                    std::hint::black_box(&frame);
+                });
+            },
+        );
+        group.bench_function(
+            BenchmarkId::new("case", canonical_id(format!("{}_{}", "weighted", channels))),
+            |b| {
+                b.iter(|| {
+                    weighted_frames(
+                        std::hint::black_box(&samples),
+                        std::hint::black_box(&offsets),
+                        std::hint::black_box(&weights),
+                        channels,
+                        &mut sums,
+                    )
+                    .expect("resolved taps");
+                    std::hint::black_box(&sums);
+                });
+            },
+        );
     }
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    last_loud,
-    svf_fixed,
-    crossfade,
-    kernels,
-    vector,
-    curve,
-    ratio_ramp,
-    narrow_f64,
-    multiply_squared,
-    routed_ramp,
-    routed_div,
-    routed_mul_add,
-    downmix,
-    biquad,
-    support::crossover_biquad::bench,
-    biquad_decay,
-    svf,
-    interp,
-    source_frames,
-    spectrum,
-    prediction,
-    autocorrelation
+fn criterion_benchmarks(c: &mut Criterion) {
+    last_loud(c);
+    svf_fixed(c);
+    crossfade(c);
+    kernels(c);
+    vector(c);
+    curve(c);
+    ratio_ramp(c);
+    narrow_f64(c);
+    multiply_squared(c);
+    routed_ramp(c);
+    routed_div(c);
+    routed_mul_add(c);
+    downmix(c);
+    biquad(c);
+    bench(c);
+    biquad_decay(c);
+    svf(c);
+    interp(c);
+    source_frames(c);
+    spectrum(c);
+    prediction(c);
+    autocorrelation(c);
+}
+
+fn canonical_id(value: impl std::fmt::Display) -> String {
+    let suffix: String = value
+        .to_string()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("case_{}", suffix.to_ascii_lowercase())
+}
+
+include!("support/kernels.rs");
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [
+        KERNEL_LAST_LOUD,
+        KERNEL_SVF_FIXED,
+        KERNEL_CROSSFADE_LINEAR,
+        KERNEL_CROSSFADE_PREVIOUS,
+        KERNEL_LAYOUT,
+        KERNEL_VECTOR,
+        KERNEL_CURVE_HOLD,
+        KERNEL_CURVE_LINEAR,
+        KERNEL_CURVE_CUBIC,
+        KERNEL_RATIO_RAMP,
+        KERNEL_NARROW,
+        KERNEL_MULTIPLY_SQUARED,
+        KERNEL_RAMP,
+        KERNEL_DIV,
+        KERNEL_MUL_ADD,
+        KERNEL_DOWNMIX,
+        KERNEL_BIQUAD,
+        KERNEL_CROSSOVER,
+        KERNEL_DECAY,
+        KERNEL_SVF,
+        KERNEL_INTERP,
+        KERNEL_SOURCE_FRAMES,
+        KERNEL_SPECTRUM,
+        KERNEL_PREDICTION,
+        KERNEL_AUTOCORRELATION,
+    ],
+    allocator = std::alloc::System,
 );
-criterion_main!(benches);

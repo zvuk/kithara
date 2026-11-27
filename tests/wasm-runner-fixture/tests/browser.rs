@@ -16,6 +16,18 @@ fn passes() {
         Some(true),
         "the page is not cross-origin isolated"
     );
+    let navigator =
+        js_sys::Reflect::get(&js_sys::global(), &"navigator".into()).expect("browser navigator");
+    let activation = js_sys::Reflect::get(&navigator, &"userActivation".into())
+        .expect("browser user activation");
+    let active = js_sys::Reflect::get(&activation, &"hasBeenActive".into())
+        .expect("browser activation history")
+        .as_bool();
+    assert_eq!(
+        active,
+        Some(true),
+        "the runner did not supply a genuine user gesture"
+    );
 }
 
 #[wasm_bindgen_test]

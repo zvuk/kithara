@@ -236,7 +236,11 @@ mod tests {
                 "-f",
                 "bench_ref=head",
                 "-f",
-                "bench_base_ref=base"
+                "bench_base_ref=base",
+                "-f",
+                "bench_mode=timing",
+                "-f",
+                "bench_allocator_policy=system"
             ]
         );
         let raw = "{\"collections\":{}}\n";

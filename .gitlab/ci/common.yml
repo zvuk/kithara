@@ -43,10 +43,18 @@
 # The native Linux pool: Docker workers whose own environment names the cache
 # roots, the build directory and the compiler-cache socket, so a job here sets
 # none of them and runs a lane with the command GitHub's `lane.yml` runs.
+#
+# The runner puts each worker's own token into the default checkout path.
+# Compiled artifacts carry the source path they were built from, for example
+# through `env!("CARGO_MANIFEST_DIR")`, and the compiler cache shares them
+# across workers. So every worker checks out at one path: a hit that one worker
+# built must name a directory that exists on the worker reusing it.
 .linux-pool-job:
   image: kithara-ci:linux-latest
   tags:
     - kithara-cloud-linux
+  variables:
+    GIT_CLONE_PATH: $CI_BUILDS_DIR/$CI_PROJECT_PATH
 
 # Every Linux pool job's rules start here. Setting the project variable
 # `KITHARA_LINUX_POOL` to `off` takes the pool out: its jobs are not created,

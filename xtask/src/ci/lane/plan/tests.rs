@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Value, json};
 
 use super::{
-    catalog::Catalog,
+    catalog::{Catalog, canonical_digest},
     request::{
         PlacementMode, PlanRequest, PlanningPolicy, Platform, Pool, Purpose, VerificationIdentity,
     },
@@ -391,6 +391,19 @@ fn a_check_digest_binds_draft_versus_ready_harness_selection() {
     assert_ne!(
         ready_plan["checks"][id]["digest"],
         draft_plan["checks"][id]["digest"]
+    );
+}
+
+#[test]
+fn a_digest_does_not_depend_on_serialized_key_order() {
+    #[derive(serde::Serialize)]
+    struct Declared {
+        zeta: u8,
+        alpha: u8,
+    }
+    assert_eq!(
+        canonical_digest(&Declared { zeta: 1, alpha: 2 }).unwrap(),
+        canonical_digest(&json!({"alpha": 2, "zeta": 1})).unwrap()
     );
 }
 
