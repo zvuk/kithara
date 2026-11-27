@@ -93,7 +93,6 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
         let Some(hub) = weak.upgrade() else {
             return;
         };
-        let _g = hub.flush_lock.lock();
         let _ = hub.flush_dirty(false);
     }
 }
@@ -104,7 +103,6 @@ fn final_flush(weak: &Weak<FlushHub>) {
     let Some(hub) = weak.upgrade() else {
         return;
     };
-    let _g = hub.flush_lock.lock();
     let _ = hub.flush_dirty(false);
 }
 
@@ -115,18 +113,18 @@ mod tests {
     use kithara_platform::sync::{Mutex, mpsc};
     use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{super::cell::PublicationState, *};
     use crate::{error::AssetsResult, index::persistence::flush::Flushable};
 
     #[kithara::test]
     fn final_hub_destruction_prevents_worker_source_operations() {
         struct Source {
-            dirty: AtomicBool,
+            publication_state: PublicationState,
             flushes: AtomicUsize,
         }
         impl Flushable for Source {
-            fn dirty(&self) -> &AtomicBool {
-                &self.dirty
+            fn publication(&self) -> &PublicationState {
+                &self.publication_state
             }
             fn flush(&self) -> AssetsResult<()> {
                 self.flushes.fetch_add(1, Ordering::AcqRel);
@@ -139,7 +137,10 @@ mod tests {
 
         let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
         let source = Arc::new(Source {
-            dirty: AtomicBool::new(true),
+            publication_state: PublicationState {
+                dirty: AtomicBool::new(true),
+                ..PublicationState::default()
+            },
             flushes: AtomicUsize::new(0),
         });
         hub.register(Arc::downgrade(&source) as Weak<dyn Flushable>);
@@ -152,20 +153,20 @@ mod tests {
 
         assert!(weak.upgrade().is_none());
         assert_eq!(source.flushes.load(Ordering::Acquire), 0);
-        assert!(source.dirty.load(Ordering::Acquire));
+        assert!(source.publication_state.dirty.load(Ordering::Acquire));
     }
 
     #[kithara::test]
     fn worker_can_destroy_the_hub_after_releasing_its_last_external_owner() {
         struct Source {
-            dirty: AtomicBool,
+            publication_state: PublicationState,
             owner: Mutex<Option<Arc<FlushHub>>>,
             release: Mutex<mpsc::Receiver<()>>,
             flushed: mpsc::Sender<bool>,
         }
         impl Flushable for Source {
-            fn dirty(&self) -> &AtomicBool {
-                &self.dirty
+            fn publication(&self) -> &PublicationState {
+                &self.publication_state
             }
             fn flush(&self) -> AssetsResult<()> {
                 self.release.lock().recv().expect("release in-flight flush");
@@ -190,7 +191,10 @@ mod tests {
         let (destroyed, destruction) = mpsc::channel();
         let _on_cancel = cancel.on_cancel(move || destroyed.send(()).unwrap());
         let source = Arc::new(Source {
-            dirty: AtomicBool::new(true),
+            publication_state: PublicationState {
+                dirty: AtomicBool::new(true),
+                ..PublicationState::default()
+            },
             owner: Mutex::new(Some(Arc::clone(&hub))),
             release: Mutex::new(released),
             flushed,

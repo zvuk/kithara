@@ -149,9 +149,8 @@ where
     /// disk. For an in-memory store this is a no-op.
     ///
     /// Callers can checkpoint at any point they want a consistent
-    /// aggregate on disk; the store also checkpoints itself when the last
-    /// handle drops, because the manifest is what makes a resource usable
-    /// after a restart.
+    /// aggregate on disk. The disk backend also checkpoints itself when its
+    /// final owner drops, after outstanding resource handles release it.
     ///
     /// # Errors
     ///
@@ -288,26 +287,6 @@ where
             /// Committed final length per the availability aggregate, if known.
             #[must_use]
             pub fn final_len(&self, key: &ResourceKey) -> Option<u64>;
-        }
-    }
-}
-
-/// The manifest decides what survives a restart, so the last handle writes
-/// it before the indexes go away. Waiting for the flush hub's own teardown
-/// is too late: every index holds the hub alive, so by the time the hub
-/// drops there is nothing left to flush.
-impl<S> Drop for AssetStoreInner<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn drop(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let StoreBackendInner::Disk {
-            base: Some(base), ..
-        } = &self.backend
-            && let Err(error) = base.checkpoint()
-        {
-            tracing::warn!(%error, "AssetStore: final checkpoint failed");
         }
     }
 }

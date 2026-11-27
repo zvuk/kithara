@@ -526,12 +526,12 @@ mod tests {
         idx.record_write(&k, 0..10);
         idx.record_commit(&k, 10);
         idx.flush().unwrap();
-        assert!(!idx.inner.dirty.load(Ordering::Acquire));
+        assert!(!idx.inner.publication.dirty.load(Ordering::Acquire));
 
         idx.record_write(&k, 0..10);
         idx.record_commit(&k, 10);
 
-        assert!(!idx.inner.dirty.load(Ordering::Acquire));
+        assert!(!idx.inner.publication.dirty.load(Ordering::Acquire));
     }
 
     #[kithara::test]
@@ -540,11 +540,11 @@ mod tests {
         let k = ResourceKey::relative("test_asset", "file1");
 
         idx.record_write(&k, 0..10);
-        assert!(idx.inner.dirty.swap(false, Ordering::AcqRel));
+        assert!(idx.inner.publication.dirty.swap(false, Ordering::AcqRel));
         idx.remove(&k);
         Flushable::flush(&*idx.inner).unwrap();
 
-        assert!(idx.inner.dirty.load(Ordering::Acquire));
+        assert!(idx.inner.publication.dirty.load(Ordering::Acquire));
     }
 
     #[kithara::test]
