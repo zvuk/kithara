@@ -9,7 +9,7 @@ use crate::error::AssetsResult;
 
 /// Wasm32 stub: no background flush worker exists in the browser (no
 /// filesystem to flush). Index mutators always take the
-/// `Flushable::flush` sync path because `is_started()` returns `false`.
+/// `flush_source` sync path because `is_started()` returns `false`.
 #[derive(Default)]
 pub(super) struct WorkerSlot;
 

@@ -8,7 +8,6 @@ use std::{
 };
 
 use kithara_bufpool::ByteBuffer;
-use kithara_platform::sync::Mutex;
 use kithara_storage::StorageError;
 use rkyv::{
     api::high::{HighSerializer, HighValidator},
@@ -102,17 +101,15 @@ impl IndexFile {
 /// Snapshots an index's state and writes it to its file.
 pub(crate) type WriteIndex<S> = fn(&S, &IndexFile, bool) -> AssetsResult<()>;
 
-/// Where a persisted index lands: its file, how its state is written there,
-/// and the lock that keeps one snapshot-and-rename in flight at a time.
+/// Where a persisted index lands: its file and how its state is written there.
+/// The owning [`IndexCell`] serializes selection, snapshot, and rename.
 pub(crate) struct IndexTarget<S> {
     file: IndexFile,
     write: WriteIndex<S>,
-    writing: Mutex<()>,
 }
 
 impl<S> IndexTarget<S> {
     pub(crate) fn publish(&self, state: &S, durable: bool) -> AssetsResult<()> {
-        let _writing = self.writing.lock();
         (self.write)(state, &self.file, durable)
     }
 }
@@ -120,11 +117,7 @@ impl<S> IndexTarget<S> {
 impl<S> IndexCell<S> {
     /// Points the index at its file; the first target stays.
     pub(crate) fn persist_to(&self, file: IndexFile, write: WriteIndex<S>) {
-        let _ = self.target.set(IndexTarget {
-            file,
-            write,
-            writing: Mutex::new(()),
-        });
+        let _ = self.target.set(IndexTarget { file, write });
     }
 }
 

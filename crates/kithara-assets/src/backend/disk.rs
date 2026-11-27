@@ -68,6 +68,14 @@ pub struct DiskAssetStore {
     policy: Arc<dyn DiskPolicy>,
 }
 
+impl Drop for DiskAssetStore {
+    fn drop(&mut self) {
+        if let Err(error) = self.checkpoint() {
+            tracing::warn!(%error, "DiskAssetStore: final checkpoint failed");
+        }
+    }
+}
+
 /// Disk-backed [`AssetDeleter`].
 ///
 /// Owns clones of every shared in-memory + disk-backed index handle
@@ -201,9 +209,9 @@ impl DiskAssetStore {
     /// Persist the current [`AvailabilityIndex`] snapshot to
     /// `_index/availability.bin`. Routes through the shared
     /// [`crate::index::FlushHub`] when one is attached (drains every
-    /// dirty source — pins/lru/availability — under a single
-    /// `flush_lock`); falls back to the inline serialise+write path
-    /// otherwise.
+    /// dirty source - pins/lru/availability - with publication serialized
+    /// independently per source); falls back to the inline serialise+write
+    /// path otherwise.
     ///
     /// # Errors
     ///
