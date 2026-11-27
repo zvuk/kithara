@@ -2,14 +2,11 @@
 
 use std::{
     fs,
-    hint::black_box,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::Path,
 };
 
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput};
 use kithara::{
     abr::{AbrEvent, AbrReason},
     analysis::{
@@ -225,7 +222,7 @@ fn bench_gapless_trim(c: &mut Criterion) {
                     }
                 }
                 assert!(reached_eof, "decode exceeded its bounded read budget");
-                black_box(total);
+                std::hint::black_box(total);
             });
         });
     });
@@ -339,12 +336,12 @@ fn bench_analysis_worker(c: &mut Criterion) {
                 let progress = rt.block_on(analyze_track(
                     &analysis_worker,
                     &play_worker,
-                    black_box(&file_path),
+                    std::hint::black_box(&file_path),
                     &store,
                     &token,
                 ));
                 assert_complete_analysis(&analysis_worker, &progress);
-                black_box(progress)
+                std::hint::black_box(progress)
             });
         });
 
@@ -365,9 +362,12 @@ fn bench_analysis_worker(c: &mut Criterion) {
     checkpoint.throughput(Throughput::Elements(source_frames));
     checkpoint.bench_function("serialize_full_update", |b| {
         b.iter_with_large_drop(|| {
-            black_box(
-                AnalysisFile::create(black_box(&file_spec), black_box(&warm))
-                    .unwrap_or_else(|error| panic!("analysis checkpoint encoding failed: {error}")),
+            std::hint::black_box(
+                AnalysisFile::create(
+                    std::hint::black_box(&file_spec),
+                    std::hint::black_box(&warm),
+                )
+                .unwrap_or_else(|error| panic!("analysis checkpoint encoding failed: {error}")),
             )
         });
     });
@@ -384,7 +384,7 @@ fn bench_stretch_prepare(c: &mut Criterion) {
 
     for &backend in StretchKind::all() {
         group.bench_with_input(
-            BenchmarkId::new("prepare", backend),
+            BenchmarkId::new("prepare", backend.to_string().to_ascii_lowercase()),
             &backend,
             |b, &backend| {
                 b.iter_batched(
@@ -426,21 +426,24 @@ fn bench_stretch_backends(c: &mut Criterion) {
         let mut prime_target = stretch_engine(backend, &pools);
         let mut prime_buffers = prime_fixture(prime_target.as_ref());
         group.throughput(frame_throughput(prime_buffers.request.output_frames()));
-        group.bench_function(BenchmarkId::new("prime", backend), |b| {
-            b.iter(|| {
-                prime_target
-                    .prime(
-                        prime_buffers.request,
-                        black_box(&prime_buffers.source_history),
-                        black_box(&prime_buffers.source_lookahead),
-                        black_box(&prime_buffers.source),
-                        black_box(&mut prime_buffers.discarded_output),
-                    )
-                    .unwrap_or_else(|error| {
-                        panic!("failed to prime {backend} benchmark engine: {error}")
-                    });
-            });
-        });
+        group.bench_function(
+            BenchmarkId::new("prime", backend.to_string().to_ascii_lowercase()),
+            |b| {
+                b.iter(|| {
+                    prime_target
+                        .prime(
+                            prime_buffers.request,
+                            std::hint::black_box(&prime_buffers.source_history),
+                            std::hint::black_box(&prime_buffers.source_lookahead),
+                            std::hint::black_box(&prime_buffers.source),
+                            std::hint::black_box(&mut prime_buffers.discarded_output),
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!("failed to prime {backend} benchmark engine: {error}")
+                        });
+                });
+            },
+        );
         drop(prime_target);
 
         let mut steady_target = stretch_engine(backend, &pools);
@@ -448,19 +451,22 @@ fn bench_stretch_backends(c: &mut Criterion) {
         prime_engine(steady_target.as_mut(), &mut steady_prime);
         let mut steady_output = vec![0.0; steady_request.output_frames() * consts::CHANNELS];
         group.throughput(frame_throughput(steady_request.output_frames()));
-        group.bench_function(BenchmarkId::new("steady_process", backend), |b| {
-            b.iter(|| {
-                steady_target
-                    .process(
-                        steady_request,
-                        black_box(&steady_source),
-                        black_box(&mut steady_output),
-                    )
-                    .unwrap_or_else(|error| {
-                        panic!("failed to process {backend} steady benchmark block: {error}")
-                    });
-            });
-        });
+        group.bench_function(
+            BenchmarkId::new("steady_process", backend.to_string().to_ascii_lowercase()),
+            |b| {
+                b.iter(|| {
+                    steady_target
+                        .process(
+                            steady_request,
+                            std::hint::black_box(&steady_source),
+                            std::hint::black_box(&mut steady_output),
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!("failed to process {backend} steady benchmark block: {error}")
+                        });
+                });
+            },
+        );
         drop(steady_target);
 
         let mut control_target = stretch_engine(backend, &pools);
@@ -470,26 +476,34 @@ fn bench_stretch_backends(c: &mut Criterion) {
         let mut control_index = 0_usize;
         let pitch_scales = [1.0, 1.122_462_048_309_373];
         group.throughput(frame_throughput(consts::CONTROL_OUTPUT_FRAMES));
-        group.bench_function(BenchmarkId::new("live_control_change", backend), |b| {
-            b.iter(|| {
-                control_index ^= 1;
-                let request = control_requests[control_index];
-                control_target
-                    .set_pitch(black_box(pitch_scales[control_index]))
-                    .unwrap_or_else(|error| {
-                        panic!("failed to set {backend} benchmark pitch: {error}")
-                    });
-                control_target
-                    .process(
-                        request,
-                        black_box(&control_source[..request.source_frames() * consts::CHANNELS]),
-                        black_box(&mut control_output),
-                    )
-                    .unwrap_or_else(|error| {
-                        panic!("failed to process {backend} live-control block: {error}")
-                    });
-            });
-        });
+        group.bench_function(
+            BenchmarkId::new(
+                "live_control_change",
+                backend.to_string().to_ascii_lowercase(),
+            ),
+            |b| {
+                b.iter(|| {
+                    control_index ^= 1;
+                    let request = control_requests[control_index];
+                    control_target
+                        .set_pitch(std::hint::black_box(pitch_scales[control_index]))
+                        .unwrap_or_else(|error| {
+                            panic!("failed to set {backend} benchmark pitch: {error}")
+                        });
+                    control_target
+                        .process(
+                            request,
+                            std::hint::black_box(
+                                &control_source[..request.source_frames() * consts::CHANNELS],
+                            ),
+                            std::hint::black_box(&mut control_output),
+                        )
+                        .unwrap_or_else(|error| {
+                            panic!("failed to process {backend} live-control block: {error}")
+                        });
+                });
+            },
+        );
     }
 
     group.finish();
@@ -534,7 +548,7 @@ fn render_windows(
             frames: u32::try_from(frames).expect("window size"),
             ..meta
         };
-        black_box(
+        std::hint::black_box(
             renderer
                 .render_quantum(input)
                 .continue_value()
@@ -564,38 +578,41 @@ fn bench_stretch_process(c: &mut Criterion) {
             .controls(WarpControls::builder().pitch(Pitch::HELD).build())
             .build();
         let backend_label = backend.to_string().to_ascii_lowercase();
-        group.bench_function(format!("{backend_label}_ratio_1_25"), |b| {
-            b.iter_batched(
-                || {
-                    let warp = Warp::new((), &config);
-                    let renderer = warp.renderer(spec, pools.clone());
-                    let chunk = make_chunk(&pools, &pcm);
-                    (renderer, chunk)
-                },
-                |(mut renderer, chunk): (WarpRenderer<TestPools>, AudioChunk)| {
-                    let source = render_windows(&mut renderer, &pools, spec, &chunk.samples);
-                    let start = usize::try_from(source).expect("source frame fits usize");
-                    let held = chunk.frames() - start;
-                    if held > 0 {
-                        let frames = renderer
-                            .prepare_terminal_quantum(held)
-                            .expect("terminal quantum")
-                            .get();
-                        let mut input =
-                            make_chunk(&pools, &chunk.samples[start * consts::CHANNELS..]);
-                        input.meta.frame_offset = source;
-                        input.meta.frames = u32::try_from(frames).expect("window size");
-                        black_box(
-                            renderer
-                                .render_quantum(input)
-                                .continue_value()
-                                .expect("terminal input"),
-                        );
-                    }
-                },
-                BatchSize::SmallInput,
-            );
-        });
+        group.bench_function(
+            BenchmarkId::new("process", format!("{backend_label}_ratio_1_25")),
+            |b| {
+                b.iter_batched(
+                    || {
+                        let warp = Warp::new((), &config);
+                        let renderer = warp.renderer(spec, pools.clone());
+                        let chunk = make_chunk(&pools, &pcm);
+                        (renderer, chunk)
+                    },
+                    |(mut renderer, chunk): (WarpRenderer<TestPools>, AudioChunk)| {
+                        let source = render_windows(&mut renderer, &pools, spec, &chunk.samples);
+                        let start = usize::try_from(source).expect("source frame fits usize");
+                        let held = chunk.frames() - start;
+                        if held > 0 {
+                            let frames = renderer
+                                .prepare_terminal_quantum(held)
+                                .expect("terminal quantum")
+                                .get();
+                            let mut input =
+                                make_chunk(&pools, &chunk.samples[start * consts::CHANNELS..]);
+                            input.meta.frame_offset = source;
+                            input.meta.frames = u32::try_from(frames).expect("window size");
+                            std::hint::black_box(
+                                renderer
+                                    .render_quantum(input)
+                                    .continue_value()
+                                    .expect("terminal input"),
+                            );
+                        }
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
     }
 
     group.finish();
@@ -711,7 +728,7 @@ fn bench_quality_switch(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(4));
     group.bench_function("manual_hls_join", |b| {
-        b.iter(|| black_box(rt.block_on(quality_switch(&helper, &server))));
+        b.iter(|| std::hint::black_box(rt.block_on(quality_switch(&helper, &server))));
     });
     group.finish();
 }
@@ -773,7 +790,7 @@ fn bench_warp_transition(c: &mut Criterion) {
                         .expect("mapped output");
                     produced += output.frames();
                     source += u64::try_from(frames).expect("source advance");
-                    black_box(output);
+                    std::hint::black_box(output);
                 }
                 drop(renderer);
                 let mut replacement = Warp::new(
@@ -817,7 +834,7 @@ fn bench_warp_transition(c: &mut Criterion) {
                     .continue_value()
                     .expect("replacement input")
                     .expect("replacement output");
-                black_box((produced, output));
+                std::hint::black_box((produced, output));
             },
             BatchSize::SmallInput,
         );
@@ -890,19 +907,25 @@ fn bench_limiter_detector(c: &mut Criterion) {
             } else {
                 format!("{frames}+{tail}")
             };
-            group.bench_function(BenchmarkId::new(label, shape), |b| {
-                b.iter_batched_ref(
-                    || (primed().0, input.clone()),
-                    |(limiter, [left, right])| {
-                        limiter.process_planar(&mut [
-                            black_box(left.as_mut_slice()),
-                            black_box(right.as_mut_slice()),
-                        ]);
-                        black_box((left.as_slice(), right.as_slice()));
-                    },
-                    BatchSize::SmallInput,
-                );
-            });
+            group.bench_function(
+                BenchmarkId::new(
+                    "process",
+                    format!("{label}_{}", shape.replace('+', "_tail_")),
+                ),
+                |b| {
+                    b.iter_batched_ref(
+                        || (primed().0, input.clone()),
+                        |(limiter, [left, right])| {
+                            limiter.process_planar(&mut [
+                                std::hint::black_box(left.as_mut_slice()),
+                                std::hint::black_box(right.as_mut_slice()),
+                            ]);
+                            std::hint::black_box((left.as_slice(), right.as_slice()));
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
         }
     }
     group.finish();
@@ -989,32 +1012,53 @@ fn bench_source_window(c: &mut Criterion) {
             let (numerator, denominator) = span.source_ratio_at(1).expect("fractional frame");
             assert_ne!(numerator % denominator.get(), 0);
             assert!(output.samples.iter().any(|value| *value != 0.0));
-            group.bench_function(BenchmarkId::new(label, shape), |b| {
-                b.iter_batched_ref(
-                    || sampler_fixture(speed, &pcm, frames, terminal),
-                    |(renderer, chunk)| {
-                        black_box(
-                            renderer
-                                .render_quantum(black_box(chunk.take().expect("prepared input"))),
-                        )
-                    },
-                    BatchSize::PerIteration,
-                );
-            });
+            group.bench_function(
+                BenchmarkId::new("render", format!("{label}_{shape}")),
+                |b| {
+                    b.iter_batched_ref(
+                        || sampler_fixture(speed, &pcm, frames, terminal),
+                        |(renderer, chunk)| {
+                            std::hint::black_box(renderer.render_quantum(std::hint::black_box(
+                                chunk.take().expect("prepared input"),
+                            )))
+                        },
+                        BatchSize::PerIteration,
+                    );
+                },
+            );
         }
     }
     group.finish();
 }
-criterion_group!(
-    benches,
-    bench_quality_switch,
-    bench_warp_transition,
-    bench_gapless_trim,
-    bench_analysis_worker,
-    bench_stretch_prepare,
-    bench_stretch_backends,
-    bench_stretch_process,
-    bench_limiter_detector,
-    bench_source_window
+fn criterion_benchmarks(c: &mut Criterion) {
+    bench_quality_switch(c);
+    bench_warp_transition(c);
+    bench_gapless_trim(c);
+    bench_analysis_worker(c);
+    bench_stretch_prepare(c);
+    bench_stretch_backends(c);
+    bench_stretch_process(c);
+    bench_limiter_detector(c);
+    bench_source_window(c);
+}
+
+include!("support/perf_audit.rs");
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [
+        AUDIT_STRETCH_PREPARE,
+        AUDIT_STRETCH_PRIME,
+        AUDIT_STRETCH_STEADY,
+        AUDIT_STRETCH_CONTROL,
+        AUDIT_STRETCH_PROCESS,
+        AUDIT_LIMITER,
+        AUDIT_SOURCE_WINDOW,
+        AUDIT_GAPLESS,
+        AUDIT_ANALYSIS,
+        AUDIT_CHECKPOINT,
+        AUDIT_QUALITY,
+        AUDIT_WARP,
+    ],
+    allocator = std::alloc::System,
 );
-criterion_main!(benches);

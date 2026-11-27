@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use criterion::{BatchSize, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use kithara::{
     play::{CurveShape, DeckParameter, DeckProgram, EqBandConfig, GainDb, ParameterKnot},
     signal::SessionFrame,
@@ -8,9 +8,9 @@ use kithara::{
 use kithara_integration_tests::offline::OfflinePlayer;
 use num_traits::ToPrimitive;
 
-const PRELUDE: usize = 529;
+pub(crate) const PRELUDE: usize = 529;
 
-async fn player() -> OfflinePlayer {
+pub(crate) async fn player() -> OfflinePlayer {
     let harness = super::slot_gain::loaded_player().await;
     harness
         .with_queue(|queue| queue.set_eq_layout(vec![EqBandConfig::default()]))
@@ -21,7 +21,7 @@ async fn player() -> OfflinePlayer {
     harness
 }
 
-async fn reset(harness: &OfflinePlayer) {
+pub(crate) async fn reset(harness: &OfflinePlayer) {
     harness
         .with_queue(|queue| queue.set_eq_gain(0, 0.0))
         .await
@@ -31,7 +31,7 @@ async fn reset(harness: &OfflinePlayer) {
     assert!(warm[warm.len() - 128..].iter().all(|sample| *sample == 0.5));
 }
 
-async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
+pub(crate) async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
     let start = harness.host().position() + u64::try_from(PRELUDE).expect("prelude");
     let end = start + u64::try_from(frames).expect("curve length");
     let program = DeckProgram::new(
@@ -61,7 +61,7 @@ async fn submit(harness: &OfflinePlayer, shape: CurveShape, frames: usize) {
         .expect("curve submission");
 }
 
-fn expected(frame: usize, frames: usize, shape: CurveShape) -> (GainDb, [f32; 2]) {
+pub(crate) fn expected(frame: usize, frames: usize, shape: CurveShape) -> (GainDb, [f32; 2]) {
     let time = frame.to_f64().expect("offset") / frames.to_f64().expect("length");
     let db = if frame >= frames {
         -12.0
@@ -89,31 +89,34 @@ pub(super) fn bench(c: &mut Criterion) {
                 let oracle: Vec<_> = (0..frames)
                     .flat_map(|frame| expected(frame, frames, shape).1)
                     .collect();
-                group.bench_function(format!("render_{name}/{frames}"), |b| {
-                    let mut last = Vec::new();
-                    b.iter_batched(
-                        || {
-                            rt.block_on(async {
-                                reset(&harness).await;
-                                submit(&harness, shape, frames).await;
-                                let prelude = harness.render(PRELUDE).await;
-                                assert!(prelude.iter().all(|sample| *sample == 0.5));
-                            });
-                        },
-                        |()| {
-                            last = rt.block_on(harness.render(frames));
-                            black_box(&last);
-                        },
-                        BatchSize::PerIteration,
-                    );
-                    assert_eq!(last, oracle);
-                    assert_eq!(
-                        harness.deck_snapshot().eq.gain(0),
-                        Some(expected(frames - 1, frames, shape).0)
-                    );
-                    assert!(harness.deck_snapshot().eq.program(0).is_some());
-                    assert_eq!(harness.metrics().underruns(), 0);
-                });
+                group.bench_function(
+                    BenchmarkId::new("case", format!("render_{name}_{frames}")),
+                    |b| {
+                        let mut last = Vec::new();
+                        b.iter_batched(
+                            || {
+                                rt.block_on(async {
+                                    reset(&harness).await;
+                                    submit(&harness, shape, frames).await;
+                                    let prelude = harness.render(PRELUDE).await;
+                                    assert!(prelude.iter().all(|sample| *sample == 0.5));
+                                });
+                            },
+                            |()| {
+                                last = rt.block_on(harness.render(frames));
+                                black_box(&last);
+                            },
+                            BatchSize::PerIteration,
+                        );
+                        assert_eq!(last, oracle);
+                        assert_eq!(
+                            harness.deck_snapshot().eq.gain(0),
+                            Some(expected(frames - 1, frames, shape).0)
+                        );
+                        assert!(harness.deck_snapshot().eq.program(0).is_some());
+                        assert_eq!(harness.metrics().underruns(), 0);
+                    },
+                );
             }
         }
         let shape = CurveShape::cubic(0.0, 1.0).expect("S shape");
@@ -126,7 +129,7 @@ pub(super) fn bench(c: &mut Criterion) {
                 }
             })
             .collect();
-        group.bench_function("public_host_cubic/1024", |b| {
+        group.bench_function(BenchmarkId::new("case", "public_host_cubic_1024"), |b| {
             let mut last = Vec::new();
             b.iter_batched(
                 || rt.block_on(reset(&harness)),

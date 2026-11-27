@@ -2,7 +2,6 @@
 
 use std::{
     fs,
-    hint::black_box,
     io::{Read, Seek, SeekFrom},
     num::{NonZeroU32, NonZeroUsize},
 };
@@ -16,7 +15,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, SamplingMode};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, mock::TestPcmReader},
@@ -279,26 +278,26 @@ fn bench_resampler_process(c: &mut Criterion) {
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(8));
 
-    group.bench_function("unity_ratio_process", |b| {
+    group.bench_function(BenchmarkId::new("case", "unity_ratio_process"), |b| {
         let mut resampler = build_resampler(44_100, 44_100, 4_096);
         let input = make_planar(4_096);
         let mut output = make_output(&*resampler);
 
         b.iter(|| {
             let frames = process_stereo(&mut *resampler, &input, &mut output);
-            black_box(frames);
+            std::hint::black_box(frames);
             resampler.reset();
         });
     });
 
-    group.bench_function("fixed_ratio_process", |b| {
+    group.bench_function(BenchmarkId::new("case", "fixed_ratio_process"), |b| {
         let mut resampler = build_resampler(48_000, 44_100, 8_192);
         let input = make_planar(8_192);
         let mut output = make_output(&*resampler);
 
         b.iter(|| {
             let frames = process_stereo(&mut *resampler, &input, &mut output);
-            black_box(frames);
+            std::hint::black_box(frames);
             resampler.reset();
         });
     });
@@ -313,7 +312,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(10));
 
-    group.bench_function("new_and_read", |b| {
+    group.bench_function(BenchmarkId::new("case", "new_and_read"), |b| {
         b.iter_batched(
             || {
                 let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
@@ -355,7 +354,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                             Err(e) => panic!("audio read failed: {e}"),
                         }
                     }
-                    black_box(total);
+                    std::hint::black_box(total);
                 });
             },
             BatchSize::SmallInput,
@@ -377,7 +376,7 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(2));
 
-    group.bench_function("new_seek_read_cycle", |b| {
+    group.bench_function(BenchmarkId::new("case", "new_seek_read_cycle"), |b| {
         let _ = &server_guard;
         b.iter_batched(
             || (),
@@ -436,10 +435,10 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
                         let n = stream
                             .read(&mut buf)
                             .unwrap_or_else(|e| panic!("read after seek failed: {e}"));
-                        black_box(n);
+                        std::hint::black_box(n);
                     }
 
-                    black_box(total);
+                    std::hint::black_box(total);
                 });
             },
             BatchSize::SmallInput,
@@ -460,25 +459,31 @@ fn bench_layout(c: &mut Criterion) {
         let planar = PlanarBuffer::new(&pools, spec, frames)
             .unwrap_or_else(|err| panic!("bench planar storage: {err}"));
         let mut interleaved = vec![0.0_f32; LAYOUT_FRAMES * width];
-        group.bench_function(format!("interleave_{channels}ch"), |b| {
-            b.iter(|| {
-                planar
-                    .view()
-                    .interleave_into(black_box(&mut interleaved))
-                    .is_ok()
-            });
-        });
+        group.bench_function(
+            BenchmarkId::new("case", format!("interleave_{channels}ch")),
+            |b| {
+                b.iter(|| {
+                    planar
+                        .view()
+                        .interleave_into(std::hint::black_box(&mut interleaved))
+                        .is_ok()
+                });
+            },
+        );
         let source = vec![0.25_f32; LAYOUT_FRAMES * width];
         let view = InterleavedView::new(&source, spec, frames)
             .unwrap_or_else(|err| panic!("bench interleaved view: {err}"));
         let mut planes = vec![vec![0.0_f32; LAYOUT_FRAMES]; width];
         let mut destinations: Vec<&mut [f32]> = planes.iter_mut().map(Vec::as_mut_slice).collect();
-        group.bench_function(format!("deinterleave_{channels}ch"), |b| {
-            b.iter(|| {
-                view.deinterleave_channels_into_at(black_box(&mut destinations), 0)
-                    .is_ok()
-            });
-        });
+        group.bench_function(
+            BenchmarkId::new("case", format!("deinterleave_{channels}ch")),
+            |b| {
+                b.iter(|| {
+                    view.deinterleave_channels_into_at(std::hint::black_box(&mut destinations), 0)
+                        .is_ok()
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -529,7 +534,7 @@ fn bench_render_buffers(c: &mut Criterion) {
         let player = runtime.block_on(render_player(SessionDuckingMode::Soft));
         runtime.block_on(render_buffer_cases::admit_player(&player, label, frames));
         let mut high = false;
-        group.bench_function(format!("{label}/{frames}"), |b| {
+        group.bench_function(BenchmarkId::new("case", format!("{label}_{frames}")), |b| {
             b.iter(|| {
                 let output = runtime.block_on(async {
                     if label == "moving" {
@@ -543,7 +548,7 @@ fn bench_render_buffers(c: &mut Criterion) {
                     }
                     player.render(frames).await
                 });
-                black_box(output);
+                std::hint::black_box(output);
             });
         });
         assert_eq!(player.metrics().decode_errors(), 0, "bench decode failure");
@@ -563,18 +568,39 @@ mod filter_sweep;
 #[path = "support/slot_gain.rs"]
 mod slot_gain;
 
-criterion_group!(
-    benches,
-    deck_eq_curves::bench,
-    filter_sweep::bench,
-    slot_gain::host_curve,
-    slot_gain::gain_shape,
-    bench_resampler_process,
-    bench_audio_file_new_and_read,
-    bench_hls_stream_seek_read,
-    bench_layout,
-    bench_render_buffers,
-    render_buffer_cases::bench,
-    filter_chain::bench
+fn criterion_benchmarks(c: &mut Criterion) {
+    deck_eq_curves::bench(c);
+    filter_sweep::bench(c);
+    slot_gain::host_curve(c);
+    slot_gain::gain_shape(c);
+    bench_resampler_process(c);
+    bench_audio_file_new_and_read(c);
+    bench_hls_stream_seek_read(c);
+    bench_layout(c);
+    bench_render_buffers(c);
+    render_buffer_cases::bench(c);
+    filter_chain::bench(c);
+}
+
+include!("support/refactor_hotpaths.rs");
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [
+        REFACTOR_RESAMPLER,
+        REFACTOR_AUDIO,
+        REFACTOR_HLS,
+        REFACTOR_LAYOUT,
+        REFACTOR_RENDER_PLAYER,
+        REFACTOR_DECK_EQ,
+        REFACTOR_FILTER_SWEEP,
+        REFACTOR_SLOT_HOST,
+        REFACTOR_SLOT_SHAPE,
+        REFACTOR_FILTER_CHAIN,
+        REFACTOR_ADOPT,
+        REFACTOR_REFILL,
+        REFACTOR_JUMP,
+        REFACTOR_DUCK,
+    ],
+    allocator = std::alloc::System,
 );
-criterion_main!(benches);
