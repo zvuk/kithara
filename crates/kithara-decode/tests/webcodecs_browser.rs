@@ -51,29 +51,33 @@ async fn mp3_parity() {
     let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
-    thread::spawn_named("webcodecs-mp3-parity", move || {
-        let webcodecs = decode_file(
+    let webcodecs = thread::spawn_named("webcodecs-mp3-parity-webcodecs", move || {
+        decode_file(
             signal_mp3_track_sine440_187s,
             "mp3",
             DecoderBackend::WebCodecs,
-        );
-        let symphonia = decode_file(
+        )
+    })
+    .join_async();
+    let symphonia = thread::spawn_named("webcodecs-mp3-parity-symphonia", move || {
+        decode_file(
             signal_mp3_track_sine440_187s,
             "mp3",
             DecoderBackend::Symphonia,
-        );
-
-        assert_common_parity("mp3", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
-        tracing::info!(
-            webcodecs_frames = webcodecs.frames,
-            symphonia_frames = symphonia.frames,
-            frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
-            "WebCodecs MP3 priming/tail frame-count probe"
-        );
+        )
     })
-    .join_async()
-    .await
-    .expect("WebCodecs scenario worker failed");
+    .join_async();
+    let (webcodecs, symphonia) = kithara_platform::tokio::join!(webcodecs, symphonia);
+    let webcodecs = webcodecs.expect("WebCodecs decoder worker failed");
+    let symphonia = symphonia.expect("Symphonia decoder worker failed");
+
+    assert_common_parity("mp3", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
+    tracing::info!(
+        webcodecs_frames = webcodecs.frames,
+        symphonia_frames = symphonia.frames,
+        frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
+        "WebCodecs MP3 priming/tail frame-count probe"
+    );
 }
 
 #[kithara::test(wasm, timeout(Long))]

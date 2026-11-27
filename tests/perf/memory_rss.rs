@@ -164,15 +164,19 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
 
 /// Multi-run RSS measurement: peak RSS delta must stay within budget.
 #[kithara::test(native, tokio, serial, timeout(Long), hang_timeout_secs(5))]
+#[case::run_0(0..1)]
+#[case::run_1(1..2)]
+#[case::run_2(2..3)]
 async fn test_hls_playback_rss_within_budget(
     temp_dir: TestTempDir,
     #[future(awt)] rss_source: (TestServerHelper, Url),
+    #[case] runs: std::ops::Range<usize>,
 ) {
     let _guard = HotpathGuardBuilder::new("rss_budget").build();
     let mut run_deltas = Vec::with_capacity(consts::BUDGET_RUNS);
     let (_server, url) = rss_source;
 
-    for run in 0..consts::BUDGET_RUNS {
+    for run in runs {
         let baseline_rss = physical_memory().expect("RSS measurement unsupported");
         eprintln!("rss budget run {run}: baseline={baseline_rss}");
 

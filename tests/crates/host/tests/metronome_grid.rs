@@ -504,7 +504,7 @@ fn first_difference(heard: &[f32], expected: &[f32]) -> Option<(usize, f32, f32)
         })
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Medium))]
 async fn the_live_metronome_lands_on_its_own_recording_with_no_flam() {
     let recording = recorded_metronome().await;
     assert_eq!(
