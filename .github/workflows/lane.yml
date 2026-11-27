@@ -91,6 +91,12 @@ on:
       bench_base_ref:
         type: string
         default: ""
+      bench_mode:
+        type: string
+        default: timing
+      bench_allocator_policy:
+        type: string
+        default: system
       bench_preflight:
         type: string
         default: ""
@@ -165,6 +171,8 @@ jobs:
           BENCH_FILTER: ${{ inputs.bench_filter }}
           BENCH_REF: ${{ inputs.bench_ref }}
           BENCH_BASE_REF: ${{ inputs.bench_base_ref }}
+          BENCH_MODE: ${{ inputs.bench_mode }}
+          BENCH_ALLOCATOR_POLICY: ${{ inputs.bench_allocator_policy }}
           BENCH_PREFLIGHT: ${{ inputs.bench_preflight }}
         run: |
           # Cargo fetches into a cache outside checkout's credential scope.

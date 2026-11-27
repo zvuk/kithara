@@ -10,7 +10,6 @@ use iced::{
     },
     widget::{Space, shader, shader::Shader},
 };
-use kithara_test_macros as kithara;
 
 use crate::{
     hosts::vis::{SHADER, Uniforms, VisFrame},
@@ -56,8 +55,6 @@ impl Primitive {
 
 impl shader::Primitive for Primitive {
     type Pipeline = Pipeline;
-
-    #[kithara::measure(label = "iced.vis.encode")]
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
         let Some(slot) = pipeline.slots.get(self.slot.load(Ordering::Relaxed)) else {
             return true;
@@ -67,8 +64,6 @@ impl shader::Primitive for Primitive {
         render_pass.draw(0..3, 0..1);
         true
     }
-
-    #[kithara::measure(label = "iced.vis.prepare")]
     fn prepare(
         &self,
         pipeline: &mut Self::Pipeline,

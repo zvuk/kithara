@@ -331,7 +331,7 @@ impl Node {
         if !self.leaf_holds {
             return;
         }
-        let cancel = PointerEvent::Cancel(pointer_info(event).clone());
+        let cancel = PointerEvent::Cancel(*pointer_info(event));
         let input = Input::Pointer(PointerInput::new(
             portable_pointer_id(event),
             None,

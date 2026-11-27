@@ -11,7 +11,6 @@ use iced::{
     },
     widget::Space,
 };
-use kithara_test_macros as kithara;
 
 use crate::{
     draw::{DrawList, DrawListBuilder, Rect, Rgba},
@@ -165,7 +164,6 @@ impl IcedWidget<Published, Theme, Renderer> for Painted<'_> {
     /// the most expensive thing on a page of prose. The list a paragraph draws
     /// is kept and the geometry behind it reused, exactly as a painted control
     /// does: a page whose words did not change pays for them once.
-    #[kithara::measure(label = "iced.text.draw")]
     fn draw(
         &self,
         tree: &Tree,

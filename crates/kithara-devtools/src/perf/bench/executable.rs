@@ -101,7 +101,13 @@ impl Binary {
         log: &mut Log,
     ) -> Result<(Vec<String>, Vec<u8>)> {
         let output = log.output(
-            self.command(data).args(["--bench", "--list", filter]),
+            self.command(data).args([
+                "--criterion",
+                "--bench",
+                "--list",
+                "--criterion-arg",
+                filter,
+            ]),
             false,
         )?;
         let raw = std::str::from_utf8(&output.stdout)?;
@@ -123,7 +129,13 @@ impl Binary {
 
     pub(super) fn test(&self, filter: &str, data: &Path, log: &mut Log) -> Result<Vec<u8>> {
         let output = log.output(
-            self.command(data).args(["--bench", "--test", filter]),
+            self.command(data).args([
+                "--criterion",
+                "--bench",
+                "--test",
+                "--criterion-arg",
+                filter,
+            ]),
             false,
         )?;
         Ok(output.stdout)
@@ -132,6 +144,27 @@ impl Binary {
     pub(super) fn retain(&self, destination: &Path) -> Result<String> {
         fs::copy(&self.executable, destination)?;
         Ok(sha256(&fs::read(destination)?))
+    }
+
+    pub(super) fn allocate(
+        &self,
+        filter: &str,
+        json: &Path,
+        markdown: &Path,
+        observations: &Path,
+        data: &Path,
+        log: &mut Log,
+    ) -> Result<()> {
+        let mut command = self.command(data);
+        command
+            .env("KITHARA_BENCH_OBSERVATIONS", observations)
+            .args(["--allocations", "--no-baseline", "--export-json"])
+            .arg(json)
+            .arg("--export-md")
+            .arg(markdown)
+            .args(["--criterion-arg", filter]);
+        log.output(&mut command, false)?;
+        Ok(())
     }
 
     pub(super) fn measure(
@@ -144,11 +177,17 @@ impl Binary {
     ) -> Result<()> {
         log.output(
             self.command(data).args([
+                "--criterion",
                 "--bench",
+                "--criterion-arg",
                 filter,
+                "--criterion-arg",
                 "--sample-size",
+                "--criterion-arg",
                 samples,
+                "--criterion-arg",
                 "--save-baseline",
+                "--criterion-arg",
                 name,
             ]),
             false,

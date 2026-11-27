@@ -50,6 +50,7 @@ tracing = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
+metabench = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
