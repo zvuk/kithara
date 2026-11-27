@@ -14,10 +14,13 @@ CHROMEDRIVER=/path/to/chromedriver \
 
 `CHROMEDRIVER`, `GECKODRIVER` or `SAFARIDRIVER` selects the browser, and
 `<VAR>_ARGS` passes extra driver arguments, split as a shell splits them.
-Session capabilities come from `webdriver.json`; for the traced fixtures Chrome
-also records performance logs, and a network log in `KITHARA_WEB_NETLOG_DIR`
-when the lane names one. The media fixtures come from `test_server`, which
-`kithara-integration-tests` builds next to the runner; the runner starts it
+Session capabilities come from `webdriver.json`. Before running tests, the
+runner waits for the page to initialize and uses WebDriver to click its start
+button, supplying the genuine user activation required by Safari Web Audio.
+For the traced fixtures Chrome also records performance logs, and a network log
+in `KITHARA_WEB_NETLOG_DIR` when the lane names one. The media fixtures come
+from `test_server`, which `kithara-integration-tests` builds next to the runner;
+the runner starts it
 unless one already answers on `TEST_SERVER_PORT`.
 
 The `lock` test fails when the bindgen generator, the `wasm-bindgen` runtime
