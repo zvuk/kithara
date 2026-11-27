@@ -113,8 +113,9 @@ pub struct FlushHub {
     /// flight or completed by the worker or an eager writer. An explicit
     /// durable checkpoint must re-flush these even when their `dirty` flag is
     /// clear, superseding the best-effort snapshot under the per-file lock.
-    /// Pruned to the alive set each `flush_dirty` pass; hub mutations run under
-    /// `flush_lock`, while eager registration happens before its dirty claim.
+    /// Pruned to the alive set each `flush_dirty` pass. Hub passes and attached
+    /// eager calls share `flush_lock` from registration through the write result,
+    /// so an older pass cannot prune or discharge a newer eager publication.
     pub(super) non_durable: DashSet<usize>,
     pub(super) policy: FlushPolicy,
     pub(super) flush_lock: Mutex<()>,
@@ -276,8 +277,10 @@ fn flush_source(source: &dyn Flushable, durable: bool, force: bool) -> AssetsRes
 
 /// Flush pin/LRU crash-safety state synchronously so a crash cannot lose a live pin.
 /// Forces serialized publication even when another flusher consumed the dirty mark.
-/// The hub tracks the best-effort write before that claim so a durable checkpoint
-/// supersedes it. Availability and byte-only LRU updates use the debounced [`FlushHub`].
+/// Attached calls hold the hub lock from durability registration through the write
+/// result, ordering them against checkpoint selection, cleanup, and pruning.
+/// Hubless calls use the direct per-file path. Availability and byte-only LRU
+/// updates use the debounced [`FlushHub`].
 ///
 /// # Errors
 /// Propagates the underlying flush error.
@@ -285,6 +288,7 @@ pub(crate) fn flush_sync<S: Flushable>(
     source: &Arc<S>,
     hub: Option<&Arc<FlushHub>>,
 ) -> AssetsResult<()> {
+    let _hub_guard = hub.map(|hub| hub.flush_lock.lock());
     if let Some(hub) = hub {
         let key = Arc::as_ptr(source).cast::<()>().addr();
         hub.non_durable.insert(key);
@@ -716,11 +720,342 @@ mod tests {
     }
 
     #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    fn checkpoint_cannot_discharge_a_newer_eager_publication() {
+        use std::{fs, path::PathBuf};
+
+        struct Source {
+            dirty: AtomicBool,
+            current: AtomicUsize,
+            path: PathBuf,
+            publication: Mutex<()>,
+            durable_calls: AtomicUsize,
+            first_durable_started: Sender<()>,
+            first_durable_release: Mutex<mpsc::Receiver<()>>,
+        }
+
+        impl Flushable for Source {
+            fn dirty(&self) -> &AtomicBool {
+                &self.dirty
+            }
+
+            fn flush(&self) -> AssetsResult<()> {
+                let _publication = self.publication.lock();
+                fs::write(
+                    &self.path,
+                    self.current.load(Ordering::Acquire).to_le_bytes(),
+                )?;
+                Ok(())
+            }
+
+            fn flush_durable(&self) -> AssetsResult<()> {
+                let _publication = self.publication.lock();
+                let call = self.durable_calls.fetch_add(1, Ordering::AcqRel);
+                if call == 0 {
+                    self.first_durable_started.send(()).unwrap();
+                    self.first_durable_release.lock().recv().unwrap();
+                }
+                fs::write(
+                    &self.path,
+                    self.current.load(Ordering::Acquire).to_le_bytes(),
+                )?;
+                Ok(())
+            }
+
+            fn name(&self) -> &'static str {
+                "checkpoint-discharge"
+            }
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("index.bin");
+        let hub = FlushHub::new(
+            CancelToken::never(),
+            FlushPolicy {
+                debounce: Duration::from_secs(60),
+                force_every_n_ops: NonZeroUsize::new(8).unwrap(),
+            },
+        );
+        let (eager_call, eager_called) = mpsc::channel();
+        let (first_durable_started, first_checkpoint_started) = mpsc::channel();
+        let (first_durable_release, release_first) = mpsc::channel();
+        let source = Arc::new(Source {
+            dirty: AtomicBool::new(false),
+            current: AtomicUsize::new(1),
+            path: path.clone(),
+            publication: Mutex::new(()),
+            durable_calls: AtomicUsize::new(0),
+            first_durable_started,
+            first_durable_release: Mutex::new(release_first),
+        });
+        hub.register(Arc::downgrade(&source) as Weak<dyn Flushable>);
+        flush_sync(&source, Some(&hub)).unwrap();
+
+        let first_checkpoint = kithara_platform::thread::spawn_named("discharge-checkpoint", {
+            let hub = Arc::clone(&hub);
+            move || hub.flush_now().unwrap()
+        });
+        first_checkpoint_started.recv().unwrap();
+        source.current.store(2, Ordering::Release);
+
+        let eager = kithara_platform::thread::spawn_named("newer-eager", {
+            let source = Arc::clone(&source);
+            let hub = Arc::clone(&hub);
+            move || {
+                eager_call.send(()).unwrap();
+                flush_sync(&source, Some(&hub)).unwrap();
+            }
+        });
+        eager_called.recv().unwrap();
+        first_durable_release.send(()).unwrap();
+        eager.join().unwrap();
+        first_checkpoint.join().unwrap();
+
+        hub.flush_now().unwrap();
+
+        assert_eq!(
+            source.durable_calls.load(Ordering::Acquire),
+            2,
+            "the checkpoint after a newer eager publication must sync that publication"
+        );
+        assert_eq!(fs::read(&path).unwrap(), 2_usize.to_le_bytes());
+    }
+
+    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    fn checkpoint_selection_is_serialized_with_the_eager_claim() {
+        use std::{fs, path::PathBuf};
+
+        struct Source {
+            dirty: AtomicBool,
+            dirty_calls: AtomicUsize,
+            checkpoint_claimed: Sender<()>,
+            checkpoint_resume: Mutex<mpsc::Receiver<()>>,
+            current: AtomicUsize,
+            path: PathBuf,
+            publication: Mutex<()>,
+            eager_release: Mutex<mpsc::Receiver<()>>,
+            durable: AtomicBool,
+        }
+
+        impl Flushable for Source {
+            fn dirty(&self) -> &AtomicBool {
+                if self.dirty_calls.fetch_add(1, Ordering::AcqRel) == 0 {
+                    self.checkpoint_claimed.send(()).unwrap();
+                    self.checkpoint_resume.lock().recv().unwrap();
+                }
+                &self.dirty
+            }
+
+            fn flush(&self) -> AssetsResult<()> {
+                let _publication = self.publication.lock();
+                self.eager_release.lock().recv().unwrap();
+                fs::write(
+                    &self.path,
+                    self.current.load(Ordering::Acquire).to_le_bytes(),
+                )?;
+                Ok(())
+            }
+
+            fn flush_durable(&self) -> AssetsResult<()> {
+                let _publication = self.publication.lock();
+                fs::write(
+                    &self.path,
+                    self.current.load(Ordering::Acquire).to_le_bytes(),
+                )?;
+                self.durable.store(true, Ordering::Release);
+                Ok(())
+            }
+
+            fn name(&self) -> &'static str {
+                "checkpoint-selection"
+            }
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("index.bin");
+        fs::write(&path, 100_usize.to_le_bytes()).unwrap();
+        let hub = FlushHub::new(
+            CancelToken::never(),
+            FlushPolicy {
+                debounce: Duration::from_secs(60),
+                force_every_n_ops: NonZeroUsize::new(8).unwrap(),
+            },
+        );
+        let (checkpoint_claimed, claimed) = mpsc::channel();
+        let (checkpoint_resume, resume_checkpoint) = mpsc::channel();
+        let (eager_call, eager_called) = mpsc::channel();
+        let (eager_release, release_eager) = mpsc::channel();
+        let (checkpoint_returned, returned) = mpsc::channel();
+        let source = Arc::new(Source {
+            dirty: AtomicBool::new(true),
+            dirty_calls: AtomicUsize::new(0),
+            checkpoint_claimed,
+            checkpoint_resume: Mutex::new(resume_checkpoint),
+            current: AtomicUsize::new(200),
+            path: path.clone(),
+            publication: Mutex::new(()),
+            eager_release: Mutex::new(release_eager),
+            durable: AtomicBool::new(false),
+        });
+        hub.register(Arc::downgrade(&source) as Weak<dyn Flushable>);
+
+        let checkpoint = kithara_platform::thread::spawn_named("selecting-checkpoint", {
+            let hub = Arc::clone(&hub);
+            let path = path.clone();
+            move || {
+                hub.flush_now().unwrap();
+                checkpoint_returned.send(fs::read(&path).unwrap()).unwrap();
+            }
+        });
+        claimed.recv().unwrap();
+
+        let eager = kithara_platform::thread::spawn_named("claiming-eager", {
+            let source = Arc::clone(&source);
+            let hub = Arc::clone(&hub);
+            move || {
+                eager_call.send(()).unwrap();
+                flush_sync(&source, Some(&hub)).unwrap();
+            }
+        });
+        eager_called.recv().unwrap();
+        checkpoint_resume.send(()).unwrap();
+        let persisted_at_return = returned.recv().unwrap();
+        eager_release.send(()).unwrap();
+        eager.join().unwrap();
+        checkpoint.join().unwrap();
+
+        assert_eq!(
+            persisted_at_return,
+            200_usize.to_le_bytes(),
+            "checkpoint selection and the eager claim must have one order"
+        );
+        assert!(source.durable.load(Ordering::Acquire));
+    }
+
+    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    fn older_pass_cannot_prune_a_new_live_writer() {
+        use std::{fs, path::PathBuf};
+
+        use kithara_test_utils::wait_until_blocking;
+
+        struct Source {
+            name: &'static str,
+            dirty: AtomicBool,
+            durable_writes: AtomicUsize,
+            path: PathBuf,
+        }
+
+        impl Source {
+            fn new(name: &'static str, path: PathBuf) -> Arc<Self> {
+                Arc::new(Self {
+                    name,
+                    dirty: AtomicBool::new(false),
+                    durable_writes: AtomicUsize::new(0),
+                    path,
+                })
+            }
+        }
+
+        impl Flushable for Source {
+            fn dirty(&self) -> &AtomicBool {
+                &self.dirty
+            }
+
+            fn flush(&self) -> AssetsResult<()> {
+                fs::write(&self.path, [1])?;
+                Ok(())
+            }
+
+            fn flush_durable(&self) -> AssetsResult<()> {
+                self.durable_writes.fetch_add(1, Ordering::AcqRel);
+                fs::write(&self.path, [2])?;
+                Ok(())
+            }
+
+            fn name(&self) -> &'static str {
+                self.name
+            }
+        }
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root_x = temp_dir.path().join("x");
+        let root_y = temp_dir.path().join("y");
+        fs::create_dir_all(&root_x).unwrap();
+        fs::create_dir_all(&root_y).unwrap();
+        let hub = FlushHub::new(
+            CancelToken::never(),
+            FlushPolicy {
+                debounce: Duration::from_secs(60),
+                force_every_n_ops: NonZeroUsize::new(8).unwrap(),
+            },
+        );
+        let source_x = Source::new("x", root_x.join("pins.bin"));
+        let writer = Source::new("y", root_y.join("pins.bin"));
+        hub.register(Arc::downgrade(&source_x) as Weak<dyn Flushable>);
+        assert_eq!(Arc::strong_count(&source_x), 1);
+
+        let writer_key = Arc::as_ptr(&writer).cast::<()>().addr();
+        let shard_count =
+            (std::thread::available_parallelism().map_or(1, usize::from) * 4).next_power_of_two();
+        let shift = usize::BITS as usize - shard_count.trailing_zeros() as usize;
+        let shard = |key| (hub.non_durable.hash_usize(&key) << 7) >> shift;
+        let guard_key = (0..)
+            .find(|key| shard(*key) < shard(writer_key))
+            .expect("an earlier non_durable shard");
+        hub.non_durable.insert(guard_key);
+        let prune_guard = hub.non_durable.get(&guard_key).unwrap();
+
+        let older_pass = kithara_platform::thread::spawn_named("older-prune", {
+            let hub = Arc::clone(&hub);
+            move || {
+                let _hub_guard = hub.flush_lock.lock();
+                hub.flush_dirty(false).unwrap();
+            }
+        });
+        wait_until_blocking(Duration::from_secs(1), "older pass captured X", || {
+            Arc::strong_count(&source_x) == 2
+        })
+        .unwrap();
+
+        hub.register(Arc::downgrade(&writer) as Weak<dyn Flushable>);
+        let (eager_call, eager_called) = mpsc::channel();
+        let (eager_done, eager_completed) = mpsc::channel();
+        let eager = kithara_platform::thread::spawn_named("new-live-writer", {
+            let writer = Arc::clone(&writer);
+            let hub = Arc::clone(&hub);
+            move || {
+                eager_call.send(()).unwrap();
+                flush_sync(&writer, Some(&hub)).unwrap();
+                eager_done.send(()).unwrap();
+            }
+        });
+        eager_called.recv().unwrap();
+        drop(prune_guard);
+        eager_completed.recv().unwrap();
+        eager.join().unwrap();
+        older_pass.join().unwrap();
+
+        assert!(
+            hub.non_durable.contains(&writer_key),
+            "the newer eager obligation must survive the older pass"
+        );
+        assert!(!writer.dirty.load(Ordering::Acquire));
+        hub.flush_now().unwrap();
+
+        assert_eq!(
+            writer.durable_writes.load(Ordering::Acquire),
+            1,
+            "checkpoint must cover the newly registered live writer's eager pin"
+        );
+        assert_eq!(fs::read(&writer.path).unwrap(), vec![2]);
+        drop(writer);
+    }
+
+    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
     fn checkpoint_waits_for_eager_publication_and_reopens_the_latest_bytes() {
         use std::{fs, path::PathBuf};
 
         enum Event {
-            DurableStarted,
+            CheckpointStarted,
             CheckpointReturned(Vec<u8>),
         }
 
@@ -732,7 +1067,6 @@ mod tests {
             release: Mutex<mpsc::Receiver<()>>,
             publication: Mutex<()>,
             durable: AtomicBool,
-            events: Sender<Event>,
         }
 
         impl Flushable for Source {
@@ -750,7 +1084,6 @@ mod tests {
             }
 
             fn flush_durable(&self) -> AssetsResult<()> {
-                self.events.send(Event::DurableStarted).unwrap();
                 let _publication = self.publication.lock();
                 fs::write(
                     &self.path,
@@ -786,7 +1119,6 @@ mod tests {
             release: Mutex::new(released),
             publication: Mutex::new(()),
             durable: AtomicBool::new(false),
-            events: event_tx.clone(),
         });
         hub.register(Arc::downgrade(&source) as Weak<dyn Flushable>);
 
@@ -801,19 +1133,20 @@ mod tests {
             let hub = Arc::clone(&hub);
             let path = path.clone();
             move || {
+                event_tx.send(Event::CheckpointStarted).unwrap();
                 hub.flush_now().unwrap();
                 let persisted = fs::read(&path).unwrap();
                 event_tx.send(Event::CheckpointReturned(persisted)).unwrap();
             }
         });
-        let first = event_rx.recv().unwrap();
+        match event_rx.recv().unwrap() {
+            Event::CheckpointStarted => {}
+            Event::CheckpointReturned(_) => panic!("checkpoint returned before it was released"),
+        }
         release.send(()).unwrap();
-        let persisted_at_return = match first {
-            Event::DurableStarted => match event_rx.recv().unwrap() {
-                Event::CheckpointReturned(persisted) => persisted,
-                Event::DurableStarted => panic!("durable checkpoint started twice"),
-            },
+        let persisted_at_return = match event_rx.recv().unwrap() {
             Event::CheckpointReturned(persisted) => persisted,
+            Event::CheckpointStarted => panic!("checkpoint started twice"),
         };
         eager.join().unwrap();
         checkpoint.join().unwrap();
