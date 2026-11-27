@@ -1,10 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::hint::black_box;
-
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::Criterion;
 use kithara_test_fixtures::signal::Wave;
-use kithara_test_utils::bufpool::pools;
+use kithara_test_utils::bufpool::{Pools, pools};
 use kithara_waveform::{AnalysisParams, WaveformAnalyzer};
 
 mod consts {
@@ -25,43 +23,67 @@ mod consts {
     pub(super) const TONE_HZ: f64 = 440.0;
 }
 
+struct Prepared {
+    pcm: Vec<f32>,
+    pools: Pools,
+}
+
 /// A full-scale stereo tone, the right channel quieter than the left.
-fn excerpt() -> Vec<f32> {
+fn prepare() -> Prepared {
     let wave = Wave::Sine {
         hz: consts::TONE_HZ,
         peak: i16::MAX,
     };
-    (0..consts::FRAMES)
+    let pcm = (0..consts::FRAMES)
         .flat_map(|frame| {
             let sample = f32::from(wave.sample(frame, consts::RATE)) / consts::FULL_SCALE;
             [sample, sample * consts::RIGHT_GAIN]
         })
-        .collect()
+        .collect();
+    Prepared {
+        pcm,
+        pools: pools(),
+    }
 }
 
-fn waveform_analyzer(c: &mut Criterion) {
-    let pcm = excerpt();
-    let pools = pools();
+fn analyze(prepared: &Prepared) {
     let extent = u64::try_from(consts::FRAMES).expect("the frame count fits u64");
+    let mut analyzer =
+        WaveformAnalyzer::new(consts::RATE, AnalysisParams::default(), &prepared.pools)
+            .expect("the analyzer builds");
+    analyzer
+        .push(
+            &prepared.pools,
+            std::hint::black_box(&prepared.pcm),
+            consts::CHANNELS,
+            0,
+        )
+        .expect("the excerpt fits the region");
+    std::hint::black_box(
+        analyzer
+            .snapshot(consts::FOLD, Some(extent))
+            .expect("finite fixture"),
+    );
+}
+
+#[metabench::benchmark(WAVEFORM_ANALYZER, "waveform_analyzer", "push_snapshot_10s_stereo", gungraun_setup = prepare)]
+fn waveform_case(prepared: Prepared) -> Prepared {
+    analyze(&prepared);
+    prepared
+}
+
+fn criterion_benchmarks(c: &mut Criterion) {
+    let prepared = prepare();
     let mut group = c.benchmark_group("waveform_analyzer");
     group.sample_size(10);
-    group.bench_function("push_snapshot/10s_stereo", |b| {
-        b.iter(|| {
-            let mut analyzer =
-                WaveformAnalyzer::new(consts::RATE, AnalysisParams::default(), &pools)
-                    .expect("the analyzer builds");
-            analyzer
-                .push(&pools, black_box(&pcm), consts::CHANNELS, 0)
-                .expect("the excerpt fits the region");
-            black_box(
-                analyzer
-                    .snapshot(consts::FOLD, Some(extent))
-                    .expect("finite fixture"),
-            )
-        });
+    group.bench_function("push_snapshot_10s_stereo", |b| {
+        b.iter(|| analyze(&prepared));
     });
     group.finish();
 }
 
-criterion_group!(benches, waveform_analyzer);
-criterion_main!(benches);
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [WAVEFORM_ANALYZER],
+    allocator = std::alloc::System,
+);

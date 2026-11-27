@@ -2327,6 +2327,34 @@ fn bench_parameters_reach_the_common_executor_as_data() {
             Some(expected.as_str())
         );
     }
+    for (parameter, default) in [
+        ("bench_mode", "timing"),
+        ("bench_allocator_policy", "system"),
+    ] {
+        let dispatch = github_workflow("dispatch.yml");
+        assert_eq!(
+            dispatch["on"]["workflow_dispatch"]["inputs"][parameter]["default"].as_str(),
+            Some(default)
+        );
+        for (caller, job, _, with) in &forwarding {
+            let expected = if caller == "dispatch.yml" {
+                format!("${{{{ inputs.{parameter} || '{default}' }}}}")
+            } else {
+                format!("${{{{ inputs.{parameter} }}}}")
+            };
+            assert_eq!(
+                with.get(parameter).and_then(Value::as_str),
+                Some(expected.as_str()),
+                "{caller}/{job}"
+            );
+        }
+        let expected = format!("${{{{ inputs.{parameter} }}}}");
+        assert_eq!(
+            env.get(parameter.to_ascii_uppercase())
+                .and_then(Value::as_str),
+            Some(expected.as_str())
+        );
+    }
     let script = mapping_field(step, "run").as_str().unwrap();
     assert!(script.contains(
         r#"if [ -n "$BENCH_TARGET" ] && [ -z "$BENCH_PREFLIGHT" ]; then export RUN_BENCHMARKS=1; fi"#

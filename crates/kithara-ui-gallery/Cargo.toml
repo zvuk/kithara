@@ -21,8 +21,7 @@ test = false
 masonry = ["kithara-ui/masonry"]
 # What the suites vary on the demo model that the gallery itself never does.
 mock = []
-# Frame and page timings through hotpath.
-perf = ["dep:hotpath", "hotpath/hotpath", "kithara-ui/perf"]
+perf = ["kithara-ui/perf"]
 
 [dependencies]
 kithara-key = { workspace = true }
@@ -36,7 +35,6 @@ clap = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
-hotpath = { workspace = true, optional = true }
 iced = { workspace = true }
 kurbo = { workspace = true }
 num-traits = { workspace = true }
@@ -47,12 +45,15 @@ serde = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["test", "usdt", "client-reqwest", "tls-rustls"] }
 kithara-ui-gallery = { path = ".", features = ["mock"] }
 
+criterion = { workspace = true }
+
 futures-lite = { workspace = true }
 iced_renderer = { workspace = true }
 iced_runtime = { workspace = true }
 iced_tiny_skia = { workspace = true }
 iced_wgpu = { workspace = true }
 masonry = { workspace = true }
+metabench = { workspace = true }
 # The budget guard reads the renderer's bump allocators back, which vello only
 # does when this is on. A dev-dependency so a shipped build keeps the fast path
 # rather than a readback on every frame.
@@ -80,6 +81,12 @@ path = "tests/ui_buffers/main.rs"
 required-features = ["masonry"]
 
 [[test]]
+name = "page_perf_oracle"
+path = "tests/page_perf_oracle.rs"
+required-features = ["perf", "masonry"]
+
+[[bench]]
 name = "page_perf"
 path = "tests/page_perf/main.rs"
+harness = false
 required-features = ["perf", "masonry"]

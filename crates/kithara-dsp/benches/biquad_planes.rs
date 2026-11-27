@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::{hint::black_box, num::NonZeroUsize};
+use std::num::NonZeroUsize;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
 use kithara_dsp::filter::{Biquad, Coefficients, Hertz, Type};
 use num_traits::ToPrimitive;
 
@@ -43,64 +43,117 @@ fn filters() -> (Biquad, Vec<Biquad>) {
     (together, individual)
 }
 
-fn bench_planes(c: &mut Criterion) {
+struct Prepared {
+    together: Biquad,
+    individual: Vec<Biquad>,
+    template: Vec<Vec<f32>>,
+    planes: Vec<Vec<f32>>,
+}
+
+fn prepare(frames: usize) -> Prepared {
     let (mut together, mut individual) = filters();
+    let tone: Vec<_> = (0..frames)
+        .map(|frame| (frame.to_f32().expect("bounded frame") * 0.0625).sin() * 0.5)
+        .collect();
+    let template = vec![tone; PLANES.get()];
+    let mut expected = template.clone();
+    let mut actual = template.clone();
+    for (filter, plane) in individual.iter_mut().zip(&mut expected) {
+        filter.reset();
+        filter
+            .process(std::slice::from_mut(plane), 0..frames)
+            .expect("one plane");
+    }
+    together.reset();
+    together
+        .process(&mut actual, 0..frames)
+        .expect("eight planes");
+    assert!(
+        actual
+            .iter()
+            .flatten()
+            .zip(expected.iter().flatten())
+            .all(|(a, b)| a.to_bits() == b.to_bits())
+    );
+    let planes = template.clone();
+    Prepared {
+        together,
+        individual,
+        template,
+        planes,
+    }
+}
+
+fn process_individual(filters: &mut [Biquad], planes: &mut [Vec<f32>], frames: usize) {
+    for (filter, plane) in filters.iter_mut().zip(&mut *planes) {
+        filter.reset();
+        filter
+            .process(std::slice::from_mut(plane), 0..frames)
+            .expect("one plane");
+    }
+    std::hint::black_box(planes);
+}
+
+fn process_together(filter: &mut Biquad, planes: &mut [Vec<f32>], frames: usize) {
+    filter.reset();
+    filter
+        .process(std::hint::black_box(&mut *planes), 0..frames)
+        .expect("eight planes");
+    std::hint::black_box(planes);
+}
+
+#[metabench::benchmark(BIQUAD_INDIVIDUAL, "biquad_planes", "eight_individual", gungraun_setup = prepare)]
+#[bench::frames_128(128_usize)]
+#[bench::frames_512(512_usize)]
+#[bench::frames_4096(4096_usize)]
+fn individual_case(mut prepared: Prepared) -> Prepared {
+    let frames = prepared.planes[0].len();
+    process_individual(&mut prepared.individual, &mut prepared.planes, frames);
+    prepared
+}
+
+#[metabench::benchmark(BIQUAD_TOGETHER, "biquad_planes", "eight_together", gungraun_setup = prepare)]
+#[bench::frames_128(128_usize)]
+#[bench::frames_512(512_usize)]
+#[bench::frames_4096(4096_usize)]
+fn together_case(mut prepared: Prepared) -> Prepared {
+    let frames = prepared.planes[0].len();
+    process_together(&mut prepared.together, &mut prepared.planes, frames);
+    prepared
+}
+
+fn bench_planes(c: &mut Criterion) {
     let mut group = c.benchmark_group("biquad_planes");
     for frames in [128, 512, 4_096] {
-        let tone: Vec<_> = (0..frames)
-            .map(|frame| (frame.to_f32().expect("bounded frame") * 0.0625).sin() * 0.5)
-            .collect();
-        let template = vec![tone; PLANES.get()];
-        let mut expected = template.clone();
-        let mut actual = template.clone();
-        for (filter, plane) in individual.iter_mut().zip(&mut expected) {
-            filter.reset();
-            filter
-                .process(std::slice::from_mut(plane), 0..frames)
-                .expect("one plane");
-        }
-        together.reset();
-        together
-            .process(&mut actual, 0..frames)
-            .expect("eight planes");
-        assert!(
-            actual
-                .iter()
-                .flatten()
-                .zip(expected.iter().flatten())
-                .all(|(a, b)| a.to_bits() == b.to_bits())
-        );
+        let Prepared {
+            mut together,
+            mut individual,
+            template,
+            ..
+        } = prepare(frames);
         group.throughput(Throughput::Elements(
             u64::try_from(frames * PLANES.get()).expect("bounded samples"),
         ));
-        group.bench_function(BenchmarkId::new("eight_individual", frames), |b| {
-            b.iter_batched_ref(
-                || template.clone(),
-                |planes| {
-                    for (filter, plane) in individual.iter_mut().zip(&mut *planes) {
-                        filter.reset();
-                        filter
-                            .process(std::slice::from_mut(plane), 0..frames)
-                            .expect("one plane");
-                    }
-                    black_box(planes);
-                },
-                BatchSize::SmallInput,
-            );
-        });
-        group.bench_function(BenchmarkId::new("eight_together", frames), |b| {
-            b.iter_batched_ref(
-                || template.clone(),
-                |planes| {
-                    together.reset();
-                    together
-                        .process(black_box(&mut *planes), 0..frames)
-                        .expect("eight planes");
-                    black_box(planes);
-                },
-                BatchSize::SmallInput,
-            );
-        });
+        group.bench_function(
+            BenchmarkId::new("eight_individual", format!("frames_{frames}")),
+            |b| {
+                b.iter_batched_ref(
+                    || template.clone(),
+                    |planes| process_individual(&mut individual, planes, frames),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+        group.bench_function(
+            BenchmarkId::new("eight_together", format!("frames_{frames}")),
+            |b| {
+                b.iter_batched_ref(
+                    || template.clone(),
+                    |planes| process_together(&mut together, planes, frames),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
     }
     group.finish();
 }
@@ -118,7 +171,7 @@ fn bench_windows(c: &mut Criterion) {
         let mut actual = packed.clone();
         for (filter, plane) in individual.iter_mut().zip(&mut expected) {
             filter
-                .process_window(black_box(plane.as_mut_slice()), 0..frames)
+                .process_window(std::hint::black_box(plane.as_mut_slice()), 0..frames)
                 .expect("finite plane");
         }
         together
@@ -141,10 +194,10 @@ fn bench_windows(c: &mut Criterion) {
                 |planes| {
                     for (filter, plane) in individual.iter_mut().zip(&mut *planes) {
                         filter
-                            .process_window(black_box(plane.as_mut_slice()), 0..frames)
+                            .process_window(std::hint::black_box(plane.as_mut_slice()), 0..frames)
                             .expect("finite plane");
                     }
-                    black_box(planes);
+                    std::hint::black_box(planes);
                 },
                 BatchSize::SmallInput,
             );
@@ -154,9 +207,9 @@ fn bench_windows(c: &mut Criterion) {
                 || packed.clone(),
                 |samples| {
                     together
-                        .process_window(black_box(samples.as_mut_slice()), 0..frames)
+                        .process_window(std::hint::black_box(samples.as_mut_slice()), 0..frames)
                         .expect("finite window");
-                    black_box(samples);
+                    std::hint::black_box(samples);
                 },
                 BatchSize::SmallInput,
             );
@@ -165,10 +218,13 @@ fn bench_windows(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench(c: &mut Criterion) {
+fn criterion_benchmarks(c: &mut Criterion) {
     bench_planes(c);
     bench_windows(c);
 }
 
-criterion_group!(benches, bench);
-criterion_main!(benches);
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [BIQUAD_INDIVIDUAL, BIQUAD_TOGETHER],
+    allocator = std::alloc::System,
+);

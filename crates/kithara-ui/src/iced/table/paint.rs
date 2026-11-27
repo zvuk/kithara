@@ -5,7 +5,6 @@ use iced::{
     mouse::Cursor,
     widget::canvas::{self, Frame, Geometry},
 };
-use kithara_test_macros as kithara;
 
 use super::super::controls::RetainedCanvasState;
 use crate::{
@@ -46,7 +45,6 @@ impl TablePaint {
     }
 
     /// The marks the table's rows, header and footer come to, built afresh.
-    #[kithara::measure(label = "iced.table.commands")]
     fn commands(&self, text: &mut TextContext, bounds: Rect, drawn: &Drawn) -> DrawList {
         self.face.commands(text, bounds, drawn)
     }
@@ -115,7 +113,6 @@ impl TablePaint {
     /// Those marks turned into triangles the renderer can hand the GPU. Run
     /// only when the kept geometry was dropped, which is what makes a table
     /// nothing changed cost nothing to draw.
-    #[kithara::measure(label = "iced.table.tessellate")]
     fn tessellate(&self, frame: &mut Frame, list: &DrawList) {
         replay_ordered(list, frame, self.face.skin().text_resources.as_ref());
     }

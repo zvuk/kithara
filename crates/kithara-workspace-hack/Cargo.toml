@@ -18,6 +18,7 @@ publish = false
 arrayvec = { version = "0.7" }
 audioadapter-buffers = { version = "5" }
 crossbeam-utils = { version = "0.8" }
+derive_more = { version = "2", features = ["as_ref", "debug", "deref", "deref_mut", "display", "error", "from", "into"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 firewheel = { version = "0.14", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
 firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
@@ -26,7 +27,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17", default-features = false, features = ["default-hasher", "inline-more"] }
-indexmap = { version = "2" }
+indexmap = { version = "2", features = ["serde"] }
 memchr = { version = "2" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
@@ -38,6 +39,7 @@ serde_core = { version = "1", default-features = false, features = ["alloc", "re
 serde_json = { version = "1", features = ["alloc"] }
 simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
+tempfile = { version = "3" }
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tracing = { version = "0.1" }
@@ -49,6 +51,8 @@ zerocopy = { version = "0.8", default-features = false, features = ["derive", "s
 arrayvec = { version = "0.7" }
 audioadapter-buffers = { version = "5" }
 crossbeam-utils = { version = "0.8" }
+derive_more = { version = "2", features = ["as_ref", "debug", "deref", "deref_mut", "display", "error", "from", "into"] }
+derive_more-impl = { version = "2", features = ["as_ref", "debug", "deref", "deref_mut", "display", "error", "from", "into"] }
 either = { version = "1", default-features = false, features = ["use_std"] }
 firewheel = { version = "0.14", default-features = false, features = ["cpal", "scheduled_events", "tracing"] }
 firewheel-core = { version = "0.14", default-features = false, features = ["scheduled_events", "serde", "std"] }
@@ -57,7 +61,7 @@ futures-channel = { version = "0.3", default-features = false, features = ["sink
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", default-features = false, features = ["async-await-macro", "channel", "io", "sink"] }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17", default-features = false, features = ["default-hasher", "inline-more"] }
-indexmap = { version = "2" }
+indexmap = { version = "2", features = ["serde"] }
 memchr = { version = "2" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
@@ -72,6 +76,7 @@ simdutf8 = { version = "0.1", default-features = false, features = ["std"] }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits", "full", "visit", "visit-mut"] }
+tempfile = { version = "3" }
 thiserror = { version = "2" }
 thunderdome = { version = "0.6", default-features = false, features = ["std"] }
 tracing = { version = "0.1" }
@@ -105,7 +110,7 @@ iced_core = { version = "0.14", default-features = false, features = ["advanced"
 iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 num-complex = { version = "0.4", features = ["bytemuck"] }
@@ -116,7 +121,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
-rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "time"] }
+rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "termios", "time"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -126,6 +131,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 zeroize = { version = "1", features = ["derive"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
@@ -156,7 +162,7 @@ iced_core = { version = "0.14", default-features = false, features = ["advanced"
 iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 num-complex = { version = "0.4", features = ["bytemuck"] }
@@ -167,7 +173,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
-rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "time"] }
+rustix = { version = "1", features = ["event", "mm", "net", "pipe", "process", "shm", "system", "termios", "time"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -177,6 +183,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 zeroize = { version = "1", features = ["derive"] }
 
 [target.x86_64-apple-darwin.dependencies]
@@ -205,7 +212,7 @@ iced_core = { version = "0.14", default-features = false, features = ["advanced"
 iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAlert", "NSApplication", "NSButton", "NSControl", "NSOpenPanel", "NSPanel", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSView", "NSWindow", "NSWorkspace", "block2", "std"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
@@ -216,6 +223,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "termios"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
@@ -228,6 +236,7 @@ tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 
 [target.x86_64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
@@ -257,7 +266,7 @@ iced_core = { version = "0.14", default-features = false, features = ["advanced"
 iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAlert", "NSApplication", "NSButton", "NSControl", "NSOpenPanel", "NSPanel", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSView", "NSWindow", "NSWorkspace", "block2", "std"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
@@ -268,6 +277,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "termios"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
@@ -280,6 +290,7 @@ tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 
 [target.aarch64-apple-darwin.dependencies]
 aho-corasick = { version = "1" }
@@ -307,7 +318,7 @@ iced_core = { version = "0.14", default-features = false, features = ["advanced"
 iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAlert", "NSApplication", "NSButton", "NSControl", "NSOpenPanel", "NSPanel", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSView", "NSWindow", "NSWorkspace", "block2", "std"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
@@ -318,6 +329,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "termios"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
@@ -330,6 +342,7 @@ tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 
 [target.aarch64-apple-darwin.build-dependencies]
 aho-corasick = { version = "1" }
@@ -359,7 +372,7 @@ iced_core = { version = "0.14", default-features = false, features = ["advanced"
 iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAlert", "NSApplication", "NSButton", "NSControl", "NSOpenPanel", "NSPanel", "NSResponder", "NSRunningApplication", "NSSavePanel", "NSView", "NSWindow", "NSWorkspace", "block2", "std"] }
 objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
@@ -370,6 +383,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "termios"] }
 rustls-pki-types = { version = "1", features = ["std"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
@@ -382,6 +396,7 @@ tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tower-http = { version = "0.6", default-features = false, features = ["decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "follow-redirect"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 
 [target.aarch64-apple-ios.dependencies]
 aho-corasick = { version = "1" }
@@ -397,12 +412,13 @@ hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 objc2-foundation = { version = "0.3" }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
+rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -429,12 +445,13 @@ hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 objc2-foundation = { version = "0.3" }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
+rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -469,7 +486,7 @@ iced_futures = { version = "0.14", default-features = false, features = ["tokio"
 idna = { version = "1" }
 itertools = { version = "0.13" }
 jni = { version = "0.22" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 ndk = { version = "0.9", features = ["audio"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
@@ -478,6 +495,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -487,6 +505,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 
 [target.aarch64-linux-android.build-dependencies]
 aho-corasick = { version = "1" }
@@ -514,7 +533,7 @@ iced_futures = { version = "0.14", default-features = false, features = ["tokio"
 idna = { version = "1" }
 itertools = { version = "0.13" }
 jni = { version = "0.22" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 ndk = { version = "0.9", features = ["audio"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
@@ -523,6 +542,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -532,6 +552,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 
 [target.x86_64-linux-android.dependencies]
 aho-corasick = { version = "1" }
@@ -557,7 +578,7 @@ iced_futures = { version = "0.14", default-features = false, features = ["tokio"
 idna = { version = "1" }
 itertools = { version = "0.13" }
 jni = { version = "0.22" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 ndk = { version = "0.9", features = ["audio"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
@@ -566,6 +587,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -575,6 +597,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 
 [target.x86_64-linux-android.build-dependencies]
 aho-corasick = { version = "1" }
@@ -602,7 +625,7 @@ iced_futures = { version = "0.14", default-features = false, features = ["tokio"
 idna = { version = "1" }
 itertools = { version = "0.13" }
 jni = { version = "0.22" }
-libc = { version = "0.2" }
+libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 ndk = { version = "0.9", features = ["audio"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
@@ -611,6 +634,7 @@ raw-window-handle = { version = "0.6", default-features = false, features = ["st
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
+rustix = { version = "1", features = ["fs", "termios"] }
 serde_core = { version = "1" }
 serde_json = { version = "1", default-features = false, features = ["raw_value"] }
 simd-adler32 = { version = "0.3" }
@@ -620,6 +644,7 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 tower = { version = "0.5", default-features = false, features = ["log", "make", "retry", "timeout"] }
 tracing = { version = "0.1", default-features = false, features = ["log"] }
+unicode-width = { version = "0.2" }
 
 [target.wasm32-unknown-unknown.dependencies]
 bevy_platform = { version = "0.19", default-features = false, features = ["std", "web"] }
