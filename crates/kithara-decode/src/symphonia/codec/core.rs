@@ -4,7 +4,6 @@ use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
-use kithara_test_utils::kithara;
 use symphonia::core::{
     audio::{Channels, GenericAudioBufferRef},
     codecs::{
@@ -305,9 +304,7 @@ fn copy_decoded(
     }
 
     out.ensure_len(num_samples)?;
-    kithara::measure_block!("symphonia::output::copy_interleaved", {
-        decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
-    });
+    decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
     out.truncate(num_samples);
     let frames = u32::try_from(decoded.frames()).unwrap_or(u32::MAX);
     out.truncate(usize::try_from(frames)? * usize::from(spec.channels));
@@ -315,7 +312,6 @@ fn copy_decoded(
 }
 
 impl FrameCodec for SymphoniaCodec {
-    #[kithara::measure(label = "decode.symphonia.codec")]
     fn decode_frame(
         &mut self,
         frame: crate::demuxer::Frame<'_>,
@@ -341,23 +337,7 @@ impl FrameCodec for SymphoniaCodec {
             frame.data,
         );
 
-        let decoded = match kithara::measure_block!(
-            match self.codec {
-                Some(AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2) => {
-                    "symphonia::decoder::aac"
-                }
-                Some(AudioCodec::Mp3) => "symphonia::decoder::mp3",
-                Some(AudioCodec::Flac) => "symphonia::decoder::flac",
-                Some(AudioCodec::Vorbis) => "symphonia::decoder::vorbis",
-                Some(AudioCodec::Opus) => "symphonia::decoder::opus",
-                Some(AudioCodec::Alac) => "symphonia::decoder::alac",
-                Some(AudioCodec::Pcm) => "symphonia::decoder::pcm",
-                Some(AudioCodec::Adpcm) => "symphonia::decoder::adpcm",
-                Some(AudioCodec::Ape) => "symphonia::decoder::ape",
-                None => "symphonia::decoder::native",
-            },
-            self.decoder.decode_ref(&packet_ref)
-        ) {
+        let decoded = match self.decoder.decode_ref(&packet_ref) {
             Ok(d) => d,
             Err(error) => return self.handle_decode_error(error, out, metadata),
         };

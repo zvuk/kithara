@@ -10,7 +10,6 @@ keywords = ["concurrency", "scheduler", "worker"]
 categories = ["concurrency"]
 
 [package.metadata.cargo-machete]
-ignored = ["hotpath"]
 
 [package.metadata.kithara.wasm-lib-tests]
 default-features = true
@@ -18,7 +17,6 @@ features = []
 
 [features]
 mock = []
-perf = ["dep:hotpath", "hotpath/hotpath"]
 usdt = ["kithara-test-utils/usdt"]
 
 [dependencies]
@@ -30,7 +28,6 @@ kithara-test-utils = { workspace = true, features = ["client-reqwest", "tls-rust
 
 delegate = { workspace = true }
 fieldwork = { workspace = true }
-hotpath = { workspace = true, optional = true }
 
 serde = { workspace = true }
 thiserror = { workspace = true }

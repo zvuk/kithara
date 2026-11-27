@@ -24,7 +24,6 @@ stretch-identity = ["kithara-warp/stretch-identity"]
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
 mock = []
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
-perf = ["dep:hotpath", "hotpath/hotpath", "kithara-worker/perf"]
 usdt = ["kithara-test-utils/usdt", "kithara-worker/usdt"]
 
 [dependencies]
@@ -66,8 +65,6 @@ triple_buffer = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# hotpath profiling does not build on wasm32; keep it off the wasm closure.
-hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-assets = { workspace = true }
