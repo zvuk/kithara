@@ -28,18 +28,16 @@ pub(crate) const SECONDS_PER_MINUTE: f64 = 60.0;
 pub(crate) const CUE: Start = Start::Seconds(3.25);
 
 /// The beat grid every synthetic rhythm fixture was rendered on.
-pub(crate) fn synthetic_grid() -> ArtifactSource<BeatGridModel> {
+pub(crate) fn synthetic_grid() -> Arc<BeatGridModel> {
     let model =
         serde_json::from_slice(kithara_test_fixtures::assets::synthetic_grid_default().bytes())
             .expect("prepared synthetic rhythm grid");
-    ArtifactSource::Value(Arc::new(model))
+    Arc::new(model)
 }
 
 #[kithara::test(native)]
 fn prepared_synthetic_grid_preserves_the_authored_score() {
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("synthetic grid is a prepared value");
-    };
+    let model = synthetic_grid();
     let raw = model.as_raw();
     assert_eq!(raw.schema_version, SCHEMA_VERSION);
     assert_eq!(raw.model_id, "synthetic-rhythm");
@@ -77,9 +75,7 @@ fn prepared_synthetic_grid_covers_the_complete_authored_pcm() {
         BeatGridRevision, BeatGridSnapshot, MapPoint, MapPosition,
     };
 
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("synthetic grid is a prepared value");
-    };
+    let model = synthetic_grid();
     let rate = NonZeroU32::new(48_000).expect("authored sample rate");
     let media = Duration::from_nanos(11_930_854_167) - Duration::from_nanos(23_020_833);
     assert_eq!(media, Duration::from_nanos(11_907_833_334));

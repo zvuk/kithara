@@ -1,17 +1,18 @@
 use std::vec;
 
+use kithara_analysis::TrackAnalysis;
 use kithara_audio::{AudioObserver, AudioObserverSlot};
 use kithara_bufpool::HasPool;
 use kithara_decode::TrackMetadata;
 use kithara_events::TrackId;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_play::{Position, ResourceConfig, ResourceSrc};
+use kithara_play::{ArtifactRequest, ArtifactState, Position, ResourceConfig, ResourceSrc};
 use tracing::debug;
 
 use crate::{
     error::QueueError,
     event::{QueueEvent, TrackStatus},
-    loading::{LoadReport, TrackLoad},
+    loading::{AnalysisClaim, AnalysisRead, LoadReport, TrackLoad},
 };
 
 /// Snapshot of a track entry in the queue.
@@ -29,6 +30,9 @@ pub struct TrackEntry {
     /// source's artwork becomes its artwork.
     #[field(get)]
     metadata: TrackMetadata,
+    /// What the queue knows of the analysis document the source requests.
+    #[field(get)]
+    analysis: ArtifactState<TrackAnalysis>,
     /// Stable identifier.
     pub id: TrackId,
     /// Current loading status.
@@ -82,6 +86,14 @@ where
             Self::Uri(_) => None,
         }
     }
+
+    /// The analysis document this source's settings request, if any.
+    pub(crate) fn analysis(&self) -> Option<&ArtifactRequest> {
+        match self {
+            Self::Config(config) => config.analysis(),
+            Self::Uri(_) => None,
+        }
+    }
 }
 
 impl<S> From<&str> for TrackSource<S>
@@ -113,6 +125,9 @@ where
     pub(crate) name: String,
     /// Taken from the source at append; a load fills its unset fields.
     pub(crate) metadata: TrackMetadata,
+    analysis: ArtifactState<TrackAnalysis>,
+    /// The analysis read the track holds now; answers for any other are dropped.
+    analysis_read: Option<AnalysisClaim>,
     pub(crate) id: TrackId,
     pub(crate) source: TrackSource<S>,
     source_change: Option<SourceChange<S>>,
@@ -137,6 +152,8 @@ where
             id,
             name,
             metadata: source.metadata().cloned().unwrap_or_default(),
+            analysis: ArtifactState::NotRequested,
+            analysis_read: None,
             url: source.uri().map(str::to_string),
             status: TrackStatus::Pending,
             source,
@@ -154,6 +171,7 @@ where
             id: self.id,
             name: self.name.clone(),
             metadata: self.metadata.clone(),
+            analysis: self.analysis.clone(),
             url: self.url.clone(),
             status: self.status.clone(),
             source_changing: self.source_change.is_some(),
@@ -209,6 +227,8 @@ where
     /// Moves with every edit; equal revisions mean equal rows.
     #[field(get, vis = "pub(crate)", copy)]
     revision: u64,
+    /// Analysis reads started so far; each read is numbered by it.
+    analysis_reads: u64,
     /// The changes made since the queue last took them, in order.
     events: Vec<QueueEvent>,
     /// The records, in queue order.
@@ -229,7 +249,75 @@ where
                 }
             }
             LoadReport::Cover { id, load, cover } => self.place_cover(id, &load, cover),
+            LoadReport::Analysis { id, read, analysis } => {
+                self.place_analysis(id, read, analysis);
+            }
         }
+    }
+
+    /// Begin `id`'s analysis read for the request its source carries now,
+    /// under a child of `master`. The read the track held is cancelled; a
+    /// source without a request leaves the track not requested. A change of
+    /// state records [`QueueEvent::TrackAnalysisChanged`].
+    pub(crate) fn begin_analysis(
+        &mut self,
+        id: TrackId,
+        master: &CancelToken,
+    ) -> Option<AnalysisRead<S>> {
+        self.analysis_reads += 1;
+        let number = self.analysis_reads;
+        let record = self.record_mut(id)?;
+        drop(record.analysis_read.take());
+        let read = match &record.source {
+            TrackSource::Config(config) => config.analysis().map(|request| AnalysisRead {
+                id,
+                number,
+                token: master.child(),
+                config: (**config).clone(),
+                request: request.clone(),
+            }),
+            TrackSource::Uri(_) => None,
+        };
+        let state = match &read {
+            Some(read) => {
+                record.analysis_read = Some(AnalysisClaim::new(read.token.clone(), number));
+                ArtifactState::Loading
+            }
+            None => ArtifactState::NotRequested,
+        };
+        let changed = !matches!(
+            (&record.analysis, &state),
+            (ArtifactState::Loading, ArtifactState::Loading)
+                | (ArtifactState::NotRequested, ArtifactState::NotRequested)
+        );
+        record.analysis = state;
+        if changed {
+            self.events.push(QueueEvent::TrackAnalysisChanged { id });
+        }
+        read
+    }
+
+    /// Place what `id`'s analysis read `read` answered and record
+    /// [`QueueEvent::TrackAnalysisChanged`], unless the track no longer holds
+    /// that read: a removed track or a replaced request drops its answer.
+    pub(crate) fn place_analysis(
+        &mut self,
+        id: TrackId,
+        read: u64,
+        analysis: Option<Arc<TrackAnalysis>>,
+    ) {
+        let Some(record) = self.record_mut(id) else {
+            return;
+        };
+        if !record
+            .analysis_read
+            .as_ref()
+            .is_some_and(|claim| claim.holds(read))
+        {
+            return;
+        }
+        record.analysis = analysis.map_or(ArtifactState::Failed, ArtifactState::Ready);
+        self.events.push(QueueEvent::TrackAnalysisChanged { id });
     }
 
     /// Attach decoded-audio observation to this track's decoder, or retain it
@@ -253,6 +341,10 @@ where
             #[expr($.map(|record| &record.status))]
             #[call(find)]
             pub(crate) fn status(&self, id: TrackId) -> Option<&TrackStatus>;
+            /// The analysis document `id`'s source requests now.
+            #[expr($.and_then(|record| record.source.analysis().cloned()))]
+            #[call(find)]
+            pub(crate) fn analysis_request(&self, id: TrackId) -> Option<ArtifactRequest>;
         }
     }
 

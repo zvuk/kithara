@@ -65,6 +65,17 @@ handover it returns `NotReady` until that handover settles.
 `next` starts the prepared automatic successor without waiting for track end.
 An accepted manual target remains the cursor for later `next` calls.
 
+The queue is the one reader of analysis documents. A track whose
+`ResourceConfig` carries an `analysis` request is read as it is added, under a
+child of the queue's master cancel, through the track's asset store and
+downloader; no load or play waits for it, and loads and replays never read it
+again. `TrackEntry::analysis()` states the read: not requested, loading, ready
+with the analysis, or failed, and each change is announced as
+`QueueEvent::TrackAnalysisChanged`. A failed read stays failed and does not
+touch playback. Removing the track cancels its read; a committed replacement
+source with another request cancels the old read and starts its own, and its
+old answer is dropped; the same request keeps the state.
+
 ## Key Types
 
 - `Queue` / `QueueConfig` — the deck and its builder: playback order, repeat,

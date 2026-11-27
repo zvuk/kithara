@@ -306,9 +306,7 @@ impl DeclaredSource {
 
 #[kithara::test]
 fn declared_source_prepares_only_immutable_matching_geometry() {
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("declared synthetic source");
-    };
+    let model = synthetic_grid();
     let rate = NonZeroU32::new(48_000).expect("source rate");
     let mut declared = DeclaredSource::new(Arc::clone(&model));
     let fresh = SourceGeometry::new(Arc::clone(&model), rate, None).expect("fresh source geometry");
@@ -2894,9 +2892,7 @@ fn queue_forward_law_checks_large_spans_across_analytic_boundaries() {
     let curve = ExponentialApproach::new(1.0, 1.0, 0.0).expect("constant source law");
     let span = SourceSpan::approaching(0, NonZeroU128::MIN, curve, 0, rate, frames)
         .expect("large exact source map");
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("declared source grid");
-    };
+    let model = synthetic_grid();
     let law = QueueLaw {
         anchor: SelectedBinding {
             media: Duration::ZERO,
@@ -3664,9 +3660,7 @@ async fn supplied_grids_bind_consumed_pcm_marks_to_the_host(
 #[kithara::test(native)]
 fn binding_speed_preserves_the_local_law_when_a_frame_ends_at_a_rounded_beat() {
     let rate = NonZeroU32::new(48_000).expect("sample rate");
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("declared source grid");
-    };
+    let model = synthetic_grid();
     let mut raw = model.as_raw().clone();
     raw.duration = None;
     raw.meter = None;
@@ -3727,9 +3721,7 @@ fn binding_speed_preserves_the_local_law_when_a_frame_ends_at_a_rounded_beat() {
 #[kithara::test(native)]
 fn ordinary_source_spans_preserve_beat_sides_at_rounded_seams() {
     let rate = NonZeroU32::new(48_000).expect("source rate");
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("declared source grid");
-    };
+    let model = synthetic_grid();
     let mut raw = model.as_raw().clone();
     raw.duration = None;
     raw.beats = [(74, 31.96), (75, 32.38), (76, 32.8)]
@@ -3839,9 +3831,7 @@ fn direct_grid_binding_rejects_a_frame_a_beat_and_a_missing_origin() {
         anchor,
         None,
     );
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("declared source grid");
-    };
+    let model = synthetic_grid();
     assert_eq!(
         model
             .as_raw()
@@ -4204,9 +4194,7 @@ fn direct_grid_binding_checks_the_declared_crossing_cell() {
         );
     }
 
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("declared source grid");
-    };
+    let model = synthetic_grid();
     let mut raw = model.as_raw().clone();
     raw.beats = [0.0, 0.5, 0.75]
         .into_iter()
@@ -4348,9 +4336,7 @@ fn direct_grid_anchor_rejects_a_whole_bar_and_a_wrong_selected_cue() {
         host_anchor,
         None,
     );
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("declared source grid");
-    };
+    let model = synthetic_grid();
     assert_eq!(
         model
             .as_raw()
@@ -5020,9 +5006,7 @@ fn confirmed_targets_and_consumed_laws_have_separate_clocks() {
         .is_err()
     );
 
-    let ArtifactSource::Value(model) = synthetic_grid() else {
-        panic!("declared source grid");
-    };
+    let model = synthetic_grid();
     let geometry =
         SourceGeometry::new(Arc::clone(&model), rate, None).expect("declared source geometry");
     let host = TempoTrajectory::new(

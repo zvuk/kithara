@@ -6,8 +6,7 @@ use std::{
 use ::kithara::{
     analysis::{
         AnalysisFingerprint, AnalysisProgress, AnalysisToken, BeatArtifact, BeatGridModel,
-        BeatGridState, BeatSnapshot, BeatState, Bucket, GRID_SCHEMA_VERSION, GridBeat, Mode,
-        MusicalKey, PitchClass, RangeSet, RawBeatGrid, Waveform,
+        BeatGridState, BeatSnapshot, BeatState, Bucket, RangeSet, RawBeatGrid, Waveform,
     },
     assets::StorageBackend,
     download::{Downloader, DownloaderConfig},
@@ -16,7 +15,7 @@ use ::kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::{Arc, Mutex},
+        sync::Mutex,
         time::{Duration, sleep},
         tokio::{
             self,
@@ -25,21 +24,22 @@ use ::kithara::{
             task,
         },
     },
-    play::{ArtifactSource, PlayWorkerConfig, ResourcePrep, ResourceSrc, policy::DomainKeyPolicy},
+    play::{PlayWorkerConfig, ResourcePrep, policy::DomainKeyPolicy},
     queue::QueueConfig,
     worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
 };
 use kithara_config::Configure;
 use kithara_test_fixtures::{asset::Asset, assets};
 use kithara_test_utils::{kithara, off_thread::OffThread};
+use num_traits::ToPrimitive;
 use url::Url;
 
 use super::{Entry, Request, TrackArtifacts};
 use crate::{
     config::{AppConfig, AppDrm},
     pools::{
-        self, AppHost, AppQueue, AppQueueControl, AppResourceConfig, AppStore, AppTrackSource,
-        AppWorker, Pools, PoolsSection,
+        self, AppHost, AppQueue, AppQueueControl, AppStore, AppTrackSource, AppWorker, Pools,
+        PoolsSection,
     },
     sources::build_resource_config,
     state::{GridPost, UiState},
@@ -208,112 +208,6 @@ pub(crate) async fn track(
         (track_id, source)
     })
     .await
-}
-
-/// A grid the caller hands over, already checked.
-pub(crate) fn served_grid() -> BeatGridModel {
-    BeatGridModel::try_from(RawBeatGrid {
-        schema_version: GRID_SCHEMA_VERSION,
-        model_id: "served".to_owned(),
-        revision: 1,
-        state: BeatGridState::Final,
-        duration: Some(2.0),
-        bpm: 120.0,
-        beats: vec![
-            GridBeat {
-                at: 0.0,
-                ordinal: 0,
-                confidence: Some(0.9),
-            },
-            GridBeat {
-                at: 0.5,
-                ordinal: 1,
-                confidence: Some(0.9),
-            },
-        ],
-        downbeats: Vec::new(),
-        meter: None,
-    })
-    .expect("the served fixture grid holds together")
-}
-
-/// A waveform the caller hands over.
-pub(crate) fn served_waveform() -> Waveform {
-    Waveform::try_new(vec![Bucket::new(0.25, 0.5, 0.75); 8], NonZeroU64::MIN)
-        .expect("fixture bands are in range")
-}
-
-/// A key the caller hands over.
-pub(crate) const fn served_key() -> MusicalKey {
-    MusicalKey {
-        tonic: PitchClass::D,
-        mode: Mode::Major,
-    }
-}
-
-/// Append a track the caller opened with artifacts already in hand.
-pub(crate) async fn track_prepared(
-    host: &OffThread<(AppHost, AppQueueControl)>,
-    id: u64,
-    url: &str,
-    app: &AppConfig,
-    beat_grid: Option<BeatGridModel>,
-    waveform: Option<Waveform>,
-    key: Option<MusicalKey>,
-) -> (TrackId, AppTrackSource) {
-    track_sourced(
-        host,
-        id,
-        url,
-        app,
-        beat_grid.map(|grid| ArtifactSource::from(Arc::new(grid))),
-        waveform.map(|wave| ArtifactSource::from(Arc::new(wave))),
-        key.map(|key| ArtifactSource::from(Arc::new(key))),
-    )
-    .await
-}
-
-/// Append a track the caller opened with artifacts however it holds them: a
-/// structure in hand, or a source their bytes are read from.
-pub(crate) async fn track_sourced(
-    host: &OffThread<(AppHost, AppQueueControl)>,
-    id: u64,
-    url: &str,
-    app: &AppConfig,
-    beat_grid: Option<ArtifactSource<BeatGridModel>>,
-    waveform: Option<ArtifactSource<Waveform>>,
-    key: Option<ArtifactSource<MusicalKey>>,
-) -> (TrackId, AppTrackSource) {
-    let track_id = TrackId::from(id);
-    let src = ResourceSrc::parse(url).expect("fixture url parses");
-    let config = AppResourceConfig::for_src(src)
-        .downloader(app.downloader.clone())
-        .store(app.store.clone())
-        .audio(app.audio.clone())
-        .maybe_preload_chunks(app.preload_chunks)
-        .maybe_audio_buffer_chunks(app.audio_buffer_chunks)
-        .hls(app.hls.clone())
-        .file(app.file.clone())
-        .maybe_beat_grid(beat_grid)
-        .maybe_waveform(waveform)
-        .maybe_key(key)
-        .build();
-    host.call(move |(_, queue)| {
-        queue
-            .append_with_id(track_id, config)
-            .expect("append prepared test track");
-        let source = queue.track_source(track_id).expect("track has a source");
-        (track_id, source)
-    })
-    .await
-}
-
-/// Write one artifact document into the scratch directory and point a source
-/// at it, so a test exercises the very path a caller configures a URL on.
-pub(crate) fn document(name: &str, bytes: &[u8]) -> ResourceSrc {
-    let path = std::env::temp_dir().join(format!("kithara-app-artifact-{name}"));
-    std::fs::write(&path, bytes).expect("fixture document is written");
-    ResourceSrc::Path(path)
 }
 
 pub(crate) fn memory_store() -> AppStore {
@@ -485,42 +379,62 @@ pub(crate) async fn serve_subscribe(
     tx
 }
 
-/// Answers every subscription for `expected` with `grid`, the way a track
-/// opened with a supplied grid publishes it.
+/// Answers every subscription for `expected` with a publication of `grid`.
 pub(crate) async fn serve_grid(
     requests: mpsc::Receiver<Request>,
     expected: TrackId,
     grid: BeatGridModel,
 ) -> watch::Sender<Option<TrackArtifacts>> {
     let tx = serve_subscribe(requests, expected).await;
-    tx.send_replace(Some(supplied(grid)));
+    tx.send_replace(Some(settled_analysis(grid)));
     tx
 }
 
-/// The publication of a track opened with `grid` supplied.
-pub(crate) fn supplied(grid: BeatGridModel) -> TrackArtifacts {
-    TrackArtifacts::new(
-        None,
-        super::supply::Prepared {
-            beat_grid: super::supply::Supply::Ready(Arc::new(grid)),
-            key: super::supply::Supply::Missing,
-            waveform: super::supply::Supply::Missing,
-        },
-        false,
-    )
+/// The publication of a settled local pass whose grid is `grid`: its beats
+/// and bar lines placed as source frames on the fixture axis.
+pub(crate) fn settled_analysis(grid: BeatGridModel) -> TrackArtifacts {
+    let raw = RawBeatGrid::from(grid);
+    let rate = f64::from(axis().get());
+    let frame = |at: f64| {
+        (at * rate)
+            .round()
+            .to_u64()
+            .expect("a fixture position is a source frame")
+    };
+    let beats = raw
+        .beats
+        .iter()
+        .map(|beat| (frame(beat.at), beat.confidence))
+        .collect();
+    let downbeats = raw
+        .downbeats
+        .iter()
+        .map(|downbeat| (frame(downbeat.at), downbeat.confidence))
+        .collect();
+    let state = if matches!(raw.state, BeatGridState::Final) {
+        BeatState::Final
+    } else {
+        BeatState::Provisional
+    };
+    let analysis = TrackAnalysis::builder()
+        .media_origin(Duration::ZERO)
+        .token(raw.model_id.into())
+        .revision(raw.revision)
+        .source_sample_rate(axis())
+        .maybe_extent(raw.duration.map(frame))
+        .settled(true)
+        .beat(BeatSnapshot::new(
+            BeatArtifact::new(raw.bpm, beats, downbeats),
+            state,
+            Vec::new(),
+        ))
+        .build();
+    TrackArtifacts::new(Some(analysis), false)
 }
 
-/// The publication of a track whose supplied grid did not load.
+/// The publication of a track whose pass failed: its grid is refused.
 pub(crate) fn refused() -> TrackArtifacts {
-    TrackArtifacts::new(
-        None,
-        super::supply::Prepared {
-            beat_grid: super::supply::Supply::Failed,
-            key: super::supply::Supply::Missing,
-            waveform: super::supply::Supply::Missing,
-        },
-        false,
-    )
+    TrackArtifacts::new(None, true)
 }
 
 #[kithara::hang_watchdog(ctx = String)]

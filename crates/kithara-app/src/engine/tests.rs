@@ -568,8 +568,8 @@ async fn a_refused_sync_leaves_a_later_track_free(rhythm_a_wav: String, rhythm_b
         })
         .await;
     let served = task::spawn(async move {
-        let (slow, _) = watch::channel(Some(fixtures::supplied(unreachable_grid())));
-        let (later, _) = watch::channel(Some(fixtures::supplied(rhythm_grid())));
+        let (slow, _) = watch::channel(Some(fixtures::settled_analysis(unreachable_grid())));
+        let (later, _) = watch::channel(Some(fixtures::settled_analysis(rhythm_grid())));
         while let Some(request) = requests.recv().await {
             if let Request::Subscribe {
                 track_id, reply, ..
@@ -669,7 +669,7 @@ async fn a_ready_grid_recovers_sync_smoothly_until_a_seek_aligns_it(rhythm_a_wav
         );
     })
     .await;
-    analysis.send_replace(Some(fixtures::supplied(rhythm_grid())));
+    analysis.send_replace(Some(fixtures::settled_analysis(rhythm_grid())));
     rig.call(|rig| {
         let from = rig.queues[0].rate();
         assert_revision_keeps_playback(rig);
@@ -746,7 +746,7 @@ async fn a_tempo_during_a_refusal_reaches_the_next_track(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
 ) {
-    let grid = || Some(fixtures::supplied(rhythm_grid()));
+    let grid = || Some(fixtures::settled_analysis(rhythm_grid()));
     let (current, _) = watch::channel(grid());
     let refusal = current.clone();
     let Synced { rig, served } = synced(
@@ -829,7 +829,7 @@ async fn sync_on_a_playing_deck_with_a_grid_past_its_end(rhythm_a_wav: String) {
 /// the analysis holds when that track loads (`ready`) or publishes only once
 /// the crossfade was asked for.
 async fn crossfade_into_the_next_track(first: String, second: String, ready: bool) {
-    let grid = || Some(fixtures::supplied(rhythm_grid()));
+    let grid = || Some(fixtures::settled_analysis(rhythm_grid()));
     let (next, _) = watch::channel(if ready { grid() } else { None });
     let served_next = next.clone();
     let Synced { rig, served } = synced(vec![first, second], 124.0, move |requests, tracks| {
@@ -904,7 +904,7 @@ fn assert_revision_keeps_playback(rig: &mut Rig) {
 #[kithara::test(native, tokio)]
 async fn a_bar_revision_keeps_playing_and_a_seek_lands_on_the_host_downbeat(rhythm_a_wav: String) {
     let early = grid_two_beats_off_the_bar();
-    let revised = watch::channel(Some(fixtures::supplied(early))).0;
+    let revised = watch::channel(Some(fixtures::settled_analysis(early))).0;
     let served_grid = revised.clone();
     let Synced { rig, served } = synced(vec![rhythm_a_wav], 124.0, move |requests, tracks| {
         task::spawn(serve_tracks(requests, vec![(tracks[0], served_grid)]))
@@ -915,7 +915,7 @@ async fn a_bar_revision_keeps_playing_and_a_seek_lands_on_the_host_downbeat(rhyt
             rig.flag("deck.playback.synced@deck=a")
         });
         let _ = capture(rig, consts::SETTLE);
-        revised.send_replace(Some(fixtures::supplied(rhythm_grid())));
+        revised.send_replace(Some(fixtures::settled_analysis(rhythm_grid())));
         assert_revision_keeps_playback(rig);
         rig.send("deck-a/wave", ControlAction::SetScalar(0.25));
         rig.pump();
@@ -934,11 +934,11 @@ async fn a_late_grid_keeps_the_incoming_track_playing_until_a_seek_aligns_it(
     rhythm_a_wav: String,
     rhythm_b_wav: String,
 ) {
-    let next = watch::channel(Some(fixtures::supplied(grid_a_quarter_beat_late()))).0;
+    let next = watch::channel(Some(fixtures::settled_analysis(grid_a_quarter_beat_late()))).0;
     let served_next = next.clone();
     let urls = vec![rhythm_a_wav, rhythm_b_wav];
     let Synced { rig, served } = synced(urls, 124.0, move |requests, tracks| {
-        let current = watch::channel(Some(fixtures::supplied(rhythm_grid()))).0;
+        let current = watch::channel(Some(fixtures::settled_analysis(rhythm_grid()))).0;
         task::spawn(serve_tracks(
             requests,
             vec![(tracks[0], current), (tracks[1], served_next)],
@@ -955,7 +955,7 @@ async fn a_late_grid_keeps_the_incoming_track_playing_until_a_seek_aligns_it(
             Rig::frame,
             |rig| rig.queues[0].current_index() == Some(1) && rig.queues[0].is_playing(),
         );
-        next.send_replace(Some(fixtures::supplied(rhythm_grid())));
+        next.send_replace(Some(fixtures::settled_analysis(rhythm_grid())));
         assert_revision_keeps_playback(rig);
         rig.send("deck-a/wave", ControlAction::SetScalar(0.25));
         rig.pump();
@@ -1109,7 +1109,7 @@ async fn synced_tracks(urls: Vec<String>) -> Synced<()> {
         let answer = |track| {
             (
                 track,
-                watch::channel(Some(fixtures::supplied(rhythm_grid()))).0,
+                watch::channel(Some(fixtures::settled_analysis(rhythm_grid()))).0,
             )
         };
         task::spawn(serve_tracks(
@@ -1190,7 +1190,7 @@ async fn a_paused_synced_deck_stays_silent_when_its_selected_track_gets_a_grid(
     let withheld = next.clone();
     let urls = vec![constant_tenth_wav, constant_fifth_wav];
     let Synced { rig, served } = synced(urls, consts::TRACK_BPM, move |requests, tracks| {
-        let current = watch::channel(Some(fixtures::supplied(rhythm_grid()))).0;
+        let current = watch::channel(Some(fixtures::settled_analysis(rhythm_grid()))).0;
         task::spawn(serve_tracks(
             requests,
             vec![(tracks[0], current), (tracks[1], withheld)],
@@ -1216,7 +1216,7 @@ async fn a_paused_synced_deck_stays_silent_when_its_selected_track_gets_a_grid(
         );
         let level = plateau(rig).expect("deck A sounds one level until the pause");
         tap_pause(rig);
-        next.send_replace(Some(fixtures::supplied(rhythm_grid())));
+        next.send_replace(Some(fixtures::settled_analysis(rhythm_grid())));
         let through =
             next_bar(rig, 1.0) + i64::try_from(frames(rig, consts::BEAT)).expect("a beat");
         let Rendered { pcm, .. } = capture_to(rig, through);
@@ -1685,7 +1685,7 @@ async fn master_tempo_gestures_preserve_a_synced_keylocked_tones_level(
         assert!(reference > 0.1, "the steady synced tone is audible");
 
         if correcting {
-            analysis.send_replace(Some(fixtures::supplied(rhythm_grid())));
+            analysis.send_replace(Some(fixtures::settled_analysis(rhythm_grid())));
             rig.until(
                 "the revised grid starts a source phase correction",
                 Rig::DEADLINE,

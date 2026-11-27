@@ -8,7 +8,7 @@ use kithara::{
     hls::AbrMode,
     link::{GridAnswer, LinkedHostCommand, SyncStatus},
     platform::time::{Duration, Instant},
-    play::{ArtifactSource, Position, ResourceConfig, ResourceSrc, TrackCommand, TrackStatus},
+    play::{Position, ResourceConfig, ResourceSrc, TrackCommand, TrackStatus},
     queue::TrackSource,
     signal::SessionFrame,
 };
@@ -162,9 +162,7 @@ async fn render_until(
 /// The source second Prepare maps deck 0's cue to: the next downbeat of a
 /// metered grid, the next beat of an unmetered one, which has no downbeats.
 fn prepared_mark(harness: &ProductHarness, cue: Start) -> f64 {
-    let ArtifactSource::Value(grid) = harness.provider_grid(0) else {
-        panic!("fixture grid is materialized");
-    };
+    let grid = harness.provider_grid(0);
     let seconds = harness.start_seconds(0, cue);
     let raw = grid.as_raw();
     raw.downbeats
@@ -295,9 +293,7 @@ async fn release_incoming_grid(harness: &ProductHarness, operation: Operation) {
     let Operation::Load { item, .. } = operation else {
         panic!("incoming load sequence")
     };
-    let ArtifactSource::Value(model) = harness.provider_grid(0) else {
-        panic!("materialized fixture grid")
-    };
+    let model = harness.provider_grid(0);
     let deck = harness.decks[0].id();
     harness
         .host

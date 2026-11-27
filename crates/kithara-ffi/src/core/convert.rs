@@ -539,7 +539,9 @@ impl TryFrom<&QueueEvent> for FfiPlayerEvent {
                 item_id: *id,
                 status: FfiTrackStatus::from(status.clone()),
             },
-            QueueEvent::TrackMetadataChanged { .. } | QueueEvent::UpcomingChanged => {
+            QueueEvent::TrackMetadataChanged { .. }
+            | QueueEvent::TrackAnalysisChanged { .. }
+            | QueueEvent::UpcomingChanged => {
                 return Err(NotForwarded);
             }
             QueueEvent::CurrentTrackChanged { id } => Self::CurrentItemChanged { item_id: *id },

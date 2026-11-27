@@ -1,5 +1,6 @@
 use std::{error::Error as StdError, io::Error};
 
+use kithara_analysis::TrackAnalysis;
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserver;
 use kithara_bufpool::HasPool;
@@ -20,7 +21,7 @@ use tracing::{debug, warn};
 
 use crate::{
     error::QueueError,
-    loading::{LoadReport, TrackLoad},
+    loading::{AnalysisRead, LoadReport, TrackLoad},
     queue::{QueueCommand, QueuePostbox},
     track::TrackSource,
 };
@@ -60,6 +61,51 @@ where
             runtime,
             postbox,
         }
+    }
+
+    /// Read a track's analysis document beside everything the queue does
+    /// with the track, under the read's own token, and report the answer to
+    /// the queue. No load or play waits for it, and a failed read is logged
+    /// and reported as failed: nothing is read in its place.
+    ///
+    /// # Errors
+    /// [`QueueError::NoRuntime`] when the loader has no runtime to read on.
+    pub(crate) fn read_analysis(&self, read: AnalysisRead<S>) -> Result<(), QueueError> {
+        let runtime = self.runtime.as_ref().ok_or(QueueError::NoRuntime)?;
+        let postbox = self.postbox.clone();
+        drop(spawn_on(runtime, async move {
+            let AnalysisRead {
+                id,
+                number,
+                token,
+                config,
+                request,
+            } = read;
+            let analysis = match config
+                .artifact_fetch()
+                .read::<TrackAnalysis>(&request, &token)
+                .await
+            {
+                Ok(analysis) => Some(Arc::new(analysis)),
+                Err(error @ ArtifactLoadError::Cancelled { .. }) => {
+                    debug!(?id, %error, "the track's analysis read was cancelled");
+                    None
+                }
+                Err(error) => {
+                    warn!(?id, %error, "the track's analysis document was not read");
+                    None
+                }
+            };
+            report(
+                &postbox,
+                LoadReport::Analysis {
+                    id,
+                    read: number,
+                    analysis,
+                },
+            );
+        }));
+        Ok(())
     }
 }
 
@@ -296,11 +342,11 @@ mod tests {
     use kithara_command::{ChannelConfig, Mailbox, channel, mailbox};
     use kithara_download::RequestId;
     use kithara_events::EventBus;
+    use kithara_net::Headers;
     use kithara_platform::time::{Duration, WallInstant, sleep, timeout};
-    use kithara_play::{ArtifactSource, PlayWorker, PlayWorkerConfig, mock};
+    use kithara_play::{ArtifactRequest, PlayWorker, PlayWorkerConfig, mock};
     use kithara_render::{LaneProtocol, LaneStart, Open};
     use kithara_test_utils::{TestTempDir, kithara, temp_dir};
-    use kithara_waveform::Waveform;
     use kithara_worker::Worker;
 
     use super::*;
@@ -366,18 +412,18 @@ mod tests {
     }
 
     #[kithara::test(tokio)]
-    async fn build_config_forwards_a_prepared_artifact(#[by_ref] worker_owner: &WorkerOwner) {
+    async fn build_config_forwards_an_analysis_request(#[by_ref] worker_owner: &WorkerOwner) {
         let (loader, _mailbox) = fixture(&worker_owner.0);
         let src = ResourceSrc::parse("https://example.com/a.mp3").expect("valid url");
-        let grid = ResourceSrc::parse("https://example.com/a.grid").expect("valid artifact url");
-        let key = ResourceSrc::parse("https://example.com/a.key").expect("valid artifact url");
+        let mut headers = Headers::default();
+        headers.insert("X-Analysis", "token");
+        let request = ArtifactRequest {
+            src: ResourceSrc::parse("https://analysis.example/a").expect("valid request url"),
+            headers: Some(headers),
+        };
         let given = ResourceConfig::for_src(src)
             .store(AssetStore::builder(pools()).build())
-            .beat_grid(ArtifactSource::from(grid.clone()))
-            .key(ArtifactSource::from(key.clone()))
-            .waveform(ArtifactSource::Value(Arc::new(
-                Waveform::try_new(Vec::new(), NonZeroU64::MIN).expect("empty waveform is valid"),
-            )))
+            .analysis(request.clone())
             .build();
         let (returned, _load) = loader
             .prepare_source(
@@ -387,17 +433,10 @@ mod tests {
                 Box::new(AudioObserverSlot::default().relay()),
             )
             .expect("build_config should succeed");
-        assert!(
-            matches!(returned.beat_grid(), Some(ArtifactSource::Source(src)) if *src == grid),
-            "a grid source must reach the resource untouched"
-        );
-        assert!(
-            matches!(returned.waveform(), Some(ArtifactSource::Value(_))),
-            "a caller-held waveform must reach the resource untouched"
-        );
-        assert!(
-            matches!(returned.key(), Some(ArtifactSource::Source(src)) if *src == key),
-            "a key source must reach the resource untouched"
+        assert_eq!(
+            returned.analysis(),
+            Some(&request),
+            "the analysis request must reach the resource untouched"
         );
     }
 

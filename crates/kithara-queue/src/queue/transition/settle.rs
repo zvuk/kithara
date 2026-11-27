@@ -327,7 +327,7 @@ where
     /// Commits `id`'s staged source. The replacement opened at the seek
     /// target the outgoing receiver still holds pending, so that seek is done.
     fn commit_source(&mut self, id: TrackId, duration: Option<Duration>) -> bool {
-        let changed = self.tracks.commit_source(id, duration);
+        let changed = self.commit_staged_source(id, duration);
         if changed
             && matches!(self.held_position, Some(SeekPosition::Pending { item, .. }) if item == id)
         {

@@ -37,6 +37,8 @@ usdt = ["kithara-play/usdt", "kithara-test-utils/usdt"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
+# The analysis document reader only: no analyzer feature is enabled here.
+kithara-analysis = { workspace = true }
 kithara-assets = { workspace = true, default-features = false }
 kithara-audio = { workspace = true, default-features = false }
 kithara-bufpool = { workspace = true }
@@ -81,13 +83,14 @@ kithara-stream = { workspace = true, default-features = false }
 kithara-sync = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["test", "usdt", "mock", "hang", "temp-dir"] }
 kithara-warp = { workspace = true }
-kithara-waveform = { workspace = true }
 kithara-worker = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false, features = ["native-fixtures"] }
+kithara-test-utils = { path = "../kithara-test-utils", features = ["http-server"] }
 
 async-trait = { workspace = true }
+axum = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 serde_yaml_ng = { workspace = true }
