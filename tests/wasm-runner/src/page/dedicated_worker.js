@@ -10,4 +10,6 @@ worker.addEventListener("message", e => {
         document.getElementById("output").textContent += e.data[1];
     }
 });
+window.__kithara_tests_ready = true;
+await window.__kithara_user_activation;
 worker.postMessage(__TESTS__);
