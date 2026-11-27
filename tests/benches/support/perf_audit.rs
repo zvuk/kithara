@@ -19,7 +19,7 @@ fn backend(index: usize) -> StretchKind {
 #[metabench::benchmark(AUDIT_STRETCH_PREPARE, "audit_stretch_prepare", "prepare", gungraun_setup = prepare_engine)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_prepare(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_stretch_prepare<F: FnMut()>(mut work: NativeWork<F>) -> NativeWork<F> {
     work.run();
     work
 }
@@ -52,7 +52,7 @@ fn prepare_prime(index: usize) -> NativeWork<impl FnMut()> {
 #[metabench::benchmark(AUDIT_STRETCH_PRIME, "audit_stretch", "prime", gungraun_setup = prepare_prime)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_prime(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_stretch_prime<F: FnMut()>(mut work: NativeWork<F>) -> NativeWork<F> {
     work.run();
     work
 }
@@ -80,7 +80,7 @@ fn prepare_steady(index: usize) -> NativeWork<impl FnMut()> {
 #[metabench::benchmark(AUDIT_STRETCH_STEADY, "audit_stretch", "steady_process", gungraun_setup = prepare_steady)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_steady(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_stretch_steady<F: FnMut()>(mut work: NativeWork<F>) -> NativeWork<F> {
     work.run();
     work
 }
@@ -120,7 +120,7 @@ fn prepare_control(index: usize) -> NativeWork<impl FnMut()> {
 #[metabench::benchmark(AUDIT_STRETCH_CONTROL, "audit_stretch", "live_control_change", gungraun_setup = prepare_control)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_control(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_stretch_control<F: FnMut()>(mut work: NativeWork<F>) -> NativeWork<F> {
     work.run();
     work
 }
@@ -161,7 +161,7 @@ fn prepare_stretch_process(index: usize) -> NativeWork<impl FnMut()> {
 #[metabench::benchmark(AUDIT_STRETCH_PROCESS, "audit_stretch_process", "process", gungraun_setup = prepare_stretch_process)]
 #[bench::signalsmith_ratio_1_25(0_usize)]
 #[bench::bungee_ratio_1_25(1_usize)]
-fn native_stretch_process(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_stretch_process<F: FnMut()>(mut work: NativeWork<F>) -> NativeWork<F> {
     work.run();
     work
 }
@@ -238,7 +238,7 @@ fn prepare_limiter(index: usize) -> NativeWork<impl FnMut()> {
 #[bench::overloaded_257_tail_7(13_usize)]
 #[bench::quiet_600(14_usize)]
 #[bench::overloaded_600(15_usize)]
-fn native_limiter(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_limiter<F: FnMut()>(mut work: NativeWork<F>) -> NativeWork<F> {
     work.run();
     work
 }
@@ -284,20 +284,22 @@ fn prepare_source_window(index: usize) -> NativeWork<impl FnMut()> {
 #[bench::downsampled_short(3_usize)]
 #[bench::downsampled_chunk(4_usize)]
 #[bench::downsampled_tail(5_usize)]
-fn native_source_window(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_source_window<F: FnMut()>(mut work: NativeWork<F>) -> NativeWork<F> {
     work.run();
     work
 }
 
-fn prepare_gapless() -> NativeWork<impl FnMut()> {
-    let rt = make_runtime();
-    let temp_dir = TempDir::new().expect("gapless tempdir");
-    let file_path = temp_dir.path().join("audit-gapless.mp3");
-    fs::write(&file_path, test_mp3_bytes()).expect("gapless fixture");
-    NativeWork::new(move || {
-        rt.block_on(async {
+struct GaplessWork {
+    runtime: Runtime,
+    _temp_dir: TempDir,
+    file_path: std::path::PathBuf,
+}
+
+impl GaplessWork {
+    fn run(self) -> Self {
+        self.runtime.block_on(async {
             let pools = pools();
-            let file_config = FileConfig::for_src(file_path.clone().into())
+            let file_config = FileConfig::for_src(self.file_path.clone().into())
                 .store(
                     AssetStore::builder(pools.clone())
                         .backend(StorageBackend::Memory)
@@ -331,13 +333,25 @@ fn prepare_gapless() -> NativeWork<impl FnMut()> {
             assert!(reached_eof, "decode exceeded its bounded read budget");
             std::hint::black_box(total);
         });
-    })
+        self
+    }
+}
+
+fn prepare_gapless() -> GaplessWork {
+    let runtime = make_runtime();
+    let temp_dir = TempDir::new().expect("gapless tempdir");
+    let file_path = temp_dir.path().join("audit-gapless.mp3");
+    fs::write(&file_path, test_mp3_bytes()).expect("gapless fixture");
+    GaplessWork {
+        runtime,
+        _temp_dir: temp_dir,
+        file_path,
+    }
 }
 
 #[metabench::benchmark(AUDIT_GAPLESS, "audit_gapless_trim", "decode_mp3_to_eof", gungraun_setup = prepare_gapless)]
-fn native_gapless(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
-    work.run();
-    work
+fn native_gapless(work: GaplessWork) -> GaplessWork {
+    work.run()
 }
 
 struct AnalysisFixture {
@@ -391,28 +405,51 @@ fn analysis_fixture() -> AnalysisFixture {
     }
 }
 
-fn prepare_analysis() -> NativeWork<impl FnMut()> {
-    let fixture = analysis_fixture();
-    NativeWork::new(move || {
-        let progress = fixture.runtime.block_on(analyze_track(
-            &fixture.analysis_worker,
-            &fixture.play_worker,
-            std::hint::black_box(&fixture.file_path),
-            &fixture.store,
-            &fixture.token,
+impl AnalysisFixture {
+    fn run(self) -> Self {
+        let progress = self.runtime.block_on(analyze_track(
+            &self.analysis_worker,
+            &self.play_worker,
+            std::hint::black_box(&self.file_path),
+            &self.store,
+            &self.token,
         ));
-        assert_complete_analysis(&fixture.analysis_worker, &progress);
+        assert_complete_analysis(&self.analysis_worker, &progress);
         std::hint::black_box(progress);
-    })
+        self
+    }
+}
+
+fn prepare_analysis() -> AnalysisFixture {
+    analysis_fixture()
 }
 
 #[metabench::benchmark(AUDIT_ANALYSIS, "audit_analysis_worker", "decode_waveform_and_beat_to_settled", gungraun_setup = prepare_analysis)]
-fn native_analysis(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
-    work.run();
-    work
+fn native_analysis(work: AnalysisFixture) -> AnalysisFixture {
+    work.run()
 }
 
-fn prepare_analysis_checkpoint() -> NativeWork<impl FnMut()> {
+struct AnalysisCheckpointWork {
+    fixture: AnalysisFixture,
+    source_frames: u64,
+    file_spec: AnalysisFileSpec,
+}
+
+impl AnalysisCheckpointWork {
+    fn run(self) -> Self {
+        std::hint::black_box(self.source_frames);
+        std::hint::black_box(
+            AnalysisFile::create(
+                std::hint::black_box(&self.file_spec),
+                std::hint::black_box(&self.fixture.warm),
+            )
+            .expect("checkpoint encoding"),
+        );
+        self
+    }
+}
+
+fn prepare_analysis_checkpoint() -> AnalysisCheckpointWork {
     let fixture = analysis_fixture();
     let source_frames = assert_complete_analysis(&fixture.analysis_worker, &fixture.warm);
     let chunk_frames = NonZeroU64::new(
@@ -422,25 +459,32 @@ fn prepare_analysis_checkpoint() -> NativeWork<impl FnMut()> {
     .expect("checkpoint chunk");
     let file_spec = AnalysisFileSpec::for_analysis(fixture.warm.analysis(), chunk_frames)
         .expect("checkpoint spec");
-    NativeWork::new(move || {
-        std::hint::black_box(source_frames);
-        std::hint::black_box(
-            AnalysisFile::create(
-                std::hint::black_box(&file_spec),
-                std::hint::black_box(&fixture.warm),
-            )
-            .expect("checkpoint encoding"),
-        );
-    })
+    AnalysisCheckpointWork {
+        fixture,
+        source_frames,
+        file_spec,
+    }
 }
 
 #[metabench::benchmark(AUDIT_CHECKPOINT, "audit_analysis_checkpoint", "serialize_full_update", gungraun_setup = prepare_analysis_checkpoint)]
-fn native_checkpoint(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
-    work.run();
-    work
+fn native_checkpoint(work: AnalysisCheckpointWork) -> AnalysisCheckpointWork {
+    work.run()
 }
 
-fn prepare_quality_switch() -> NativeWork<impl FnMut()> {
+struct QualitySwitchWork {
+    runtime: Runtime,
+    helper: TestServerHelper,
+    server: CreatedHls,
+}
+
+impl QualitySwitchWork {
+    fn run(self) -> Self {
+        std::hint::black_box(self.runtime.block_on(quality_switch(&self.helper, &self.server)));
+        self
+    }
+}
+
+fn prepare_quality_switch() -> QualitySwitchWork {
     setup_tracing();
     let runtime = make_runtime();
     let (helper, server) = runtime.block_on(async {
@@ -462,15 +506,16 @@ fn prepare_quality_switch() -> NativeWork<impl FnMut()> {
             .expect("quality fixture");
         (helper, server)
     });
-    NativeWork::new(move || {
-        std::hint::black_box(runtime.block_on(quality_switch(&helper, &server)));
-    })
+    QualitySwitchWork {
+        runtime,
+        helper,
+        server,
+    }
 }
 
 #[metabench::benchmark(AUDIT_QUALITY, "audit_quality_switch", "manual_hls_join", gungraun_setup = prepare_quality_switch)]
-fn native_quality(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
-    work.run();
-    work
+fn native_quality(work: QualitySwitchWork) -> QualitySwitchWork {
+    work.run()
 }
 
 fn warp_transition_action(
@@ -560,11 +605,30 @@ fn warp_transition_action(
     std::hint::black_box((produced, output));
 }
 
-fn prepare_warp_transition() -> NativeWork<impl FnMut()> {
+struct WarpTransitionWork {
+    renderer: Option<WarpRenderer<TestPools>>,
+    pools: Pools,
+    spec: AudioSpec,
+    pcm: Vec<f32>,
+}
+
+impl WarpTransitionWork {
+    fn run(mut self) -> Self {
+        warp_transition_action(
+            self.renderer.take().expect("prepared warp renderer"),
+            &self.pools,
+            self.spec,
+            &self.pcm,
+        );
+        self
+    }
+}
+
+fn prepare_warp_transition() -> WarpTransitionWork {
     let pools = pools();
     let pcm = make_pcm(65_536);
     let spec = make_chunk(&pools, &pcm[..2]).spec();
-    let mut renderer = Some(
+    let renderer = Some(
         Warp::new(
             (),
             &WarpConfig::builder()
@@ -575,18 +639,15 @@ fn prepare_warp_transition() -> NativeWork<impl FnMut()> {
         )
         .renderer(spec, pools.clone()),
     );
-    NativeWork::new(move || {
-        warp_transition_action(
-            renderer.take().expect("prepared warp renderer"),
-            &pools,
-            spec,
-            &pcm,
-        );
-    })
+    WarpTransitionWork {
+        renderer,
+        pools,
+        spec,
+        pcm,
+    }
 }
 
 #[metabench::benchmark(AUDIT_WARP, "audit_warp_transition", "mapped_and_replacement", gungraun_setup = prepare_warp_transition)]
-fn native_warp(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
-    work.run();
-    work
+fn native_warp(work: WarpTransitionWork) -> WarpTransitionWork {
+    work.run()
 }

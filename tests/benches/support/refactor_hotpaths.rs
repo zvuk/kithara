@@ -29,7 +29,7 @@ fn prepare_resampler(index: usize) -> NativeWork<impl FnMut()> {
 #[metabench::benchmark(REFACTOR_RESAMPLER, "refactor_resampler", "case", gungraun_setup = prepare_resampler)]
 #[bench::unity_ratio_process(0_usize)]
 #[bench::fixed_ratio_process(1_usize)]
-fn native_resampler(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_resampler<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -75,7 +75,7 @@ fn prepare_audio_file(_: usize) -> NativeWork<impl FnMut()> {
 
 #[metabench::benchmark(REFACTOR_AUDIO, "refactor_audio_pipeline", "case", gungraun_setup = prepare_audio_file)]
 #[bench::new_and_read(0_usize)]
-fn native_audio_file(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_audio_file<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -139,27 +139,29 @@ fn prepare_hls(_: usize) -> NativeWork<impl FnMut()> {
 
 #[metabench::benchmark(REFACTOR_HLS, "refactor_hls_downloader", "case", gungraun_setup = prepare_hls)]
 #[bench::new_seek_read_cycle(0_usize)]
-fn native_hls(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_hls<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
-fn prepare_layout(index: usize) -> NativeWork<impl FnMut()> {
-    let channels = [2_u16, 6][index / 2];
-    let interleave = index.is_multiple_of(2);
+fn prepare_layout_interleave(channels: u16) -> NativeWork<impl FnMut()> {
     let pools = pools();
     let frames = FrameCount::new(LAYOUT_FRAMES);
     let spec = AudioSpec::new(channels, LAYOUT_RATE);
     let width = usize::from(channels);
-    if interleave {
-        let planar = PlanarBuffer::new(&pools, spec, frames).expect("planar");
-        let mut interleaved = vec![0.0_f32; LAYOUT_FRAMES * width];
-        return NativeWork::new(move || {
-            planar
-                .view()
-                .interleave_into(std::hint::black_box(&mut interleaved))
-                .expect("interleave");
-        });
-    }
+    let planar = PlanarBuffer::new(&pools, spec, frames).expect("planar");
+    let mut interleaved = vec![0.0_f32; LAYOUT_FRAMES * width];
+    NativeWork::new(move || {
+        planar
+            .view()
+            .interleave_into(std::hint::black_box(&mut interleaved))
+            .expect("interleave");
+    })
+}
+
+fn prepare_layout_deinterleave(channels: u16) -> NativeWork<impl FnMut()> {
+    let frames = FrameCount::new(LAYOUT_FRAMES);
+    let spec = AudioSpec::new(channels, LAYOUT_RATE);
+    let width = usize::from(channels);
     let source = vec![0.25_f32; LAYOUT_FRAMES * width];
     let mut planes = vec![vec![0.0_f32; LAYOUT_FRAMES]; width];
     NativeWork::new(move || {
@@ -170,12 +172,12 @@ fn prepare_layout(index: usize) -> NativeWork<impl FnMut()> {
     })
 }
 
-#[metabench::benchmark(REFACTOR_LAYOUT, "refactor_layout", "case", gungraun_setup = prepare_layout)]
-#[bench::interleave_2ch(0_usize)]
-#[bench::deinterleave_2ch(1_usize)]
-#[bench::interleave_6ch(2_usize)]
-#[bench::deinterleave_6ch(3_usize)]
-fn native_layout(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+#[metabench::benchmark(REFACTOR_LAYOUT, "refactor_layout", "case", gungraun_setup = prepare_layout_interleave)]
+#[bench::interleave_2ch(2_u16)]
+#[bench::deinterleave_2ch(args = (2_u16), setup = prepare_layout_deinterleave)]
+#[bench::interleave_6ch(6_u16)]
+#[bench::deinterleave_6ch(args = (6_u16), setup = prepare_layout_deinterleave)]
+fn native_layout<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -209,35 +211,13 @@ fn prepare_render_player(index: usize) -> NativeWork<impl FnMut()> {
 #[bench::settled_128(0_usize)]
 #[bench::moving_257(1_usize)]
 #[bench::seek_tail_1023(2_usize)]
-fn native_render_player(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_render_player<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
 fn prepare_deck_eq(index: usize) -> NativeWork<impl FnMut()> {
     let rt = make_runtime();
     let harness = rt.block_on(deck_eq_curves::player());
-    if index == 6 {
-        let shape = CurveShape::cubic(0.0, 1.0).expect("S shape");
-        rt.block_on(deck_eq_curves::reset(&harness));
-        let oracle: Vec<_> = (0..1024_usize)
-            .flat_map(|frame| {
-                if frame < deck_eq_curves::PRELUDE {
-                    [0.5; 2]
-                } else {
-                    deck_eq_curves::expected(frame - deck_eq_curves::PRELUDE, 128, shape).1
-                }
-            })
-            .collect();
-        return NativeWork::new(move || {
-            let last = rt.block_on(async {
-                deck_eq_curves::submit(&harness, shape, 128).await;
-                harness.render(1024).await
-            });
-            assert_eq!(last, oracle);
-            assert_eq!(harness.deck_snapshot().eq.gain(0), GainDb::checked(-12.0));
-            assert_eq!(harness.metrics().underruns(), 0);
-        });
-    }
     let (shape, frames) = [
         (CurveShape::HOLD, 13),
         (CurveShape::HOLD, 256),
@@ -267,6 +247,31 @@ fn prepare_deck_eq(index: usize) -> NativeWork<impl FnMut()> {
     })
 }
 
+fn prepare_deck_eq_public() -> NativeWork<impl FnMut()> {
+    let rt = make_runtime();
+    let harness = rt.block_on(deck_eq_curves::player());
+    let shape = CurveShape::cubic(0.0, 1.0).expect("S shape");
+    rt.block_on(deck_eq_curves::reset(&harness));
+    let oracle: Vec<_> = (0..1024_usize)
+        .flat_map(|frame| {
+            if frame < deck_eq_curves::PRELUDE {
+                [0.5; 2]
+            } else {
+                deck_eq_curves::expected(frame - deck_eq_curves::PRELUDE, 128, shape).1
+            }
+        })
+        .collect();
+    NativeWork::new(move || {
+        let last = rt.block_on(async {
+            deck_eq_curves::submit(&harness, shape, 128).await;
+            harness.render(1024).await
+        });
+        assert_eq!(last, oracle);
+        assert_eq!(harness.deck_snapshot().eq.gain(0), GainDb::checked(-12.0));
+        assert_eq!(harness.metrics().underruns(), 0);
+    })
+}
+
 #[metabench::benchmark(REFACTOR_DECK_EQ, "deck_eq_curves", "case", gungraun_setup = prepare_deck_eq)]
 #[bench::render_hold_13(0_usize)]
 #[bench::render_hold_256(1_usize)]
@@ -274,8 +279,8 @@ fn prepare_deck_eq(index: usize) -> NativeWork<impl FnMut()> {
 #[bench::render_linear_256(3_usize)]
 #[bench::render_cubic_13(4_usize)]
 #[bench::render_cubic_256(5_usize)]
-#[bench::public_host_cubic_1024(6_usize)]
-fn native_deck_eq(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+#[bench::public_host_cubic_1024(setup = prepare_deck_eq_public)]
+fn native_deck_eq<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -327,7 +332,7 @@ fn prepare_filter_sweep(index: usize) -> NativeWork<impl FnMut()> {
 #[bench::render_cubic_13(4_usize)]
 #[bench::render_cubic_256(5_usize)]
 #[bench::public_host_cubic_1024(6_usize)]
-fn native_filter_sweep(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_filter_sweep<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -363,7 +368,7 @@ fn prepare_slot_gain_host(_: usize) -> NativeWork<impl FnMut()> {
 
 #[metabench::benchmark(REFACTOR_SLOT_HOST, "slot_gain_curves", "case", gungraun_setup = prepare_slot_gain_host)]
 #[bench::public_host_cubic_1024(0_usize)]
-fn native_slot_host(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_slot_host<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -387,7 +392,7 @@ fn prepare_slot_shape(frames: u16) -> NativeWork<impl FnMut()> {
 #[metabench::benchmark(REFACTOR_SLOT_SHAPE, "slot_gain_curves", "case", gungraun_setup = prepare_slot_shape)]
 #[bench::shape_cubic_13(13_u16)]
 #[bench::shape_cubic_256(256_u16)]
-fn native_slot_shape(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_slot_shape<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -395,21 +400,6 @@ fn prepare_filter_chain(index: usize) -> NativeWork<impl FnMut()> {
     let pools = pools();
     let rate = NonZeroU32::new(48_000).expect("rate");
     let mut filter = filter_chain::prepared_filter(rate);
-    if index == 4 {
-        let mut burst = vec![0.0; 514];
-        burst[..64].fill(0.25);
-        let silence = vec![0.0; 514];
-        let mut inputs = [
-            filter_chain::input_planes(&pools, &burst),
-            filter_chain::input_planes(&pools, &silence),
-            filter_chain::input_planes(&pools, &silence),
-        ];
-        return NativeWork::new(move || {
-            for planes in &mut inputs {
-                filter.process(std::hint::black_box(planes), 0..257).expect("planes");
-            }
-        });
-    }
     let frames = [0, 7, 128, 257][index];
     let fixture = make_pcm(frames, 2);
     let mut planes = filter_chain::input_planes(&pools, &fixture);
@@ -418,13 +408,32 @@ fn prepare_filter_chain(index: usize) -> NativeWork<impl FnMut()> {
     })
 }
 
+fn prepare_filter_chain_burst() -> NativeWork<impl FnMut()> {
+    let pools = pools();
+    let rate = NonZeroU32::new(48_000).expect("rate");
+    let mut filter = filter_chain::prepared_filter(rate);
+    let mut burst = vec![0.0; 514];
+    burst[..64].fill(0.25);
+    let silence = vec![0.0; 514];
+    let mut inputs = [
+        filter_chain::input_planes(&pools, &burst),
+        filter_chain::input_planes(&pools, &silence),
+        filter_chain::input_planes(&pools, &silence),
+    ];
+    NativeWork::new(move || {
+        for planes in &mut inputs {
+            filter.process(std::hint::black_box(planes), 0..257).expect("planes");
+        }
+    })
+}
+
 #[metabench::benchmark(REFACTOR_FILTER_CHAIN, "filter_chain", "case", gungraun_setup = prepare_filter_chain)]
 #[bench::lowpass_stereo_empty(0_usize)]
 #[bench::lowpass_stereo_7(1_usize)]
 #[bench::lowpass_stereo_128(2_usize)]
 #[bench::lowpass_stereo_257(3_usize)]
-#[bench::lowpass_burst_and_two_quiet_blocks_stereo_257(4_usize)]
-fn native_filter_chain(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+#[bench::lowpass_burst_and_two_quiet_blocks_stereo_257(setup = prepare_filter_chain_burst)]
+fn native_filter_chain<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -438,7 +447,7 @@ fn prepare_adopt(_: usize) -> NativeWork<impl FnMut()> {
 
 #[metabench::benchmark(REFACTOR_ADOPT, "render_buffers", "case", gungraun_setup = prepare_adopt)]
 #[bench::adopt_partial_tail_257(0_usize)]
-fn native_adopt(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_adopt<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -452,7 +461,7 @@ fn prepare_refill(_: usize) -> NativeWork<impl FnMut()> {
 
 #[metabench::benchmark(REFACTOR_REFILL, "render_buffers", "case", gungraun_setup = prepare_refill)]
 #[bench::slot_refill_16(0_usize)]
-fn native_refill(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_refill<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -467,7 +476,7 @@ fn prepare_jump(_: usize) -> NativeWork<impl FnMut()> {
 
 #[metabench::benchmark(REFACTOR_JUMP, "render_buffers", "case", gungraun_setup = prepare_jump)]
 #[bench::jump_240(0_usize)]
-fn native_jump(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_jump<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
 
@@ -483,6 +492,6 @@ fn prepare_duck(_: usize) -> NativeWork<impl FnMut()> {
 
 #[metabench::benchmark(REFACTOR_DUCK, "render_buffers", "case", gungraun_setup = prepare_duck)]
 #[bench::duck_spans_513(0_usize)]
-fn native_duck(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
+fn native_duck<F: FnMut()>(work: NativeWork<F>) -> NativeWork<F> {
     work.run()
 }
