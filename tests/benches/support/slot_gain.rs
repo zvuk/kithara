@@ -3,7 +3,7 @@ use std::{
     num::{NonZeroU32, NonZeroUsize},
 };
 
-use criterion::{BatchSize, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use kithara::{
     assets::AssetStore,
     audio::mock::TestPcmReader,
@@ -16,7 +16,7 @@ use kithara_integration_tests::offline::{OfflinePlayer, OfflinePlayerOptions};
 use kithara_test_fixtures::integration_fixtures::benchmark_half;
 
 const RATE: u32 = 44_100;
-const WARM_FRAMES: usize = 4096;
+pub(crate) const WARM_FRAMES: usize = 4096;
 
 pub(super) async fn loaded_player() -> OfflinePlayer {
     let harness = OfflinePlayer::with_sample_rate(
@@ -51,7 +51,7 @@ pub(super) async fn loaded_player() -> OfflinePlayer {
     harness
 }
 
-async fn gain_window(
+pub(crate) async fn gain_window(
     harness: &OfflinePlayer,
     item: kithara_events::TrackId,
     target: f64,
@@ -100,7 +100,7 @@ pub(super) fn host_curve(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("slot_gain_curves");
         group.sample_size(20);
-        group.bench_function("public_host_cubic/1024", |b| {
+        group.bench_function(BenchmarkId::new("case", "public_host_cubic_1024"), |b| {
             b.iter_batched(
                 || {
                     rt.block_on(async {
@@ -136,14 +136,17 @@ pub(super) fn gain_shape(c: &mut Criterion) {
             .map(|&time| 3.0 * time * time - 2.0 * time * time * time)
             .collect();
         let mut last = vec![0.0; usize::from(frames)];
-        group.bench_function(format!("shape_cubic/{frames}"), |b| {
-            b.iter(|| {
-                last.copy_from_slice(black_box(&positions));
-                shape.process(&mut last, [0.0, 1.0]);
-                black_box(&last);
-            });
-            assert_eq!(last, expected);
-        });
+        group.bench_function(
+            BenchmarkId::new("case", format!("shape_cubic_{frames}")),
+            |b| {
+                b.iter(|| {
+                    last.copy_from_slice(black_box(&positions));
+                    shape.process(&mut last, [0.0, 1.0]);
+                    black_box(&last);
+                });
+                assert_eq!(last, expected);
+            },
+        );
     }
     group.finish();
 }

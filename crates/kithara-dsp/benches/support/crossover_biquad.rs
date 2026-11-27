@@ -1,14 +1,12 @@
-use std::{hint::black_box, num::NonZeroU32, ops::Deref};
+use std::ops::Deref;
 
 use biquad::{Biquad as _, DirectForm1};
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
 use kithara_dsp::{
-    filter::{Coefficients, Crossover, Hertz, Type},
+    filter::Crossover,
     param::{DEFAULT_GAIN_SPAN, MIN_SETTLE_RATIO, SmoothingFilter, SmoothingFilterCoeff},
 };
 use kithara_test_fixtures::portable;
 use kithara_test_utils::kithara_platform::time::Duration;
-use num_traits::AsPrimitive;
 
 const RATE: f32 = 48_000.0;
 /// Peak below which the crossover treats a sample as silent; the quiet-noise
@@ -185,7 +183,7 @@ impl Svf {
     ) {
         let input = io.each_ref().map(|plane| &plane[..frames]);
         assert_eq!(
-            black_box(split)(&mut self.filter, &input, &mut self.bands),
+            std::hint::black_box(split)(&mut self.filter, &input, &mut self.bands),
             frames
         );
         for plane in &mut *io {
@@ -272,12 +270,15 @@ pub(crate) fn bench(c: &mut Criterion) {
                     format!("{shape}_{bands}band")
                 };
                 let mut baseline = Frame::new(&frequencies);
-                group.bench_function(BenchmarkId::new(format!("df1_{variant}"), frames), |b| {
+                group.bench_function(BenchmarkId::new(
+                        "case",
+                        canonical_id(format!("df1_{variant}_{frames}")),
+                    ), |b| {
                     b.iter_batched_ref(
                         || (*input).clone(),
                         |io| {
-                            baseline.sum(black_box(&mut *io), black_box(&gains), frames);
-                            black_box(&*io);
+                            baseline.sum(std::hint::black_box(&mut *io), std::hint::black_box(&gains), frames);
+                            std::hint::black_box(&*io);
                         },
                         BatchSize::SmallInput,
                     );
@@ -285,18 +286,18 @@ pub(crate) fn bench(c: &mut Criterion) {
                 for (name, kernel) in kithara_dsp::routes::crossover::forms::<2, Vec<f32>>() {
                     let mut svf = Svf::new(&frequencies, frames);
                     group.bench_function(
-                        BenchmarkId::new(format!("{name}_{variant}"), frames),
+                        BenchmarkId::new("case", canonical_id(format!("{name}_{variant}_{frames}"))),
                         |b| {
                             b.iter_batched_ref(
                                 || (*input).clone(),
                                 |io| {
                                     svf.sum_with(
-                                        black_box(&mut *io),
-                                        black_box(&gains),
+                                        std::hint::black_box(&mut *io),
+                                        std::hint::black_box(&gains),
                                         frames,
                                         kernel,
                                     );
-                                    black_box(&*io);
+                                    std::hint::black_box(&*io);
                                 },
                                 BatchSize::SmallInput,
                             );
