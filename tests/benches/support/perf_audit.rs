@@ -1,12 +1,10 @@
-struct NativeWork {
-    action: Box<dyn FnMut()>,
+struct NativeWork<F> {
+    action: F,
 }
 
-impl NativeWork {
-    fn new(action: impl FnMut() + 'static) -> Self {
-        Self {
-            action: Box::new(action),
-        }
+impl<F: FnMut()> NativeWork<F> {
+    fn new(action: F) -> Self {
+        Self { action }
     }
 
     fn run(&mut self) {
@@ -21,12 +19,12 @@ fn backend(index: usize) -> StretchKind {
 #[metabench::benchmark(AUDIT_STRETCH_PREPARE, "audit_stretch_prepare", "prepare", gungraun_setup = prepare_engine)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_prepare(mut work: NativeWork) -> NativeWork {
+fn native_stretch_prepare(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
 
-fn prepare_engine(index: usize) -> NativeWork {
+fn prepare_engine(index: usize) -> NativeWork<impl FnMut()> {
     let pools = pools();
     NativeWork::new(move || {
         build_engine(stretch_config(backend(index), &pools))
@@ -34,7 +32,7 @@ fn prepare_engine(index: usize) -> NativeWork {
     })
 }
 
-fn prepare_prime(index: usize) -> NativeWork {
+fn prepare_prime(index: usize) -> NativeWork<impl FnMut()> {
     let pools = pools();
     let mut target = stretch_engine(backend(index), &pools);
     let mut buffers = prime_fixture(target.as_ref());
@@ -54,12 +52,12 @@ fn prepare_prime(index: usize) -> NativeWork {
 #[metabench::benchmark(AUDIT_STRETCH_PRIME, "audit_stretch", "prime", gungraun_setup = prepare_prime)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_prime(mut work: NativeWork) -> NativeWork {
+fn native_stretch_prime(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
 
-fn prepare_steady(index: usize) -> NativeWork {
+fn prepare_steady(index: usize) -> NativeWork<impl FnMut()> {
     let pools = pools();
     let mut target = stretch_engine(backend(index), &pools);
     let mut prime = prime_fixture(target.as_ref());
@@ -82,12 +80,12 @@ fn prepare_steady(index: usize) -> NativeWork {
 #[metabench::benchmark(AUDIT_STRETCH_STEADY, "audit_stretch", "steady_process", gungraun_setup = prepare_steady)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_steady(mut work: NativeWork) -> NativeWork {
+fn native_stretch_steady(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
 
-fn prepare_control(index: usize) -> NativeWork {
+fn prepare_control(index: usize) -> NativeWork<impl FnMut()> {
     let pools = pools();
     let mut target = stretch_engine(backend(index), &pools);
     let mut prime = prime_fixture(target.as_ref());
@@ -122,12 +120,12 @@ fn prepare_control(index: usize) -> NativeWork {
 #[metabench::benchmark(AUDIT_STRETCH_CONTROL, "audit_stretch", "live_control_change", gungraun_setup = prepare_control)]
 #[bench::signalsmith(0_usize)]
 #[bench::bungee(1_usize)]
-fn native_stretch_control(mut work: NativeWork) -> NativeWork {
+fn native_stretch_control(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
 
-fn prepare_stretch_process(index: usize) -> NativeWork {
+fn prepare_stretch_process(index: usize) -> NativeWork<impl FnMut()> {
     let pools = pools();
     let pcm = make_pcm(consts::STRETCH_FRAMES);
     let spec = AudioSpec::new(2, NonZeroU32::new(consts::SAMPLE_RATE).expect("rate"));
@@ -163,12 +161,12 @@ fn prepare_stretch_process(index: usize) -> NativeWork {
 #[metabench::benchmark(AUDIT_STRETCH_PROCESS, "audit_stretch_process", "process", gungraun_setup = prepare_stretch_process)]
 #[bench::signalsmith_ratio_1_25(0_usize)]
 #[bench::bungee_ratio_1_25(1_usize)]
-fn native_stretch_process(mut work: NativeWork) -> NativeWork {
+fn native_stretch_process(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
 
-fn prepare_limiter(index: usize) -> NativeWork {
+fn prepare_limiter(index: usize) -> NativeWork<impl FnMut()> {
     let shapes = [
         (1, 0),
         (7, 0),
@@ -240,12 +238,12 @@ fn prepare_limiter(index: usize) -> NativeWork {
 #[bench::overloaded_257_tail_7(13_usize)]
 #[bench::quiet_600(14_usize)]
 #[bench::overloaded_600(15_usize)]
-fn native_limiter(mut work: NativeWork) -> NativeWork {
+fn native_limiter(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
 
-fn prepare_source_window(index: usize) -> NativeWork {
+fn prepare_source_window(index: usize) -> NativeWork<impl FnMut()> {
     let (speed, frames, terminal) = [
         (0.75, 7, false),
         (0.75, 127, false),
@@ -286,12 +284,12 @@ fn prepare_source_window(index: usize) -> NativeWork {
 #[bench::downsampled_short(3_usize)]
 #[bench::downsampled_chunk(4_usize)]
 #[bench::downsampled_tail(5_usize)]
-fn native_source_window(mut work: NativeWork) -> NativeWork {
+fn native_source_window(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
 
-fn prepare_gapless() -> NativeWork {
+fn prepare_gapless() -> NativeWork<impl FnMut()> {
     let rt = make_runtime();
     let temp_dir = TempDir::new().expect("gapless tempdir");
     let file_path = temp_dir.path().join("audit-gapless.mp3");
@@ -337,7 +335,7 @@ fn prepare_gapless() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_GAPLESS, "audit_gapless_trim", "decode_mp3_to_eof", gungraun_setup = prepare_gapless)]
-fn native_gapless(mut work: NativeWork) -> NativeWork {
+fn native_gapless(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
@@ -393,7 +391,7 @@ fn analysis_fixture() -> AnalysisFixture {
     }
 }
 
-fn prepare_analysis() -> NativeWork {
+fn prepare_analysis() -> NativeWork<impl FnMut()> {
     let fixture = analysis_fixture();
     NativeWork::new(move || {
         let progress = fixture.runtime.block_on(analyze_track(
@@ -409,12 +407,12 @@ fn prepare_analysis() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_ANALYSIS, "audit_analysis_worker", "decode_waveform_and_beat_to_settled", gungraun_setup = prepare_analysis)]
-fn native_analysis(mut work: NativeWork) -> NativeWork {
+fn native_analysis(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
 
-fn prepare_analysis_checkpoint() -> NativeWork {
+fn prepare_analysis_checkpoint() -> NativeWork<impl FnMut()> {
     let fixture = analysis_fixture();
     let source_frames = assert_complete_analysis(&fixture.analysis_worker, &fixture.warm);
     let chunk_frames = NonZeroU64::new(
@@ -437,12 +435,12 @@ fn prepare_analysis_checkpoint() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_CHECKPOINT, "audit_analysis_checkpoint", "serialize_full_update", gungraun_setup = prepare_analysis_checkpoint)]
-fn native_checkpoint(mut work: NativeWork) -> NativeWork {
+fn native_checkpoint(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
 
-fn prepare_quality_switch() -> NativeWork {
+fn prepare_quality_switch() -> NativeWork<impl FnMut()> {
     setup_tracing();
     let runtime = make_runtime();
     let (helper, server) = runtime.block_on(async {
@@ -470,7 +468,7 @@ fn prepare_quality_switch() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_QUALITY, "audit_quality_switch", "manual_hls_join", gungraun_setup = prepare_quality_switch)]
-fn native_quality(mut work: NativeWork) -> NativeWork {
+fn native_quality(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }
@@ -562,7 +560,7 @@ fn warp_transition_action(
     std::hint::black_box((produced, output));
 }
 
-fn prepare_warp_transition() -> NativeWork {
+fn prepare_warp_transition() -> NativeWork<impl FnMut()> {
     let pools = pools();
     let pcm = make_pcm(65_536);
     let spec = make_chunk(&pools, &pcm[..2]).spec();
@@ -588,7 +586,7 @@ fn prepare_warp_transition() -> NativeWork {
 }
 
 #[metabench::benchmark(AUDIT_WARP, "audit_warp_transition", "mapped_and_replacement", gungraun_setup = prepare_warp_transition)]
-fn native_warp(mut work: NativeWork) -> NativeWork {
+fn native_warp(mut work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run();
     work
 }

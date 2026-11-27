@@ -1,65 +1,88 @@
-struct NativeWork {
-    action: Box<dyn FnMut()>,
+#[derive(Clone, Copy)]
+enum LastLoudImplementation {
+    Native,
+    Rposition,
 }
 
-impl NativeWork {
-    fn new(action: impl FnMut() + 'static) -> Self {
-        Self { action: Box::new(action) }
-    }
-
-    fn run(mut self) -> Self {
-        (self.action)();
-        self
-    }
+#[derive(Clone, Copy)]
+enum LastLoudShape {
+    Silent,
+    Last,
 }
 
-fn prepare_last_loud(index: usize) -> NativeWork {
-    let size = [128_usize, 512, 4096][index / 4];
-    let shape = index % 4 / 2;
-    let implementation = index % 2;
+struct LastLoudPrepared {
+    samples: Vec<f32>,
+    search: fn(&[f32], f32) -> Option<usize>,
+}
+
+fn prepare_last_loud(
+    size: usize,
+    shape: LastLoudShape,
+    implementation: LastLoudImplementation,
+) -> LastLoudPrepared {
     let mut samples = vec![0.0_f32; size];
-    if shape == 1 {
+    if matches!(shape, LastLoudShape::Last) {
         *samples.last_mut().expect("nonempty") = 0.25;
     }
-    let expected = loud_scalar(&samples, 1e-6);
-    let search: fn(&[f32], f32) -> Option<usize> = if implementation == 0 {
-        kithara_dsp::last_loud
-    } else {
-        loud_scalar
+    let search = match implementation {
+        LastLoudImplementation::Native => kithara_dsp::last_loud,
+        LastLoudImplementation::Rposition => loud_scalar,
     };
-    assert_eq!(search(&samples, 1e-6), expected);
-    NativeWork::new(move || {
-        std::hint::black_box(search(
-            std::hint::black_box(&samples),
-            std::hint::black_box(1e-6),
-        ));
-    })
+    assert_eq!(search(&samples, 1e-6), loud_scalar(&samples, 1e-6));
+    LastLoudPrepared { samples, search }
 }
 
 #[metabench::benchmark(KERNEL_LAST_LOUD, "last_loud", "case", gungraun_setup = prepare_last_loud)]
-#[bench::case_silent_native_128(0_usize)]
-#[bench::case_silent_rposition_128(1_usize)]
-#[bench::case_last_native_128(2_usize)]
-#[bench::case_last_rposition_128(3_usize)]
-#[bench::case_silent_native_512(4_usize)]
-#[bench::case_silent_rposition_512(5_usize)]
-#[bench::case_last_native_512(6_usize)]
-#[bench::case_last_rposition_512(7_usize)]
-#[bench::case_silent_native_4096(8_usize)]
-#[bench::case_silent_rposition_4096(9_usize)]
-#[bench::case_last_native_4096(10_usize)]
-#[bench::case_last_rposition_4096(11_usize)]
-fn native_work_0(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_silent_native_128(args = (128_usize, LastLoudShape::Silent, LastLoudImplementation::Native))]
+#[bench::case_silent_rposition_128(args = (128_usize, LastLoudShape::Silent, LastLoudImplementation::Rposition))]
+#[bench::case_last_native_128(args = (128_usize, LastLoudShape::Last, LastLoudImplementation::Native))]
+#[bench::case_last_rposition_128(args = (128_usize, LastLoudShape::Last, LastLoudImplementation::Rposition))]
+#[bench::case_silent_native_512(args = (512_usize, LastLoudShape::Silent, LastLoudImplementation::Native))]
+#[bench::case_silent_rposition_512(args = (512_usize, LastLoudShape::Silent, LastLoudImplementation::Rposition))]
+#[bench::case_last_native_512(args = (512_usize, LastLoudShape::Last, LastLoudImplementation::Native))]
+#[bench::case_last_rposition_512(args = (512_usize, LastLoudShape::Last, LastLoudImplementation::Rposition))]
+#[bench::case_silent_native_4096(args = (4096_usize, LastLoudShape::Silent, LastLoudImplementation::Native))]
+#[bench::case_silent_rposition_4096(args = (4096_usize, LastLoudShape::Silent, LastLoudImplementation::Rposition))]
+#[bench::case_last_native_4096(args = (4096_usize, LastLoudShape::Last, LastLoudImplementation::Native))]
+#[bench::case_last_rposition_4096(args = (4096_usize, LastLoudShape::Last, LastLoudImplementation::Rposition))]
+fn native_last_loud(prepared: LastLoudPrepared) -> LastLoudPrepared {
+    std::hint::black_box((prepared.search)(
+        std::hint::black_box(&prepared.samples),
+        std::hint::black_box(1e-6),
+    ));
+    prepared
 }
 
-fn prepare_svf_fixed(index: usize) -> NativeWork {
-    let frames = [128_usize, 512][index / 6];
-    let response = [Response::LowPass, Response::HighPass][index % 6 / 3];
-    let mode = index % 3;
+#[derive(Clone, Copy)]
+enum SvfFixedMode {
+    Fixed,
+    PerFrame,
+    Scalar,
+}
+
+struct SvfFixedPrepared {
+    frames: usize,
+    response: Response,
+    mode: SvfFixedMode,
+    filter: StateVariableFilter<2>,
+    planes: [Vec<f32>; 2],
+    cutoffs: Vec<f64>,
+    design: SvfDesign,
+    state: [[f64; 2]; 2],
+    coefficients: [f64; 4],
+}
+
+fn prepare_svf_fixed(
+    frames: usize,
+    response: Response,
+    mode: SvfFixedMode,
+) -> SvfFixedPrepared {
     let rate = NonZeroU32::new(48_000).expect("rate");
-    let samples: Vec<_> = tone(frames).into_iter().map(|sample| 0.25 * sample).collect();
-    let template = [samples.clone(), samples];
+    let samples: Vec<_> = tone(frames)
+        .into_iter()
+        .map(|sample| 0.25 * sample)
+        .collect();
+    let planes = [samples.clone(), samples];
     let cutoffs = vec![4000.0; frames];
     let design = SvfDesign::new(rate, 4000.0, FRAC_1_SQRT_2, response).expect("design");
     let gain = (std::f64::consts::PI * 4000.0 / f64::from(rate.get())).tan();
@@ -67,803 +90,1362 @@ fn prepare_svf_fixed(index: usize) -> NativeWork {
     let a1 = (1.0 + gain * (gain + damping)).recip();
     let a2 = gain * a1;
     let coefficients = [a1, a2, gain * a2, damping];
-    let mut filter = StateVariableFilter::<2>::new();
-    let mut planes = template;
-    let mut state = [[0.0_f64; 2]; 2];
-    NativeWork::new(move || {
-        match mode {
-            0 => filter.process_fixed(std::hint::black_box(&mut planes), 0..frames, &design).expect("fixed"),
-            1 => filter.process(std::hint::black_box(&mut planes), 0..frames, &cutoffs, rate, FRAC_1_SQRT_2, response).expect("dynamic"),
-            _ => scalar_svf_fixed(&mut planes, &mut state, &coefficients, response),
-        };
-        std::hint::black_box(&planes);
-    })
+    SvfFixedPrepared {
+        frames,
+        response,
+        mode,
+        filter: StateVariableFilter::<2>::new(),
+        planes,
+        cutoffs,
+        design,
+        state: [[0.0_f64; 2]; 2],
+        coefficients,
+    }
 }
 
 #[metabench::benchmark(KERNEL_SVF_FIXED, "svf_fixed", "case", gungraun_setup = prepare_svf_fixed)]
-#[bench::case_2ch_lowpass_fixed_128(0_usize)]
-#[bench::case_2ch_lowpass_per_frame_128(1_usize)]
-#[bench::case_2ch_lowpass_scalar_128(2_usize)]
-#[bench::case_2ch_highpass_fixed_128(3_usize)]
-#[bench::case_2ch_highpass_per_frame_128(4_usize)]
-#[bench::case_2ch_highpass_scalar_128(5_usize)]
-#[bench::case_2ch_lowpass_fixed_512(6_usize)]
-#[bench::case_2ch_lowpass_per_frame_512(7_usize)]
-#[bench::case_2ch_lowpass_scalar_512(8_usize)]
-#[bench::case_2ch_highpass_fixed_512(9_usize)]
-#[bench::case_2ch_highpass_per_frame_512(10_usize)]
-#[bench::case_2ch_highpass_scalar_512(11_usize)]
-fn native_work_1(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_2ch_lowpass_fixed_128(args = (128_usize, Response::LowPass, SvfFixedMode::Fixed))]
+#[bench::case_2ch_lowpass_per_frame_128(args = (128_usize, Response::LowPass, SvfFixedMode::PerFrame))]
+#[bench::case_2ch_lowpass_scalar_128(args = (128_usize, Response::LowPass, SvfFixedMode::Scalar))]
+#[bench::case_2ch_highpass_fixed_128(args = (128_usize, Response::HighPass, SvfFixedMode::Fixed))]
+#[bench::case_2ch_highpass_per_frame_128(args = (128_usize, Response::HighPass, SvfFixedMode::PerFrame))]
+#[bench::case_2ch_highpass_scalar_128(args = (128_usize, Response::HighPass, SvfFixedMode::Scalar))]
+#[bench::case_2ch_lowpass_fixed_512(args = (512_usize, Response::LowPass, SvfFixedMode::Fixed))]
+#[bench::case_2ch_lowpass_per_frame_512(args = (512_usize, Response::LowPass, SvfFixedMode::PerFrame))]
+#[bench::case_2ch_lowpass_scalar_512(args = (512_usize, Response::LowPass, SvfFixedMode::Scalar))]
+#[bench::case_2ch_highpass_fixed_512(args = (512_usize, Response::HighPass, SvfFixedMode::Fixed))]
+#[bench::case_2ch_highpass_per_frame_512(args = (512_usize, Response::HighPass, SvfFixedMode::PerFrame))]
+#[bench::case_2ch_highpass_scalar_512(args = (512_usize, Response::HighPass, SvfFixedMode::Scalar))]
+fn native_svf_fixed(mut prepared: SvfFixedPrepared) -> SvfFixedPrepared {
+    let rate = NonZeroU32::new(48_000).expect("rate");
+    match prepared.mode {
+        SvfFixedMode::Fixed => prepared
+            .filter
+            .process_fixed(
+                std::hint::black_box(&mut prepared.planes),
+                0..prepared.frames,
+                &prepared.design,
+            )
+            .expect("fixed"),
+        SvfFixedMode::PerFrame => prepared
+            .filter
+            .process(
+                std::hint::black_box(&mut prepared.planes),
+                0..prepared.frames,
+                &prepared.cutoffs,
+                rate,
+                FRAC_1_SQRT_2,
+                prepared.response,
+            )
+            .expect("dynamic"),
+        SvfFixedMode::Scalar => scalar_svf_fixed(
+            &mut prepared.planes,
+            &mut prepared.state,
+            &prepared.coefficients,
+            prepared.response,
+        ),
+    }
+    std::hint::black_box(&prepared.planes);
+    prepared
 }
 
-fn prepare_crossfade(index: usize, kernel: Crossfade) -> NativeWork {
-    let old_sample = 0.314_159_f32;
-    let new_sample = -0.271_828_f32;
-    let mut shapes = Vec::new();
-    for frames in consts::SIZES {
-        for channels in [NonZeroUsize::MIN, consts::TWO, consts::SIX] {
-            shapes.push((channels, frames, 0, frames, new_sample));
+#[derive(Clone, Copy)]
+struct CrossfadeCase {
+    channels: NonZeroUsize,
+    frames: usize,
+    tail: usize,
+    chunk: usize,
+    input_sample: f32,
+}
+
+impl CrossfadeCase {
+    const fn new(
+        channels: NonZeroUsize,
+        frames: usize,
+        tail: usize,
+        chunk: usize,
+        input_sample: f32,
+    ) -> Self {
+        Self {
+            channels,
+            frames,
+            tail,
+            chunk,
+            input_sample,
         }
     }
-    shapes.extend([
-        (consts::TWO, 7, 0, 7, new_sample),
-        (consts::SIX, 127, 0, 127, new_sample),
-        (consts::TWO, 127, 1, 127, new_sample),
-        (consts::TWO, 4096, 0, 128, new_sample),
-        (consts::TWO, 7, 0, 7, old_sample),
-    ]);
-    let (channels, frames, tail, chunk, input_sample) = shapes[index];
-    let old = vec![old_sample; frames * channels.get() + tail];
-    let apply = {
-        let old = old.clone();
-        move |output: &mut [f32]| {
-        let mut processed = 0;
-        for (outgoing, incoming) in old
-            .chunks(chunk * channels.get())
-            .zip(output.chunks_mut(chunk * channels.get()))
-        {
-            processed += kernel(outgoing, incoming, channels, processed, frames);
-        }
-            processed
-        }
-    };
-    let mut expected = vec![input_sample; frames * channels.get() + tail];
-    assert_eq!(previous_audio_crossfade(&old, &mut expected, channels, 0, frames), frames);
-    let mut actual = vec![input_sample; expected.len()];
-    assert_eq!(apply(&mut actual), frames);
-    assert!(actual.iter().zip(&expected).all(|(a,b)| a.to_bits() == b.to_bits()));
-    let mut output = vec![input_sample; expected.len()];
-    NativeWork::new(move || {
-        std::hint::black_box(apply(std::hint::black_box(&mut output)));
-    })
+}
+
+struct CrossfadePrepared {
+    old: Vec<f32>,
+    output: Vec<f32>,
+    channels: NonZeroUsize,
+    frames: usize,
+    chunk: usize,
+}
+
+fn apply_crossfade<F>(
+    old: &[f32],
+    output: &mut [f32],
+    channels: NonZeroUsize,
+    frames: usize,
+    chunk: usize,
+    kernel: F,
+) -> usize
+where
+    F: Fn(&[f32], &mut [f32], NonZeroUsize, usize, usize) -> usize,
+{
+    let mut processed = 0;
+    for (outgoing, incoming) in old
+        .chunks(chunk * channels.get())
+        .zip(output.chunks_mut(chunk * channels.get()))
+    {
+        processed += kernel(outgoing, incoming, channels, processed, frames);
+    }
+    processed
+}
+
+fn prepare_crossfade(case: CrossfadeCase, kernel: Crossfade) -> CrossfadePrepared {
+    let old_sample = 0.314_159_f32;
+    let old = vec![old_sample; case.frames * case.channels.get() + case.tail];
+    let mut expected = vec![case.input_sample; old.len()];
+    assert_eq!(
+        previous_audio_crossfade(&old, &mut expected, case.channels, 0, case.frames),
+        case.frames
+    );
+    let mut actual = vec![case.input_sample; expected.len()];
+    assert_eq!(
+        apply_crossfade(
+            &old,
+            &mut actual,
+            case.channels,
+            case.frames,
+            case.chunk,
+            kernel,
+        ),
+        case.frames
+    );
+    assert!(
+        actual
+            .iter()
+            .zip(&expected)
+            .all(|(left, right)| left.to_bits() == right.to_bits())
+    );
+    CrossfadePrepared {
+        old,
+        output: vec![case.input_sample; expected.len()],
+        channels: case.channels,
+        frames: case.frames,
+        chunk: case.chunk,
+    }
+}
+
+fn prepare_linear(case: CrossfadeCase) -> CrossfadePrepared {
+    prepare_crossfade(case, kithara_dsp::crossfade_linear)
 }
 
 #[metabench::benchmark(KERNEL_CROSSFADE_LINEAR, "crossfade_linear", "case", gungraun_setup = prepare_linear)]
-#[bench::case_1ch_64(0_usize)]
-#[bench::case_2ch_64(1_usize)]
-#[bench::case_6ch_64(2_usize)]
-#[bench::case_1ch_128(3_usize)]
-#[bench::case_2ch_128(4_usize)]
-#[bench::case_6ch_128(5_usize)]
-#[bench::case_1ch_256(6_usize)]
-#[bench::case_2ch_256(7_usize)]
-#[bench::case_6ch_256(8_usize)]
-#[bench::case_1ch_512(9_usize)]
-#[bench::case_2ch_512(10_usize)]
-#[bench::case_6ch_512(11_usize)]
-#[bench::case_1ch_1024(12_usize)]
-#[bench::case_2ch_1024(13_usize)]
-#[bench::case_6ch_1024(14_usize)]
-#[bench::case_1ch_4096(15_usize)]
-#[bench::case_2ch_4096(16_usize)]
-#[bench::case_6ch_4096(17_usize)]
-#[bench::case_2ch_7(18_usize)]
-#[bench::case_6ch_127(19_usize)]
-#[bench::case_2ch_127_tail(20_usize)]
-#[bench::case_2ch_4096_chunk128(21_usize)]
-#[bench::case_2ch_7_identity(22_usize)]
-fn native_work_2(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_1ch_64(args = (CrossfadeCase::new(NonZeroUsize::MIN, 64, 0, 64, -0.271828)))]
+#[bench::case_2ch_64(args = (CrossfadeCase::new(consts::TWO, 64, 0, 64, -0.271828)))]
+#[bench::case_6ch_64(args = (CrossfadeCase::new(consts::SIX, 64, 0, 64, -0.271828)))]
+#[bench::case_1ch_128(args = (CrossfadeCase::new(NonZeroUsize::MIN, 128, 0, 128, -0.271828)))]
+#[bench::case_2ch_128(args = (CrossfadeCase::new(consts::TWO, 128, 0, 128, -0.271828)))]
+#[bench::case_6ch_128(args = (CrossfadeCase::new(consts::SIX, 128, 0, 128, -0.271828)))]
+#[bench::case_1ch_256(args = (CrossfadeCase::new(NonZeroUsize::MIN, 256, 0, 256, -0.271828)))]
+#[bench::case_2ch_256(args = (CrossfadeCase::new(consts::TWO, 256, 0, 256, -0.271828)))]
+#[bench::case_6ch_256(args = (CrossfadeCase::new(consts::SIX, 256, 0, 256, -0.271828)))]
+#[bench::case_1ch_512(args = (CrossfadeCase::new(NonZeroUsize::MIN, 512, 0, 512, -0.271828)))]
+#[bench::case_2ch_512(args = (CrossfadeCase::new(consts::TWO, 512, 0, 512, -0.271828)))]
+#[bench::case_6ch_512(args = (CrossfadeCase::new(consts::SIX, 512, 0, 512, -0.271828)))]
+#[bench::case_1ch_1024(args = (CrossfadeCase::new(NonZeroUsize::MIN, 1024, 0, 1024, -0.271828)))]
+#[bench::case_2ch_1024(args = (CrossfadeCase::new(consts::TWO, 1024, 0, 1024, -0.271828)))]
+#[bench::case_6ch_1024(args = (CrossfadeCase::new(consts::SIX, 1024, 0, 1024, -0.271828)))]
+#[bench::case_1ch_4096(args = (CrossfadeCase::new(NonZeroUsize::MIN, 4096, 0, 4096, -0.271828)))]
+#[bench::case_2ch_4096(args = (CrossfadeCase::new(consts::TWO, 4096, 0, 4096, -0.271828)))]
+#[bench::case_6ch_4096(args = (CrossfadeCase::new(consts::SIX, 4096, 0, 4096, -0.271828)))]
+#[bench::case_2ch_7(args = (CrossfadeCase::new(consts::TWO, 7, 0, 7, -0.271828)))]
+#[bench::case_6ch_127(args = (CrossfadeCase::new(consts::SIX, 127, 0, 127, -0.271828)))]
+#[bench::case_2ch_127_tail(args = (CrossfadeCase::new(consts::TWO, 127, 1, 127, -0.271828)))]
+#[bench::case_2ch_4096_chunk128(args = (CrossfadeCase::new(consts::TWO, 4096, 0, 128, -0.271828)))]
+#[bench::case_2ch_7_identity(args = (CrossfadeCase::new(consts::TWO, 7, 0, 7, 0.314159)))]
+fn native_crossfade_linear(mut prepared: CrossfadePrepared) -> CrossfadePrepared {
+    std::hint::black_box(apply_crossfade(
+        std::hint::black_box(&prepared.old),
+        std::hint::black_box(&mut prepared.output),
+        prepared.channels,
+        prepared.frames,
+        prepared.chunk,
+        kithara_dsp::crossfade_linear,
+    ));
+    prepared
 }
 
-fn prepare_linear(index: usize) -> NativeWork {
-    prepare_crossfade(index, kithara_dsp::crossfade_linear)
+fn prepare_previous(case: CrossfadeCase) -> CrossfadePrepared {
+    prepare_crossfade(case, previous_audio_crossfade)
 }
 
 #[metabench::benchmark(KERNEL_CROSSFADE_PREVIOUS, "crossfade_previous_audio", "case", gungraun_setup = prepare_previous)]
-#[bench::case_1ch_64(0_usize)]
-#[bench::case_2ch_64(1_usize)]
-#[bench::case_6ch_64(2_usize)]
-#[bench::case_1ch_128(3_usize)]
-#[bench::case_2ch_128(4_usize)]
-#[bench::case_6ch_128(5_usize)]
-#[bench::case_1ch_256(6_usize)]
-#[bench::case_2ch_256(7_usize)]
-#[bench::case_6ch_256(8_usize)]
-#[bench::case_1ch_512(9_usize)]
-#[bench::case_2ch_512(10_usize)]
-#[bench::case_6ch_512(11_usize)]
-#[bench::case_1ch_1024(12_usize)]
-#[bench::case_2ch_1024(13_usize)]
-#[bench::case_6ch_1024(14_usize)]
-#[bench::case_1ch_4096(15_usize)]
-#[bench::case_2ch_4096(16_usize)]
-#[bench::case_6ch_4096(17_usize)]
-#[bench::case_2ch_7(18_usize)]
-#[bench::case_6ch_127(19_usize)]
-#[bench::case_2ch_127_tail(20_usize)]
-#[bench::case_2ch_4096_chunk128(21_usize)]
-#[bench::case_2ch_7_identity(22_usize)]
-fn native_work_3(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_1ch_64(args = (CrossfadeCase::new(NonZeroUsize::MIN, 64, 0, 64, -0.271828)))]
+#[bench::case_2ch_64(args = (CrossfadeCase::new(consts::TWO, 64, 0, 64, -0.271828)))]
+#[bench::case_6ch_64(args = (CrossfadeCase::new(consts::SIX, 64, 0, 64, -0.271828)))]
+#[bench::case_1ch_128(args = (CrossfadeCase::new(NonZeroUsize::MIN, 128, 0, 128, -0.271828)))]
+#[bench::case_2ch_128(args = (CrossfadeCase::new(consts::TWO, 128, 0, 128, -0.271828)))]
+#[bench::case_6ch_128(args = (CrossfadeCase::new(consts::SIX, 128, 0, 128, -0.271828)))]
+#[bench::case_1ch_256(args = (CrossfadeCase::new(NonZeroUsize::MIN, 256, 0, 256, -0.271828)))]
+#[bench::case_2ch_256(args = (CrossfadeCase::new(consts::TWO, 256, 0, 256, -0.271828)))]
+#[bench::case_6ch_256(args = (CrossfadeCase::new(consts::SIX, 256, 0, 256, -0.271828)))]
+#[bench::case_1ch_512(args = (CrossfadeCase::new(NonZeroUsize::MIN, 512, 0, 512, -0.271828)))]
+#[bench::case_2ch_512(args = (CrossfadeCase::new(consts::TWO, 512, 0, 512, -0.271828)))]
+#[bench::case_6ch_512(args = (CrossfadeCase::new(consts::SIX, 512, 0, 512, -0.271828)))]
+#[bench::case_1ch_1024(args = (CrossfadeCase::new(NonZeroUsize::MIN, 1024, 0, 1024, -0.271828)))]
+#[bench::case_2ch_1024(args = (CrossfadeCase::new(consts::TWO, 1024, 0, 1024, -0.271828)))]
+#[bench::case_6ch_1024(args = (CrossfadeCase::new(consts::SIX, 1024, 0, 1024, -0.271828)))]
+#[bench::case_1ch_4096(args = (CrossfadeCase::new(NonZeroUsize::MIN, 4096, 0, 4096, -0.271828)))]
+#[bench::case_2ch_4096(args = (CrossfadeCase::new(consts::TWO, 4096, 0, 4096, -0.271828)))]
+#[bench::case_6ch_4096(args = (CrossfadeCase::new(consts::SIX, 4096, 0, 4096, -0.271828)))]
+#[bench::case_2ch_7(args = (CrossfadeCase::new(consts::TWO, 7, 0, 7, -0.271828)))]
+#[bench::case_6ch_127(args = (CrossfadeCase::new(consts::SIX, 127, 0, 127, -0.271828)))]
+#[bench::case_2ch_127_tail(args = (CrossfadeCase::new(consts::TWO, 127, 1, 127, -0.271828)))]
+#[bench::case_2ch_4096_chunk128(args = (CrossfadeCase::new(consts::TWO, 4096, 0, 128, -0.271828)))]
+#[bench::case_2ch_7_identity(args = (CrossfadeCase::new(consts::TWO, 7, 0, 7, 0.314159)))]
+fn native_crossfade_previous(mut prepared: CrossfadePrepared) -> CrossfadePrepared {
+    std::hint::black_box(apply_crossfade(
+        std::hint::black_box(&prepared.old),
+        std::hint::black_box(&mut prepared.output),
+        prepared.channels,
+        prepared.frames,
+        prepared.chunk,
+        previous_audio_crossfade,
+    ));
+    prepared
 }
 
-fn prepare_previous(index: usize) -> NativeWork {
-    prepare_crossfade(index, previous_audio_crossfade)
+#[derive(Clone, Copy)]
+enum LayoutOperation {
+    FiInterleave,
+    FiDeinterleave,
+    Interleave,
+    Deinterleave,
+    Sanitize,
 }
 
-fn prepare_layout(index: usize) -> NativeWork {
-    if index >= 48 {
-        let frames = consts::SIZES[index - 48];
-        let mut noisy = vec![f32::from_bits(1); frames];
-        return NativeWork::new(move || kithara_dsp::sanitize(std::hint::black_box(&mut noisy)));
-    }
-    let frames = consts::SIZES[index / 8];
-    let channels = [consts::TWO, consts::SIX][index % 8 / 4];
-    let operation = index % 4;
+struct LayoutPrepared {
+    frames: usize,
+    channels: NonZeroUsize,
+    operation: LayoutOperation,
+    planes: Vec<Vec<f32>>,
+    planar: Vec<f32>,
+    stride: NonZeroUsize,
+    restored: Vec<Vec<f32>>,
+    interleaved: Vec<f32>,
+    noisy: Vec<f32>,
+}
+
+fn prepare_layout(
+    frames: usize,
+    channels: NonZeroUsize,
+    operation: LayoutOperation,
+) -> LayoutPrepared {
     let planes = vec![vec![0.25_f32; frames]; consts::SIX.get()];
-    let planar = planes.concat();
-    let stride = NonZeroUsize::new(frames).expect("stride");
-    let mut restored = planes.clone();
-    let mut interleaved = vec![0.0_f32; channels.get() * frames];
-    NativeWork::new(move || {
-        match operation {
-            0 => fast_interleave::interleave_variable(
-                std::hint::black_box(&planes[..channels.get()]), 0..frames, &mut interleaved, channels),
-            1 => fast_interleave::deinterleave_variable(
-                std::hint::black_box(&interleaved), channels, &mut restored, 0..frames),
-            2 => kithara_dsp::interleave_channel_major(
-                std::hint::black_box(&planar[..channels.get() * frames]), stride, 0..frames, &mut interleaved, channels),
-            _ => kithara_dsp::deinterleave_variable(
-                std::hint::black_box(&interleaved), channels, &mut restored, 0..frames),
-        }
-    })
+    LayoutPrepared {
+        frames,
+        channels,
+        operation,
+        planar: planes.concat(),
+        stride: NonZeroUsize::new(frames).expect("stride"),
+        restored: planes.clone(),
+        interleaved: vec![0.0_f32; channels.get() * frames],
+        noisy: vec![f32::from_bits(1); frames],
+        planes,
+    }
 }
 
 #[metabench::benchmark(KERNEL_LAYOUT, "layout", "case", gungraun_setup = prepare_layout)]
-#[bench::case_fi_interleave_2ch_64(0_usize)]
-#[bench::case_fi_deinterleave_2ch_64(1_usize)]
-#[bench::case_interleave_2ch_64(2_usize)]
-#[bench::case_deinterleave_2ch_64(3_usize)]
-#[bench::case_fi_interleave_6ch_64(4_usize)]
-#[bench::case_fi_deinterleave_6ch_64(5_usize)]
-#[bench::case_interleave_6ch_64(6_usize)]
-#[bench::case_deinterleave_6ch_64(7_usize)]
-#[bench::case_sanitize_64(8_usize)]
-#[bench::case_fi_interleave_2ch_128(9_usize)]
-#[bench::case_fi_deinterleave_2ch_128(10_usize)]
-#[bench::case_interleave_2ch_128(11_usize)]
-#[bench::case_deinterleave_2ch_128(12_usize)]
-#[bench::case_fi_interleave_6ch_128(13_usize)]
-#[bench::case_fi_deinterleave_6ch_128(14_usize)]
-#[bench::case_interleave_6ch_128(15_usize)]
-#[bench::case_deinterleave_6ch_128(16_usize)]
-#[bench::case_sanitize_128(17_usize)]
-#[bench::case_fi_interleave_2ch_256(18_usize)]
-#[bench::case_fi_deinterleave_2ch_256(19_usize)]
-#[bench::case_interleave_2ch_256(20_usize)]
-#[bench::case_deinterleave_2ch_256(21_usize)]
-#[bench::case_fi_interleave_6ch_256(22_usize)]
-#[bench::case_fi_deinterleave_6ch_256(23_usize)]
-#[bench::case_interleave_6ch_256(24_usize)]
-#[bench::case_deinterleave_6ch_256(25_usize)]
-#[bench::case_sanitize_256(26_usize)]
-#[bench::case_fi_interleave_2ch_512(27_usize)]
-#[bench::case_fi_deinterleave_2ch_512(28_usize)]
-#[bench::case_interleave_2ch_512(29_usize)]
-#[bench::case_deinterleave_2ch_512(30_usize)]
-#[bench::case_fi_interleave_6ch_512(31_usize)]
-#[bench::case_fi_deinterleave_6ch_512(32_usize)]
-#[bench::case_interleave_6ch_512(33_usize)]
-#[bench::case_deinterleave_6ch_512(34_usize)]
-#[bench::case_sanitize_512(35_usize)]
-#[bench::case_fi_interleave_2ch_1024(36_usize)]
-#[bench::case_fi_deinterleave_2ch_1024(37_usize)]
-#[bench::case_interleave_2ch_1024(38_usize)]
-#[bench::case_deinterleave_2ch_1024(39_usize)]
-#[bench::case_fi_interleave_6ch_1024(40_usize)]
-#[bench::case_fi_deinterleave_6ch_1024(41_usize)]
-#[bench::case_interleave_6ch_1024(42_usize)]
-#[bench::case_deinterleave_6ch_1024(43_usize)]
-#[bench::case_sanitize_1024(44_usize)]
-#[bench::case_fi_interleave_2ch_4096(45_usize)]
-#[bench::case_fi_deinterleave_2ch_4096(46_usize)]
-#[bench::case_interleave_2ch_4096(47_usize)]
-#[bench::case_deinterleave_2ch_4096(48_usize)]
-#[bench::case_fi_interleave_6ch_4096(49_usize)]
-#[bench::case_fi_deinterleave_6ch_4096(50_usize)]
-#[bench::case_interleave_6ch_4096(51_usize)]
-#[bench::case_deinterleave_6ch_4096(52_usize)]
-#[bench::case_sanitize_4096(53_usize)]
-fn native_work_4(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_fi_interleave_2ch_64(args = (64_usize, consts::TWO, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_2ch_64(args = (64_usize, consts::TWO, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_2ch_64(args = (64_usize, consts::TWO, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_2ch_64(args = (64_usize, consts::TWO, LayoutOperation::Deinterleave))]
+#[bench::case_fi_interleave_6ch_64(args = (64_usize, consts::SIX, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_6ch_64(args = (64_usize, consts::SIX, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_6ch_64(args = (64_usize, consts::SIX, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_6ch_64(args = (64_usize, consts::SIX, LayoutOperation::Deinterleave))]
+#[bench::case_sanitize_64(args = (64_usize, consts::TWO, LayoutOperation::Sanitize))]
+#[bench::case_fi_interleave_2ch_128(args = (128_usize, consts::TWO, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_2ch_128(args = (128_usize, consts::TWO, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_2ch_128(args = (128_usize, consts::TWO, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_2ch_128(args = (128_usize, consts::TWO, LayoutOperation::Deinterleave))]
+#[bench::case_fi_interleave_6ch_128(args = (128_usize, consts::SIX, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_6ch_128(args = (128_usize, consts::SIX, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_6ch_128(args = (128_usize, consts::SIX, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_6ch_128(args = (128_usize, consts::SIX, LayoutOperation::Deinterleave))]
+#[bench::case_sanitize_128(args = (128_usize, consts::TWO, LayoutOperation::Sanitize))]
+#[bench::case_fi_interleave_2ch_256(args = (256_usize, consts::TWO, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_2ch_256(args = (256_usize, consts::TWO, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_2ch_256(args = (256_usize, consts::TWO, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_2ch_256(args = (256_usize, consts::TWO, LayoutOperation::Deinterleave))]
+#[bench::case_fi_interleave_6ch_256(args = (256_usize, consts::SIX, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_6ch_256(args = (256_usize, consts::SIX, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_6ch_256(args = (256_usize, consts::SIX, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_6ch_256(args = (256_usize, consts::SIX, LayoutOperation::Deinterleave))]
+#[bench::case_sanitize_256(args = (256_usize, consts::TWO, LayoutOperation::Sanitize))]
+#[bench::case_fi_interleave_2ch_512(args = (512_usize, consts::TWO, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_2ch_512(args = (512_usize, consts::TWO, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_2ch_512(args = (512_usize, consts::TWO, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_2ch_512(args = (512_usize, consts::TWO, LayoutOperation::Deinterleave))]
+#[bench::case_fi_interleave_6ch_512(args = (512_usize, consts::SIX, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_6ch_512(args = (512_usize, consts::SIX, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_6ch_512(args = (512_usize, consts::SIX, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_6ch_512(args = (512_usize, consts::SIX, LayoutOperation::Deinterleave))]
+#[bench::case_sanitize_512(args = (512_usize, consts::TWO, LayoutOperation::Sanitize))]
+#[bench::case_fi_interleave_2ch_1024(args = (1024_usize, consts::TWO, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_2ch_1024(args = (1024_usize, consts::TWO, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_2ch_1024(args = (1024_usize, consts::TWO, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_2ch_1024(args = (1024_usize, consts::TWO, LayoutOperation::Deinterleave))]
+#[bench::case_fi_interleave_6ch_1024(args = (1024_usize, consts::SIX, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_6ch_1024(args = (1024_usize, consts::SIX, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_6ch_1024(args = (1024_usize, consts::SIX, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_6ch_1024(args = (1024_usize, consts::SIX, LayoutOperation::Deinterleave))]
+#[bench::case_sanitize_1024(args = (1024_usize, consts::TWO, LayoutOperation::Sanitize))]
+#[bench::case_fi_interleave_2ch_4096(args = (4096_usize, consts::TWO, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_2ch_4096(args = (4096_usize, consts::TWO, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_2ch_4096(args = (4096_usize, consts::TWO, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_2ch_4096(args = (4096_usize, consts::TWO, LayoutOperation::Deinterleave))]
+#[bench::case_fi_interleave_6ch_4096(args = (4096_usize, consts::SIX, LayoutOperation::FiInterleave))]
+#[bench::case_fi_deinterleave_6ch_4096(args = (4096_usize, consts::SIX, LayoutOperation::FiDeinterleave))]
+#[bench::case_interleave_6ch_4096(args = (4096_usize, consts::SIX, LayoutOperation::Interleave))]
+#[bench::case_deinterleave_6ch_4096(args = (4096_usize, consts::SIX, LayoutOperation::Deinterleave))]
+#[bench::case_sanitize_4096(args = (4096_usize, consts::TWO, LayoutOperation::Sanitize))]
+fn native_layout(mut prepared: LayoutPrepared) -> LayoutPrepared {
+    match prepared.operation {
+        LayoutOperation::FiInterleave => fast_interleave::interleave_variable(
+            std::hint::black_box(&prepared.planes[..prepared.channels.get()]),
+            0..prepared.frames,
+            &mut prepared.interleaved,
+            prepared.channels,
+        ),
+        LayoutOperation::FiDeinterleave => fast_interleave::deinterleave_variable(
+            std::hint::black_box(&prepared.interleaved),
+            prepared.channels,
+            &mut prepared.restored,
+            0..prepared.frames,
+        ),
+        LayoutOperation::Interleave => kithara_dsp::interleave_channel_major(
+            std::hint::black_box(&prepared.planar[..prepared.channels.get() * prepared.frames]),
+            prepared.stride,
+            0..prepared.frames,
+            &mut prepared.interleaved,
+            prepared.channels,
+        ),
+        LayoutOperation::Deinterleave => kithara_dsp::deinterleave_variable(
+            std::hint::black_box(&prepared.interleaved),
+            prepared.channels,
+            &mut prepared.restored,
+            0..prepared.frames,
+        ),
+        LayoutOperation::Sanitize => kithara_dsp::sanitize(std::hint::black_box(&mut prepared.noisy)),
+    }
+    prepared
 }
 
-fn prepare_vector(size: usize) -> NativeWork {
-    let samples = tone(size);
-    NativeWork::new(move || {
-        let _ = kithara_dsp::sum_squares(std::hint::black_box(&samples));
-    })
+struct VectorPrepared {
+    samples: Vec<f32>,
+}
+
+fn prepare_vector(size: usize) -> VectorPrepared {
+    VectorPrepared { samples: tone(size) }
 }
 
 #[metabench::benchmark(KERNEL_VECTOR, "vector", "case", gungraun_setup = prepare_vector)]
-#[bench::case_sum_squares_64(0_usize)]
-#[bench::case_sum_squares_128(1_usize)]
-#[bench::case_sum_squares_256(2_usize)]
-#[bench::case_sum_squares_512(3_usize)]
-#[bench::case_sum_squares_1024(4_usize)]
-#[bench::case_sum_squares_4096(5_usize)]
-fn native_work_5(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_sum_squares_64(64_usize)]
+#[bench::case_sum_squares_128(128_usize)]
+#[bench::case_sum_squares_256(256_usize)]
+#[bench::case_sum_squares_512(512_usize)]
+#[bench::case_sum_squares_1024(1024_usize)]
+#[bench::case_sum_squares_4096(4096_usize)]
+fn native_sum_squares(prepared: VectorPrepared) -> VectorPrepared {
+    let _ = kithara_dsp::sum_squares(std::hint::black_box(&prepared.samples));
+    prepared
 }
 
-fn prepare_curve_hold(index: usize) -> NativeWork {
-    let frames = [128_usize, 512][index % 2];
-    let implementation = index / 2;
-    let positions: Vec<_> = (0..frames as u32)
+#[derive(Clone, Copy)]
+enum CurveImplementation {
+    Native,
+    Scalar,
+    Simd,
+    Entry,
+}
+
+struct CurvePrepared {
+    shape: CurveShape,
+    values: Vec<f64>,
+    implementation: CurveImplementation,
+}
+
+fn prepare_curve(
+    frames: usize,
+    shape: CurveShape,
+    implementation: CurveImplementation,
+) -> CurvePrepared {
+    let values = (0..frames as u32)
         .map(|frame| f64::from(frame) / f64::from(frames as u32 - 1))
         .collect();
-    let shape = CurveShape::HOLD;
-    let mut values = positions;
-    NativeWork::new(move || {
-        match implementation {
-            0 => shape.process(std::hint::black_box(&mut values), std::hint::black_box([0.75, 0.25])),
-            1 => scalar_curve("hold", std::hint::black_box(&mut values), std::hint::black_box([0.75, 0.25])),
-            _ => {
-                let kernel = kithara_dsp::routes::parameter_hold::routes().nth(implementation - 2).expect("curve route").1;
-                kernel(std::hint::black_box(&mut values), std::hint::black_box([0.75, 0.25]));
-            }
-        }
-    })
+    CurvePrepared {
+        shape,
+        values,
+        implementation,
+    }
+}
+
+fn prepare_curve_hold(frames: usize, implementation: CurveImplementation) -> CurvePrepared {
+    prepare_curve(frames, CurveShape::HOLD, implementation)
 }
 
 #[metabench::benchmark(KERNEL_CURVE_HOLD, "curve_hold", "case", gungraun_setup = prepare_curve_hold)]
-#[bench::case_native_128(0_usize)]
-#[bench::case_scalar_128(1_usize)]
-#[bench::case_simd_128(2_usize)]
-#[bench::case_entry_128(3_usize)]
-#[bench::case_native_512(4_usize)]
-#[bench::case_scalar_512(5_usize)]
-#[bench::case_simd_512(6_usize)]
-#[bench::case_entry_512(7_usize)]
-fn native_work_6(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_native_128(args = (128_usize, CurveImplementation::Native))]
+#[bench::case_scalar_128(args = (128_usize, CurveImplementation::Scalar))]
+#[bench::case_simd_128(args = (128_usize, CurveImplementation::Simd))]
+#[bench::case_entry_128(args = (128_usize, CurveImplementation::Entry))]
+#[bench::case_native_512(args = (512_usize, CurveImplementation::Native))]
+#[bench::case_scalar_512(args = (512_usize, CurveImplementation::Scalar))]
+#[bench::case_simd_512(args = (512_usize, CurveImplementation::Simd))]
+#[bench::case_entry_512(args = (512_usize, CurveImplementation::Entry))]
+fn native_curve_hold(mut prepared: CurvePrepared) -> CurvePrepared {
+    match prepared.implementation {
+        CurveImplementation::Native => prepared.shape.process(
+            std::hint::black_box(&mut prepared.values),
+            std::hint::black_box([0.75, 0.25]),
+        ),
+        CurveImplementation::Scalar => scalar_curve(
+            "hold",
+            std::hint::black_box(&mut prepared.values),
+            std::hint::black_box([0.75, 0.25]),
+        ),
+        CurveImplementation::Simd => {
+            let kernel = kithara_dsp::routes::parameter_hold::routes()
+                .next()
+                .expect("curve route")
+                .1;
+            kernel(
+                std::hint::black_box(&mut prepared.values),
+                std::hint::black_box([0.75, 0.25]),
+            );
+        }
+        CurveImplementation::Entry => {
+            let kernel = kithara_dsp::routes::parameter_hold::routes()
+                .nth(1)
+                .expect("curve route")
+                .1;
+            kernel(
+                std::hint::black_box(&mut prepared.values),
+                std::hint::black_box([0.75, 0.25]),
+            );
+        }
+    }
+    prepared
 }
 
-fn prepare_curve_linear(index: usize) -> NativeWork {
-    let frames = [128_usize, 512][index % 2];
-    let implementation = index / 2;
-    let positions: Vec<_> = (0..frames as u32)
-        .map(|frame| f64::from(frame) / f64::from(frames as u32 - 1))
-        .collect();
-    let shape = CurveShape::LINEAR;
-    let mut values = positions;
-    NativeWork::new(move || {
-        match implementation {
-            0 => shape.process(std::hint::black_box(&mut values), std::hint::black_box([0.75, 0.25])),
-            1 => scalar_curve("linear", std::hint::black_box(&mut values), std::hint::black_box([0.75, 0.25])),
-            _ => {
-                let kernel = kithara_dsp::routes::parameter_linear::routes().nth(implementation - 2).expect("curve route").1;
-                kernel(std::hint::black_box(&mut values), std::hint::black_box([0.75, 0.25]));
-            }
-        }
-    })
+fn prepare_curve_linear(frames: usize, implementation: CurveImplementation) -> CurvePrepared {
+    prepare_curve(frames, CurveShape::LINEAR, implementation)
 }
 
 #[metabench::benchmark(KERNEL_CURVE_LINEAR, "curve_linear", "case", gungraun_setup = prepare_curve_linear)]
-#[bench::case_native_128(0_usize)]
-#[bench::case_scalar_128(1_usize)]
-#[bench::case_simd_128(2_usize)]
-#[bench::case_entry_128(3_usize)]
-#[bench::case_native_512(4_usize)]
-#[bench::case_scalar_512(5_usize)]
-#[bench::case_simd_512(6_usize)]
-#[bench::case_entry_512(7_usize)]
-fn native_work_7(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_native_128(args = (128_usize, CurveImplementation::Native))]
+#[bench::case_scalar_128(args = (128_usize, CurveImplementation::Scalar))]
+#[bench::case_simd_128(args = (128_usize, CurveImplementation::Simd))]
+#[bench::case_entry_128(args = (128_usize, CurveImplementation::Entry))]
+#[bench::case_native_512(args = (512_usize, CurveImplementation::Native))]
+#[bench::case_scalar_512(args = (512_usize, CurveImplementation::Scalar))]
+#[bench::case_simd_512(args = (512_usize, CurveImplementation::Simd))]
+#[bench::case_entry_512(args = (512_usize, CurveImplementation::Entry))]
+fn native_curve_linear(mut prepared: CurvePrepared) -> CurvePrepared {
+    match prepared.implementation {
+        CurveImplementation::Native => prepared.shape.process(
+            std::hint::black_box(&mut prepared.values),
+            std::hint::black_box([0.75, 0.25]),
+        ),
+        CurveImplementation::Scalar => scalar_curve(
+            "linear",
+            std::hint::black_box(&mut prepared.values),
+            std::hint::black_box([0.75, 0.25]),
+        ),
+        CurveImplementation::Simd => {
+            let kernel = kithara_dsp::routes::parameter_linear::routes()
+                .next()
+                .expect("curve route")
+                .1;
+            kernel(
+                std::hint::black_box(&mut prepared.values),
+                std::hint::black_box([0.75, 0.25]),
+            );
+        }
+        CurveImplementation::Entry => {
+            let kernel = kithara_dsp::routes::parameter_linear::routes()
+                .nth(1)
+                .expect("curve route")
+                .1;
+            kernel(
+                std::hint::black_box(&mut prepared.values),
+                std::hint::black_box([0.75, 0.25]),
+            );
+        }
+    }
+    prepared
 }
 
-fn prepare_curve_cubic(index: usize) -> NativeWork {
-    let frames = [128_usize, 512][index % 2];
-    let implementation = index / 2;
-    let positions: Vec<_> = (0..frames as u32)
-        .map(|frame| f64::from(frame) / f64::from(frames as u32 - 1))
-        .collect();
-    let shape = CurveShape::cubic(0.2, 0.6).expect("ordered handles");
-    let mut values = positions;
-    NativeWork::new(move || {
-        match implementation {
-            0 => shape.process(std::hint::black_box(&mut values), std::hint::black_box([0.75, 0.25])),
-            1 => scalar_curve("cubic", std::hint::black_box(&mut values), std::hint::black_box([0.75, 0.25])),
-            _ => unreachable!("cubic has no routed form"),
-        }
-    })
+fn prepare_curve_cubic(frames: usize, implementation: CurveImplementation) -> CurvePrepared {
+    prepare_curve(
+        frames,
+        CurveShape::cubic(0.2, 0.6).expect("ordered handles"),
+        implementation,
+    )
 }
 
 #[metabench::benchmark(KERNEL_CURVE_CUBIC, "curve_cubic", "case", gungraun_setup = prepare_curve_cubic)]
-#[bench::case_native_128(0_usize)]
-#[bench::case_scalar_128(1_usize)]
-#[bench::case_native_512(2_usize)]
-#[bench::case_scalar_512(3_usize)]
-fn native_work_8(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_native_128(args = (128_usize, CurveImplementation::Native))]
+#[bench::case_scalar_128(args = (128_usize, CurveImplementation::Scalar))]
+#[bench::case_native_512(args = (512_usize, CurveImplementation::Native))]
+#[bench::case_scalar_512(args = (512_usize, CurveImplementation::Scalar))]
+fn native_curve_cubic(mut prepared: CurvePrepared) -> CurvePrepared {
+    match prepared.implementation {
+        CurveImplementation::Native => prepared.shape.process(
+            std::hint::black_box(&mut prepared.values),
+            std::hint::black_box([0.75, 0.25]),
+        ),
+        CurveImplementation::Scalar => scalar_curve(
+            "cubic",
+            std::hint::black_box(&mut prepared.values),
+            std::hint::black_box([0.75, 0.25]),
+        ),
+        _ => unreachable!("cubic has no routed form"),
+    }
+    prepared
 }
 
-fn prepare_ratio_ramp(index: usize) -> NativeWork {
-    let implementation = index / 2;
+#[derive(Clone, Copy)]
+enum RatioImplementation {
+    Simd,
+    Scalar,
+    Entry,
+    Native,
+}
+
+struct RatioRampPrepared {
+    output: Vec<f64>,
+    kernel: kithara_dsp::routes::ratio_ramp::Kernel,
+}
+
+fn prepare_ratio_ramp(
+    frames: usize,
+    implementation: RatioImplementation,
+) -> RatioRampPrepared {
     let native: kithara_dsp::routes::ratio_ramp::Kernel = kithara_dsp::ratio_ramp;
-    let kernel = kithara_dsp::routes::ratio_ramp::routes()
-        .chain([("native", native)])
-        .nth(implementation)
-        .expect("ratio route")
-        .1;
-    let mut output = vec![0.0; [128_usize, 512][index % 2]];
-    NativeWork::new(move || {
-        kernel(
-            std::hint::black_box(&mut output),
-            std::hint::black_box((1_u64 << 25) + 3),
-            std::hint::black_box(NonZeroU64::new(997).expect("positive")),
-        );
-    })
+    let kernel = match implementation {
+        RatioImplementation::Simd => kithara_dsp::routes::ratio_ramp::routes()
+            .next()
+            .expect("ratio route")
+            .1,
+        RatioImplementation::Scalar => kithara_dsp::routes::ratio_ramp::routes()
+            .nth(1)
+            .expect("ratio route")
+            .1,
+        RatioImplementation::Entry => kithara_dsp::routes::ratio_ramp::routes()
+            .nth(2)
+            .expect("ratio route")
+            .1,
+        RatioImplementation::Native => native,
+    };
+    RatioRampPrepared {
+        output: vec![0.0; frames],
+        kernel,
+    }
 }
 
 #[metabench::benchmark(KERNEL_RATIO_RAMP, "ratio_ramp", "case", gungraun_setup = prepare_ratio_ramp)]
-#[bench::case_simd_128(0_usize)]
-#[bench::case_scalar_128(1_usize)]
-#[bench::case_entry_128(2_usize)]
-#[bench::case_native_128(3_usize)]
-#[bench::case_simd_512(4_usize)]
-#[bench::case_scalar_512(5_usize)]
-#[bench::case_entry_512(6_usize)]
-#[bench::case_native_512(7_usize)]
-fn native_work_9(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_simd_128(args = (128_usize, RatioImplementation::Simd))]
+#[bench::case_scalar_128(args = (128_usize, RatioImplementation::Scalar))]
+#[bench::case_entry_128(args = (128_usize, RatioImplementation::Entry))]
+#[bench::case_native_128(args = (128_usize, RatioImplementation::Native))]
+#[bench::case_simd_512(args = (512_usize, RatioImplementation::Simd))]
+#[bench::case_scalar_512(args = (512_usize, RatioImplementation::Scalar))]
+#[bench::case_entry_512(args = (512_usize, RatioImplementation::Entry))]
+#[bench::case_native_512(args = (512_usize, RatioImplementation::Native))]
+fn native_ratio_ramp(mut prepared: RatioRampPrepared) -> RatioRampPrepared {
+    (prepared.kernel)(
+        std::hint::black_box(&mut prepared.output),
+        std::hint::black_box((1_u64 << 25) + 3),
+        std::hint::black_box(NonZeroU64::new(997).expect("positive")),
+    );
+    prepared
 }
 
-fn prepare_narrow(index: usize) -> NativeWork {
-    let frames = [128_usize, 512][index % 2];
-    let native = index < 2;
-    let input: Vec<_> = tone(frames).into_iter().map(f64::from).collect();
-    let mut output = vec![0.0; frames];
-    NativeWork::new(move || {
-        if native {
-            kithara_dsp::narrow_f64(&input, &mut output);
-        } else {
-            for (value, input) in output.iter_mut().zip(&input) {
-                *value = input.as_();
-            }
-        }
-    })
+#[derive(Clone, Copy)]
+enum NativeOrScalar {
+    Native,
+    Scalar,
+}
+
+struct NarrowPrepared {
+    input: Vec<f64>,
+    output: Vec<f32>,
+    implementation: NativeOrScalar,
+}
+
+fn prepare_narrow(frames: usize, implementation: NativeOrScalar) -> NarrowPrepared {
+    NarrowPrepared {
+        input: tone(frames).into_iter().map(f64::from).collect(),
+        output: vec![0.0; frames],
+        implementation,
+    }
 }
 
 #[metabench::benchmark(KERNEL_NARROW, "narrow_f64", "case", gungraun_setup = prepare_narrow)]
-#[bench::case_native_128(0_usize)]
-#[bench::case_scalar_128(1_usize)]
-#[bench::case_native_512(2_usize)]
-#[bench::case_scalar_512(3_usize)]
-fn native_work_10(work: NativeWork) -> NativeWork {
-    work.run()
-}
-
-fn prepare_multiply_squared(index: usize) -> NativeWork {
-    let frames = [128_usize, 512][index % 2];
-    let native = index < 2;
-    let mut output = tone(frames);
-    let square = vec![0.7; frames];
-    let gains = vec![0.3; frames];
-    NativeWork::new(move || {
-        if native {
-            kithara_dsp::multiply_squared_in_place(&mut output, &square, &gains);
-        } else {
-            for ((value, square), gain) in output.iter_mut().zip(&square).zip(&gains) {
-                *value = (*value * (square * square)) * gain;
+#[bench::case_native_128(args = (128_usize, NativeOrScalar::Native))]
+#[bench::case_scalar_128(args = (128_usize, NativeOrScalar::Scalar))]
+#[bench::case_native_512(args = (512_usize, NativeOrScalar::Native))]
+#[bench::case_scalar_512(args = (512_usize, NativeOrScalar::Scalar))]
+fn native_narrow_f64(mut prepared: NarrowPrepared) -> NarrowPrepared {
+    match prepared.implementation {
+        NativeOrScalar::Native => {
+            kithara_dsp::narrow_f64(&prepared.input, &mut prepared.output);
+        }
+        NativeOrScalar::Scalar => {
+            for (value, input) in prepared.output.iter_mut().zip(&prepared.input) {
+                *value = input.as_();
             }
         }
-    })
+    }
+    prepared
+}
+
+struct MultiplySquaredPrepared {
+    output: Vec<f32>,
+    square: Vec<f32>,
+    gains: Vec<f32>,
+    implementation: NativeOrScalar,
+}
+
+fn prepare_multiply_squared(
+    frames: usize, implementation: NativeOrScalar,
+) -> MultiplySquaredPrepared {
+    MultiplySquaredPrepared {
+        output: tone(frames),
+        square: vec![0.7; frames],
+        gains: vec![0.3; frames],
+        implementation,
+    }
 }
 
 #[metabench::benchmark(KERNEL_MULTIPLY_SQUARED, "multiply_squared_in_place", "case", gungraun_setup = prepare_multiply_squared)]
-#[bench::case_native_128(0_usize)]
-#[bench::case_scalar_128(1_usize)]
-#[bench::case_native_512(2_usize)]
-#[bench::case_scalar_512(3_usize)]
-fn native_work_11(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_native_128(args = (128_usize, NativeOrScalar::Native))]
+#[bench::case_scalar_128(args = (128_usize, NativeOrScalar::Scalar))]
+#[bench::case_native_512(args = (512_usize, NativeOrScalar::Native))]
+#[bench::case_scalar_512(args = (512_usize, NativeOrScalar::Scalar))]
+fn native_multiply_squared(mut prepared: MultiplySquaredPrepared) -> MultiplySquaredPrepared {
+    match prepared.implementation {
+        NativeOrScalar::Native => {
+            kithara_dsp::multiply_squared_in_place(
+                &mut prepared.output,
+                &prepared.square,
+                &prepared.gains,
+            );
+        }
+        NativeOrScalar::Scalar => {
+            for ((value, square), gain) in prepared
+                .output
+                .iter_mut()
+                .zip(&prepared.square)
+                .zip(&prepared.gains)
+            {
+                *value = (*value * (square * square)) * gain;
+            }
+        }
+    }
+    prepared
 }
 
-fn prepare_ramp(index: usize) -> NativeWork {
-    let frames = [128_usize, 512][index % 2];
-    let kernel = kithara_dsp::routes::ramp::routes().nth(index / 2).expect("route").1;
+#[derive(Clone, Copy)]
+enum RouteImplementation {
+    Simd,
+    Entry,
+}
+
+struct RampPrepared {
+    input: Vec<f32>,
+    output: Vec<f32>,
+    kernel: kithara_dsp::routes::ramp::Kernel,
+}
+
+fn prepare_ramp(frames: usize, implementation: RouteImplementation) -> RampPrepared {
+    let route = match implementation {
+        RouteImplementation::Simd => 0,
+        RouteImplementation::Entry => 1,
+    };
     let input = tone(frames);
-    let mut output = if "ramp" == "mul_add" { vec![0.25; frames] } else { input.clone() };
-    NativeWork::new(move || {
-        kernel(std::hint::black_box(&mut output), std::hint::black_box(0.25), std::hint::black_box(0.001));
-        std::hint::black_box(&input);
-    })
+    RampPrepared {
+        output: input.clone(),
+        input,
+        kernel: kithara_dsp::routes::ramp::routes()
+            .nth(route)
+            .expect("route")
+            .1,
+    }
 }
 
 #[metabench::benchmark(KERNEL_RAMP, "ramp", "case", gungraun_setup = prepare_ramp)]
-#[bench::case_simd_128(0_usize)]
-#[bench::case_entry_128(1_usize)]
-#[bench::case_simd_512(2_usize)]
-#[bench::case_entry_512(3_usize)]
-fn native_work_12(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_simd_128(args = (128_usize, RouteImplementation::Simd))]
+#[bench::case_entry_128(args = (128_usize, RouteImplementation::Entry))]
+#[bench::case_simd_512(args = (512_usize, RouteImplementation::Simd))]
+#[bench::case_entry_512(args = (512_usize, RouteImplementation::Entry))]
+fn native_ramp(mut prepared: RampPrepared) -> RampPrepared {
+    (prepared.kernel)(
+        std::hint::black_box(&mut prepared.output),
+        std::hint::black_box(0.25),
+        std::hint::black_box(0.001),
+    );
+    std::hint::black_box(&prepared.input);
+    prepared
 }
 
-fn prepare_div(index: usize) -> NativeWork {
-    let frames = [128_usize, 512][index % 2];
-    let kernel = kithara_dsp::routes::div::routes().nth(index / 2).expect("route").1;
+struct DivPrepared {
+    input: Vec<f32>,
+    output: Vec<f32>,
+    kernel: kithara_dsp::routes::div::Kernel,
+}
+
+fn prepare_div(frames: usize, implementation: RouteImplementation) -> DivPrepared {
+    let route = match implementation {
+        RouteImplementation::Simd => 0,
+        RouteImplementation::Entry => 1,
+    };
     let input = tone(frames);
-    let mut output = if "div" == "mul_add" { vec![0.25; frames] } else { input.clone() };
-    NativeWork::new(move || {
-        kernel(std::hint::black_box(&mut output), std::hint::black_box(1.25));
-        std::hint::black_box(&input);
-    })
+    DivPrepared {
+        output: input.clone(),
+        input,
+        kernel: kithara_dsp::routes::div::routes()
+            .nth(route)
+            .expect("route")
+            .1,
+    }
 }
 
 #[metabench::benchmark(KERNEL_DIV, "div", "case", gungraun_setup = prepare_div)]
-#[bench::case_simd_128(0_usize)]
-#[bench::case_entry_128(1_usize)]
-#[bench::case_simd_512(2_usize)]
-#[bench::case_entry_512(3_usize)]
-fn native_work_13(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_simd_128(args = (128_usize, RouteImplementation::Simd))]
+#[bench::case_entry_128(args = (128_usize, RouteImplementation::Entry))]
+#[bench::case_simd_512(args = (512_usize, RouteImplementation::Simd))]
+#[bench::case_entry_512(args = (512_usize, RouteImplementation::Entry))]
+fn native_div(mut prepared: DivPrepared) -> DivPrepared {
+    (prepared.kernel)(
+        std::hint::black_box(&mut prepared.output),
+        std::hint::black_box(1.25),
+    );
+    std::hint::black_box(&prepared.input);
+    prepared
 }
 
-fn prepare_mul_add(index: usize) -> NativeWork {
-    let frames = [128_usize, 512][index % 2];
-    let kernel = kithara_dsp::routes::mul_add::routes().nth(index / 2).expect("route").1;
+struct MulAddPrepared {
+    input: Vec<f32>,
+    output: Vec<f32>,
+    kernel: kithara_dsp::routes::mul_add::Kernel,
+}
+
+fn prepare_mul_add(frames: usize, implementation: RouteImplementation) -> MulAddPrepared {
+    let route = match implementation {
+        RouteImplementation::Simd => 0,
+        RouteImplementation::Entry => 1,
+    };
     let input = tone(frames);
-    let mut output = if "mul_add" == "mul_add" { vec![0.25; frames] } else { input.clone() };
-    NativeWork::new(move || {
-        kernel(std::hint::black_box(&input), std::hint::black_box(&input), std::hint::black_box(&mut output));
-        std::hint::black_box(&input);
-    })
+    MulAddPrepared {
+        output: vec![0.25; frames],
+        input,
+        kernel: kithara_dsp::routes::mul_add::routes()
+            .nth(route)
+            .expect("route")
+            .1,
+    }
 }
 
 #[metabench::benchmark(KERNEL_MUL_ADD, "mul_add", "case", gungraun_setup = prepare_mul_add)]
-#[bench::case_simd_128(0_usize)]
-#[bench::case_entry_128(1_usize)]
-#[bench::case_simd_512(2_usize)]
-#[bench::case_entry_512(3_usize)]
-fn native_work_14(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_simd_128(args = (128_usize, RouteImplementation::Simd))]
+#[bench::case_entry_128(args = (128_usize, RouteImplementation::Entry))]
+#[bench::case_simd_512(args = (512_usize, RouteImplementation::Simd))]
+#[bench::case_entry_512(args = (512_usize, RouteImplementation::Entry))]
+fn native_mul_add(mut prepared: MulAddPrepared) -> MulAddPrepared {
+    (prepared.kernel)(
+        std::hint::black_box(&prepared.input),
+        std::hint::black_box(&prepared.input),
+        std::hint::black_box(&mut prepared.output),
+    );
+    std::hint::black_box(&prepared.input);
+    prepared
 }
 
-fn prepare_downmix(index: usize) -> NativeWork {
-    let frames = consts::SIZES[index / 2];
-    let channels = [consts::TWO, consts::SIX][index % 2];
-    let interleaved = tone(channels.get() * frames);
-    let mut mono = vec![0.0_f32; frames];
-    NativeWork::new(move || {
-        let _ = kithara_dsp::downmix(std::hint::black_box(&interleaved), channels, &mut mono);
-    })
+struct DownmixPrepared {
+    interleaved: Vec<f32>,
+    mono: Vec<f32>,
+    channels: NonZeroUsize,
+}
+
+fn prepare_downmix(frames: usize, channels: NonZeroUsize) -> DownmixPrepared {
+    DownmixPrepared {
+        interleaved: tone(channels.get() * frames),
+        mono: vec![0.0_f32; frames],
+        channels,
+    }
 }
 
 #[metabench::benchmark(KERNEL_DOWNMIX, "downmix", "case", gungraun_setup = prepare_downmix)]
-#[bench::case_2ch_64(0_usize)]
-#[bench::case_6ch_64(1_usize)]
-#[bench::case_2ch_128(2_usize)]
-#[bench::case_6ch_128(3_usize)]
-#[bench::case_2ch_256(4_usize)]
-#[bench::case_6ch_256(5_usize)]
-#[bench::case_2ch_512(6_usize)]
-#[bench::case_6ch_512(7_usize)]
-#[bench::case_2ch_1024(8_usize)]
-#[bench::case_6ch_1024(9_usize)]
-#[bench::case_2ch_4096(10_usize)]
-#[bench::case_6ch_4096(11_usize)]
-fn native_work_15(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_2ch_64(args = (64_usize, consts::TWO))]
+#[bench::case_6ch_64(args = (64_usize, consts::SIX))]
+#[bench::case_2ch_128(args = (128_usize, consts::TWO))]
+#[bench::case_6ch_128(args = (128_usize, consts::SIX))]
+#[bench::case_2ch_256(args = (256_usize, consts::TWO))]
+#[bench::case_6ch_256(args = (256_usize, consts::SIX))]
+#[bench::case_2ch_512(args = (512_usize, consts::TWO))]
+#[bench::case_6ch_512(args = (512_usize, consts::SIX))]
+#[bench::case_2ch_1024(args = (1024_usize, consts::TWO))]
+#[bench::case_6ch_1024(args = (1024_usize, consts::SIX))]
+#[bench::case_2ch_4096(args = (4096_usize, consts::TWO))]
+#[bench::case_6ch_4096(args = (4096_usize, consts::SIX))]
+fn native_downmix(mut prepared: DownmixPrepared) -> DownmixPrepared {
+    let _ = kithara_dsp::downmix(
+        std::hint::black_box(&prepared.interleaved),
+        prepared.channels,
+        &mut prepared.mono,
+    );
+    prepared
 }
 
-fn prepare_biquad(index: usize) -> NativeWork {
-    let channels = [1_usize, 2, 8][index / 2];
-    let sections = [1_usize, 4][index % 2];
+struct BiquadPrepared {
+    filter: Biquad,
+    planes: Vec<Vec<f32>>,
+}
+
+fn prepare_biquad(channels: usize, sections: usize) -> BiquadPrepared {
     let mut filter = Biquad::new(
         NonZeroUsize::new(channels).expect("channels"),
         NonZeroUsize::new(sections).expect("sections"),
-    ).expect("filter");
+    )
+    .expect("filter");
     for section in 0..sections {
         filter.retune(section, low_pass()).expect("section");
     }
-    let mut planes = vec![vec![0.25_f32; 1024]; channels];
-    NativeWork::new(move || {
-        filter.process(std::hint::black_box(&mut planes), 0..1024).expect("process");
-    })
+    BiquadPrepared {
+        filter,
+        planes: vec![vec![0.25_f32; 1024]; channels],
+    }
 }
 
 #[metabench::benchmark(KERNEL_BIQUAD, "biquad", "case", gungraun_setup = prepare_biquad)]
-#[bench::case_1ch_1(0_usize)]
-#[bench::case_1ch_4(1_usize)]
-#[bench::case_2ch_1(2_usize)]
-#[bench::case_2ch_4(3_usize)]
-#[bench::case_8ch_1(4_usize)]
-#[bench::case_8ch_4(5_usize)]
-fn native_work_16(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_1ch_1(args = (1_usize, 1_usize))]
+#[bench::case_1ch_4(args = (1_usize, 4_usize))]
+#[bench::case_2ch_1(args = (2_usize, 1_usize))]
+#[bench::case_2ch_4(args = (2_usize, 4_usize))]
+#[bench::case_8ch_1(args = (8_usize, 1_usize))]
+#[bench::case_8ch_4(args = (8_usize, 4_usize))]
+fn native_biquad(mut prepared: BiquadPrepared) -> BiquadPrepared {
+    prepared
+        .filter
+        .process(std::hint::black_box(&mut prepared.planes), 0..1024)
+        .expect("process");
+    prepared
 }
 
-fn prepare_crossover(index: usize) -> NativeWork {
-    let bands = [3_usize, 10][index / 24];
-    let frames = [128_usize, 512][index % 24 / 12];
-    let form = index % 12 / 4;
-    let implementation = index % 4;
+#[derive(Clone, Copy)]
+enum CrossoverInput {
+    Signal,
+    Silence,
+    QuietNoise,
+}
+
+#[derive(Clone, Copy)]
+enum CrossoverImplementation {
+    Df1,
+    Simd,
+    Scalar,
+    Entry,
+}
+
+struct CrossoverPrepared {
+    baseline: Option<Frame>,
+    svf: Option<Svf>,
+    io: [Vec<f32>; 2],
+    gains: Vec<Vec<f32>>,
+    frames: usize,
+    kernel: Option<SplitKernel>,
+}
+
+fn prepare_crossover(
+    bands: usize,
+    frames: usize,
+    input_kind: CrossoverInput,
+    implementation: CrossoverImplementation,
+) -> CrossoverPrepared {
     let frequencies = frequencies(bands);
     let inputs = input_forms(frames);
-    let input = inputs[form].1.clone();
+    let input = match input_kind {
+        CrossoverInput::Signal => inputs[0].1.clone(),
+        CrossoverInput::Silence => inputs[1].1.clone(),
+        CrossoverInput::QuietNoise => inputs[2].1.clone(),
+    };
     let gains = gains(bands, frames, true);
-    if implementation == 0 {
-        let mut baseline = Frame::new(&frequencies);
-        let mut io = input;
-        return NativeWork::new(move || {
-            baseline.sum(std::hint::black_box(&mut io), std::hint::black_box(&gains), frames);
-            std::hint::black_box(&io);
-        });
+    let route = match implementation {
+        CrossoverImplementation::Df1 => None,
+        CrossoverImplementation::Simd => Some(0),
+        CrossoverImplementation::Scalar => Some(1),
+        CrossoverImplementation::Entry => Some(2),
+    };
+    let kernel = route.map(|route| {
+        kithara_dsp::routes::crossover::forms::<2, Vec<f32>>()[route].1
+    });
+    CrossoverPrepared {
+        baseline: matches!(implementation, CrossoverImplementation::Df1)
+            .then(|| Frame::new(&frequencies)),
+        svf: (!matches!(implementation, CrossoverImplementation::Df1))
+            .then(|| Svf::new(&frequencies, frames)),
+        io: input,
+        gains,
+        frames,
+        kernel,
     }
-    let kernel = kithara_dsp::routes::crossover::forms::<2, Vec<f32>>()[implementation - 1].1;
-    let mut svf = Svf::new(&frequencies, frames);
-    let mut io = input;
-    NativeWork::new(move || {
-        svf.sum_with(std::hint::black_box(&mut io), std::hint::black_box(&gains), frames, kernel);
-        std::hint::black_box(&io);
-    })
 }
 
 #[metabench::benchmark(KERNEL_CROSSOVER, "crossover_df1_svf", "case", gungraun_setup = prepare_crossover)]
-#[bench::case_df1_3band_128(0_usize)]
-#[bench::case_simd_3band_128(1_usize)]
-#[bench::case_scalar_3band_128(2_usize)]
-#[bench::case_entry_3band_128(3_usize)]
-#[bench::case_df1_silence_3band_128(4_usize)]
-#[bench::case_simd_silence_3band_128(5_usize)]
-#[bench::case_scalar_silence_3band_128(6_usize)]
-#[bench::case_entry_silence_3band_128(7_usize)]
-#[bench::case_df1_quiet_noise_3band_128(8_usize)]
-#[bench::case_simd_quiet_noise_3band_128(9_usize)]
-#[bench::case_scalar_quiet_noise_3band_128(10_usize)]
-#[bench::case_entry_quiet_noise_3band_128(11_usize)]
-#[bench::case_df1_3band_512(12_usize)]
-#[bench::case_simd_3band_512(13_usize)]
-#[bench::case_scalar_3band_512(14_usize)]
-#[bench::case_entry_3band_512(15_usize)]
-#[bench::case_df1_silence_3band_512(16_usize)]
-#[bench::case_simd_silence_3band_512(17_usize)]
-#[bench::case_scalar_silence_3band_512(18_usize)]
-#[bench::case_entry_silence_3band_512(19_usize)]
-#[bench::case_df1_quiet_noise_3band_512(20_usize)]
-#[bench::case_simd_quiet_noise_3band_512(21_usize)]
-#[bench::case_scalar_quiet_noise_3band_512(22_usize)]
-#[bench::case_entry_quiet_noise_3band_512(23_usize)]
-#[bench::case_df1_10band_128(24_usize)]
-#[bench::case_simd_10band_128(25_usize)]
-#[bench::case_scalar_10band_128(26_usize)]
-#[bench::case_entry_10band_128(27_usize)]
-#[bench::case_df1_silence_10band_128(28_usize)]
-#[bench::case_simd_silence_10band_128(29_usize)]
-#[bench::case_scalar_silence_10band_128(30_usize)]
-#[bench::case_entry_silence_10band_128(31_usize)]
-#[bench::case_df1_quiet_noise_10band_128(32_usize)]
-#[bench::case_simd_quiet_noise_10band_128(33_usize)]
-#[bench::case_scalar_quiet_noise_10band_128(34_usize)]
-#[bench::case_entry_quiet_noise_10band_128(35_usize)]
-#[bench::case_df1_10band_512(36_usize)]
-#[bench::case_simd_10band_512(37_usize)]
-#[bench::case_scalar_10band_512(38_usize)]
-#[bench::case_entry_10band_512(39_usize)]
-#[bench::case_df1_silence_10band_512(40_usize)]
-#[bench::case_simd_silence_10band_512(41_usize)]
-#[bench::case_scalar_silence_10band_512(42_usize)]
-#[bench::case_entry_silence_10band_512(43_usize)]
-#[bench::case_df1_quiet_noise_10band_512(44_usize)]
-#[bench::case_simd_quiet_noise_10band_512(45_usize)]
-#[bench::case_scalar_quiet_noise_10band_512(46_usize)]
-#[bench::case_entry_quiet_noise_10band_512(47_usize)]
-fn native_work_17(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_df1_3band_128(args = (3_usize, 128_usize, CrossoverInput::Signal, CrossoverImplementation::Df1))]
+#[bench::case_simd_3band_128(args = (3_usize, 128_usize, CrossoverInput::Signal, CrossoverImplementation::Simd))]
+#[bench::case_scalar_3band_128(args = (3_usize, 128_usize, CrossoverInput::Signal, CrossoverImplementation::Scalar))]
+#[bench::case_entry_3band_128(args = (3_usize, 128_usize, CrossoverInput::Signal, CrossoverImplementation::Entry))]
+#[bench::case_df1_silence_3band_128(args = (3_usize, 128_usize, CrossoverInput::Silence, CrossoverImplementation::Df1))]
+#[bench::case_simd_silence_3band_128(args = (3_usize, 128_usize, CrossoverInput::Silence, CrossoverImplementation::Simd))]
+#[bench::case_scalar_silence_3band_128(args = (3_usize, 128_usize, CrossoverInput::Silence, CrossoverImplementation::Scalar))]
+#[bench::case_entry_silence_3band_128(args = (3_usize, 128_usize, CrossoverInput::Silence, CrossoverImplementation::Entry))]
+#[bench::case_df1_quiet_noise_3band_128(args = (3_usize, 128_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Df1))]
+#[bench::case_simd_quiet_noise_3band_128(args = (3_usize, 128_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Simd))]
+#[bench::case_scalar_quiet_noise_3band_128(args = (3_usize, 128_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Scalar))]
+#[bench::case_entry_quiet_noise_3band_128(args = (3_usize, 128_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Entry))]
+#[bench::case_df1_3band_512(args = (3_usize, 512_usize, CrossoverInput::Signal, CrossoverImplementation::Df1))]
+#[bench::case_simd_3band_512(args = (3_usize, 512_usize, CrossoverInput::Signal, CrossoverImplementation::Simd))]
+#[bench::case_scalar_3band_512(args = (3_usize, 512_usize, CrossoverInput::Signal, CrossoverImplementation::Scalar))]
+#[bench::case_entry_3band_512(args = (3_usize, 512_usize, CrossoverInput::Signal, CrossoverImplementation::Entry))]
+#[bench::case_df1_silence_3band_512(args = (3_usize, 512_usize, CrossoverInput::Silence, CrossoverImplementation::Df1))]
+#[bench::case_simd_silence_3band_512(args = (3_usize, 512_usize, CrossoverInput::Silence, CrossoverImplementation::Simd))]
+#[bench::case_scalar_silence_3band_512(args = (3_usize, 512_usize, CrossoverInput::Silence, CrossoverImplementation::Scalar))]
+#[bench::case_entry_silence_3band_512(args = (3_usize, 512_usize, CrossoverInput::Silence, CrossoverImplementation::Entry))]
+#[bench::case_df1_quiet_noise_3band_512(args = (3_usize, 512_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Df1))]
+#[bench::case_simd_quiet_noise_3band_512(args = (3_usize, 512_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Simd))]
+#[bench::case_scalar_quiet_noise_3band_512(args = (3_usize, 512_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Scalar))]
+#[bench::case_entry_quiet_noise_3band_512(args = (3_usize, 512_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Entry))]
+#[bench::case_df1_10band_128(args = (10_usize, 128_usize, CrossoverInput::Signal, CrossoverImplementation::Df1))]
+#[bench::case_simd_10band_128(args = (10_usize, 128_usize, CrossoverInput::Signal, CrossoverImplementation::Simd))]
+#[bench::case_scalar_10band_128(args = (10_usize, 128_usize, CrossoverInput::Signal, CrossoverImplementation::Scalar))]
+#[bench::case_entry_10band_128(args = (10_usize, 128_usize, CrossoverInput::Signal, CrossoverImplementation::Entry))]
+#[bench::case_df1_silence_10band_128(args = (10_usize, 128_usize, CrossoverInput::Silence, CrossoverImplementation::Df1))]
+#[bench::case_simd_silence_10band_128(args = (10_usize, 128_usize, CrossoverInput::Silence, CrossoverImplementation::Simd))]
+#[bench::case_scalar_silence_10band_128(args = (10_usize, 128_usize, CrossoverInput::Silence, CrossoverImplementation::Scalar))]
+#[bench::case_entry_silence_10band_128(args = (10_usize, 128_usize, CrossoverInput::Silence, CrossoverImplementation::Entry))]
+#[bench::case_df1_quiet_noise_10band_128(args = (10_usize, 128_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Df1))]
+#[bench::case_simd_quiet_noise_10band_128(args = (10_usize, 128_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Simd))]
+#[bench::case_scalar_quiet_noise_10band_128(args = (10_usize, 128_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Scalar))]
+#[bench::case_entry_quiet_noise_10band_128(args = (10_usize, 128_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Entry))]
+#[bench::case_df1_10band_512(args = (10_usize, 512_usize, CrossoverInput::Signal, CrossoverImplementation::Df1))]
+#[bench::case_simd_10band_512(args = (10_usize, 512_usize, CrossoverInput::Signal, CrossoverImplementation::Simd))]
+#[bench::case_scalar_10band_512(args = (10_usize, 512_usize, CrossoverInput::Signal, CrossoverImplementation::Scalar))]
+#[bench::case_entry_10band_512(args = (10_usize, 512_usize, CrossoverInput::Signal, CrossoverImplementation::Entry))]
+#[bench::case_df1_silence_10band_512(args = (10_usize, 512_usize, CrossoverInput::Silence, CrossoverImplementation::Df1))]
+#[bench::case_simd_silence_10band_512(args = (10_usize, 512_usize, CrossoverInput::Silence, CrossoverImplementation::Simd))]
+#[bench::case_scalar_silence_10band_512(args = (10_usize, 512_usize, CrossoverInput::Silence, CrossoverImplementation::Scalar))]
+#[bench::case_entry_silence_10band_512(args = (10_usize, 512_usize, CrossoverInput::Silence, CrossoverImplementation::Entry))]
+#[bench::case_df1_quiet_noise_10band_512(args = (10_usize, 512_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Df1))]
+#[bench::case_simd_quiet_noise_10band_512(args = (10_usize, 512_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Simd))]
+#[bench::case_scalar_quiet_noise_10band_512(args = (10_usize, 512_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Scalar))]
+#[bench::case_entry_quiet_noise_10band_512(args = (10_usize, 512_usize, CrossoverInput::QuietNoise, CrossoverImplementation::Entry))]
+fn native_crossover(mut prepared: CrossoverPrepared) -> CrossoverPrepared {
+    if let Some(baseline) = &mut prepared.baseline {
+        baseline.sum(
+            std::hint::black_box(&mut prepared.io),
+            std::hint::black_box(&prepared.gains),
+            prepared.frames,
+        );
+    } else {
+        prepared
+            .svf
+            .as_mut()
+            .expect("SVF implementation")
+            .sum_with(
+                std::hint::black_box(&mut prepared.io),
+                std::hint::black_box(&prepared.gains),
+                prepared.frames,
+                prepared.kernel.expect("split kernel"),
+            );
+    }
+    std::hint::black_box(&prepared.io);
+    prepared
 }
 
-fn prepare_decay(_: usize) -> NativeWork {
+struct DecayPrepared {
+    filter: Biquad,
+    planes: Vec<Vec<f32>>,
+    template: Vec<Vec<f32>>,
+}
+
+fn prepare_decay() -> DecayPrepared {
     let mut filter = Biquad::new(consts::TWO, NonZeroUsize::MIN).expect("filter");
     filter.retune(0, low_pass()).expect("section");
-    let burst: Vec<f32> = (0..1024).map(|frame| if frame < 64 { 0.5 } else { 0.0 }).collect();
+    let burst: Vec<f32> = (0..1024)
+        .map(|frame| if frame < 64 { 0.5 } else { 0.0 })
+        .collect();
     let template = vec![burst; consts::TWO.get()];
-    let mut planes = template.clone();
-    NativeWork::new(move || {
-        planes.clone_from(&template);
-        for start in (0..1024).step_by(64) {
-            let _ = filter.process(&mut planes, start..start + 64);
-        }
-    })
+    DecayPrepared {
+        filter,
+        planes: template.clone(),
+        template,
+    }
 }
 
 #[metabench::benchmark(KERNEL_DECAY, "biquad_decay", "case", gungraun_setup = prepare_decay)]
-#[bench::case_burst_into_silence_2ch(0_usize)]
-fn native_work_18(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_burst_into_silence_2ch()]
+fn native_decay(mut prepared: DecayPrepared) -> DecayPrepared {
+    prepared.planes.clone_from(&prepared.template);
+    for start in (0..1024).step_by(64) {
+        let _ = prepared
+            .filter
+            .process(&mut prepared.planes, start..start + 64);
+    }
+    prepared
 }
 
-fn prepare_svf(index: usize) -> NativeWork {
-    let frames = [128_usize, 1024][index / 2];
-    let response = [Response::LowPass, Response::HighPass][index % 2];
+struct SvfPrepared {
+    frames: usize,
+    response: Response,
+    filter: StateVariableFilter<2>,
+    planes: [Vec<f32>; 2],
+    cutoffs: Vec<f64>,
+    rate: NonZeroU32,
+}
+
+fn prepare_svf(frames: usize, response: Response) -> SvfPrepared {
     let rate = NonZeroU32::new(48_000).expect("rate");
-    let tone: Vec<f32> = std::iter::successors(Some(0.0_f32), |phase| Some(phase + consts::TONE_STEP))
-        .take(frames).map(|phase| 0.25 * phase.sin()).collect();
-    let mut planes = [tone.clone(), tone];
+    let tone: Vec<f32> = std::iter::successors(Some(0.0_f32), |phase| {
+        Some(phase + consts::TONE_STEP)
+    })
+    .take(frames)
+    .map(|phase| 0.25 * phase.sin())
+    .collect();
+    let planes = [tone.clone(), tone];
     let cutoffs = vec![4000.0; frames];
     let mut filter = StateVariableFilter::<2>::new();
     let mut probe = planes.clone();
-    assert!(filter.process(&mut probe, 0..frames, &cutoffs, rate, FRAC_1_SQRT_2, response).is_ok());
+    assert!(
+        filter
+            .process(
+                &mut probe,
+                0..frames,
+                &cutoffs,
+                rate,
+                FRAC_1_SQRT_2,
+                response,
+            )
+            .is_ok()
+    );
     assert!(probe.iter().flatten().all(|sample| sample.is_finite()));
     assert!(probe.iter().flatten().any(|sample| *sample != 0.0));
     filter.reset();
-    NativeWork::new(move || {
-        filter.process(&mut planes, 0..frames, &cutoffs, rate, FRAC_1_SQRT_2, response).expect("svf");
-    })
+    SvfPrepared {
+        frames,
+        response,
+        filter,
+        planes,
+        cutoffs,
+        rate,
+    }
 }
 
 #[metabench::benchmark(KERNEL_SVF, "svf", "case", gungraun_setup = prepare_svf)]
-#[bench::case_2ch_lowpass_128(0_usize)]
-#[bench::case_2ch_highpass_128(1_usize)]
-#[bench::case_2ch_lowpass_1024(2_usize)]
-#[bench::case_2ch_highpass_1024(3_usize)]
-fn native_work_19(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_2ch_lowpass_128(args = (128_usize, Response::LowPass))]
+#[bench::case_2ch_highpass_128(args = (128_usize, Response::HighPass))]
+#[bench::case_2ch_lowpass_1024(args = (1024_usize, Response::LowPass))]
+#[bench::case_2ch_highpass_1024(args = (1024_usize, Response::HighPass))]
+fn native_svf(mut prepared: SvfPrepared) -> SvfPrepared {
+    prepared
+        .filter
+        .process(
+            std::hint::black_box(&mut prepared.planes),
+            0..prepared.frames,
+            &prepared.cutoffs,
+            prepared.rate,
+            FRAC_1_SQRT_2,
+            prepared.response,
+        )
+        .expect("svf");
+    prepared
 }
 
-fn prepare_interp(index: usize) -> NativeWork {
-    let ratio = [0.5_f64, 1.001, 2.0][index / 4];
-    let method = [Interpolation::Linear, Interpolation::Quadratic, Interpolation::Hermite, Interpolation::Watte][index % 4];
+struct InterpPrepared {
+    method: Interpolation,
+    window: Vec<f32>,
+    positions: Vec<f32>,
+    output: Vec<f32>,
+}
+
+fn prepare_interp(ratio: f64, method: Interpolation) -> InterpPrepared {
     let window: Vec<f32> = std::iter::successors(Some(0.0_f32), |phase| Some(phase + 0.05))
-        .map(f32::sin).take(1028).collect();
-    let positions: Vec<f32> = std::iter::successors(Some(1.0_f64), |position| Some(position + ratio))
-        .take_while(|position| *position < 1024.0).filter_map(|position| position.to_f32()).collect();
-    let mut output = vec![0.0_f32; positions.len()];
-    NativeWork::new(move || {
-        interpolate(method, &window, &positions, &mut output).expect("interpolate");
+        .map(f32::sin)
+        .take(1028)
+        .collect();
+    let positions: Vec<f32> = std::iter::successors(Some(1.0_f64), |position| {
+        Some(position + ratio)
     })
+    .take_while(|position| *position < 1024.0)
+    .filter_map(|position| position.to_f32())
+    .collect();
+    InterpPrepared {
+        method,
+        window,
+        output: vec![0.0_f32; positions.len()],
+        positions,
+    }
 }
 
 #[metabench::benchmark(KERNEL_INTERP, "interp", "case", gungraun_setup = prepare_interp)]
-#[bench::case_linear_0_5(0_usize)]
-#[bench::case_quadratic_0_5(1_usize)]
-#[bench::case_hermite_0_5(2_usize)]
-#[bench::case_watte_0_5(3_usize)]
-#[bench::case_linear_1_001(4_usize)]
-#[bench::case_quadratic_1_001(5_usize)]
-#[bench::case_hermite_1_001(6_usize)]
-#[bench::case_watte_1_001(7_usize)]
-#[bench::case_linear_2(8_usize)]
-#[bench::case_quadratic_2(9_usize)]
-#[bench::case_hermite_2(10_usize)]
-#[bench::case_watte_2(11_usize)]
-fn native_work_20(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_linear_0_5(args = (0.5_f64, Interpolation::Linear))]
+#[bench::case_quadratic_0_5(args = (0.5_f64, Interpolation::Quadratic))]
+#[bench::case_hermite_0_5(args = (0.5_f64, Interpolation::Hermite))]
+#[bench::case_watte_0_5(args = (0.5_f64, Interpolation::Watte))]
+#[bench::case_linear_1_001(args = (1.001_f64, Interpolation::Linear))]
+#[bench::case_quadratic_1_001(args = (1.001_f64, Interpolation::Quadratic))]
+#[bench::case_hermite_1_001(args = (1.001_f64, Interpolation::Hermite))]
+#[bench::case_watte_1_001(args = (1.001_f64, Interpolation::Watte))]
+#[bench::case_linear_2(args = (2.0_f64, Interpolation::Linear))]
+#[bench::case_quadratic_2(args = (2.0_f64, Interpolation::Quadratic))]
+#[bench::case_hermite_2(args = (2.0_f64, Interpolation::Hermite))]
+#[bench::case_watte_2(args = (2.0_f64, Interpolation::Watte))]
+fn native_interpolate(mut prepared: InterpPrepared) -> InterpPrepared {
+    interpolate(
+        prepared.method,
+        &prepared.window,
+        &prepared.positions,
+        &mut prepared.output,
+    )
+    .expect("interpolate");
+    prepared
 }
 
-fn prepare_source_frames(index: usize) -> NativeWork {
-    let channels = [1_usize, 2, 4, 6, 9][index / 2];
-    let weighted = index % 2 == 1;
-    let samples = vec![0.25; channels * 33];
-    let offsets = std::array::from_fn::<_, 33, _>(|tap| tap * channels);
-    let weights = [0.125; 33];
-    let mut frame = vec![0.0; channels];
-    let mut sums = vec![0.0; channels];
-    NativeWork::new(move || {
-        if weighted {
-            weighted_frames(&samples, &offsets, &weights, channels, &mut sums).expect("resolved taps");
-            std::hint::black_box(&sums);
-        } else {
-            interpolate_frame(&samples[..channels], &samples[channels..2 * channels], 0.531_589_7, &mut frame);
-            std::hint::black_box(&frame);
-        }
-    })
+#[derive(Clone, Copy)]
+enum SourceFrameMode {
+    Interpolate,
+    Weighted,
+}
+
+struct SourceFramesPrepared {
+    channels: usize,
+    mode: SourceFrameMode,
+    samples: Vec<f32>,
+    offsets: [usize; 33],
+    weights: [f64; 33],
+    frame: Vec<f32>,
+    sums: Vec<f64>,
+}
+
+fn prepare_source_frames(channels: usize, mode: SourceFrameMode) -> SourceFramesPrepared {
+    SourceFramesPrepared {
+        channels,
+        mode,
+        samples: vec![0.25; channels * 33],
+        offsets: std::array::from_fn(|tap| tap * channels),
+        weights: [0.125; 33],
+        frame: vec![0.0; channels],
+        sums: vec![0.0; channels],
+    }
 }
 
 #[metabench::benchmark(KERNEL_SOURCE_FRAMES, "source_frames", "case", gungraun_setup = prepare_source_frames)]
-#[bench::case_interpolate_1(0_usize)]
-#[bench::case_weighted_1(1_usize)]
-#[bench::case_interpolate_2(2_usize)]
-#[bench::case_weighted_2(3_usize)]
-#[bench::case_interpolate_4(4_usize)]
-#[bench::case_weighted_4(5_usize)]
-#[bench::case_interpolate_6(6_usize)]
-#[bench::case_weighted_6(7_usize)]
-#[bench::case_interpolate_9(8_usize)]
-#[bench::case_weighted_9(9_usize)]
-fn native_work_21(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_interpolate_1(args = (1_usize, SourceFrameMode::Interpolate))]
+#[bench::case_weighted_1(args = (1_usize, SourceFrameMode::Weighted))]
+#[bench::case_interpolate_2(args = (2_usize, SourceFrameMode::Interpolate))]
+#[bench::case_weighted_2(args = (2_usize, SourceFrameMode::Weighted))]
+#[bench::case_interpolate_4(args = (4_usize, SourceFrameMode::Interpolate))]
+#[bench::case_weighted_4(args = (4_usize, SourceFrameMode::Weighted))]
+#[bench::case_interpolate_6(args = (6_usize, SourceFrameMode::Interpolate))]
+#[bench::case_weighted_6(args = (6_usize, SourceFrameMode::Weighted))]
+#[bench::case_interpolate_9(args = (9_usize, SourceFrameMode::Interpolate))]
+#[bench::case_weighted_9(args = (9_usize, SourceFrameMode::Weighted))]
+fn native_source_frames(mut prepared: SourceFramesPrepared) -> SourceFramesPrepared {
+    let channels = prepared.channels;
+    match prepared.mode {
+        SourceFrameMode::Interpolate => {
+            interpolate_frame(
+                &prepared.samples[..channels],
+                &prepared.samples[channels..2 * channels],
+                0.531_589_7,
+                &mut prepared.frame,
+            );
+            std::hint::black_box(&prepared.frame);
+        }
+        SourceFrameMode::Weighted => {
+            weighted_frames(
+                &prepared.samples,
+                &prepared.offsets,
+                &prepared.weights,
+                channels,
+                &mut prepared.sums,
+            )
+            .expect("resolved taps");
+            std::hint::black_box(&prepared.sums);
+        }
+    }
+    prepared
 }
 
-fn prepare_spectrum(index: usize) -> NativeWork {
-    let len = consts::FFT_LENS[index / 2];
-    let native = index % 2 == 0;
+#[derive(Clone, Copy)]
+enum SpectrumImplementation {
+    Fft,
+    Realfft,
+}
+
+enum SpectrumPrepared {
+    Fft {
+        fft: Fft,
+        frame: Vec<f32>,
+        bins: kithara_dsp::spectrum::Spectrum,
+    },
+    Realfft {
+        reference: RealToComplexEven<f32>,
+        frame: Vec<f32>,
+        window: Vec<f32>,
+        input: Vec<f32>,
+        output: Vec<realfft::num_complex::Complex<f32>>,
+        scratch: Vec<realfft::num_complex::Complex<f32>>,
+    },
+}
+
+fn prepare_spectrum(len: usize, implementation: SpectrumImplementation) -> SpectrumPrepared {
     let region = pools();
     let frame = tone(len);
-    let window = hann(len);
-    if native {
-        let fft = Fft::new(FftLen::new(len).expect("FFT length")).expect("FFT");
-        let mut bins = fft.spectrum(&region).expect("planes");
-        return NativeWork::new(move || {
-            fft.forward(std::hint::black_box(&frame), &mut bins).expect("forward");
-        });
-    }
-    let reference: RealToComplexEven<f32> = RealToComplexEven::new(len, &mut rustfft::FftPlanner::new());
-    let mut input = reference.make_input_vec();
-    let mut output = reference.make_output_vec();
-    let mut scratch = reference.make_scratch_vec();
-    NativeWork::new(move || {
-        for ((slot, sample), weight) in input.iter_mut().zip(&frame).zip(&window) {
-            *slot = sample * weight;
+    match implementation {
+        SpectrumImplementation::Fft => {
+            let fft = Fft::new(FftLen::new(len).expect("FFT length")).expect("FFT");
+            let bins = fft.spectrum(&region).expect("planes");
+            SpectrumPrepared::Fft { fft, frame, bins }
         }
-        reference.process_with_scratch(&mut input, &mut output, &mut scratch).expect("realfft");
-    })
+        SpectrumImplementation::Realfft => {
+            let reference: RealToComplexEven<f32> =
+                RealToComplexEven::new(len, &mut rustfft::FftPlanner::new());
+            SpectrumPrepared::Realfft {
+                input: reference.make_input_vec(),
+                output: reference.make_output_vec(),
+                scratch: reference.make_scratch_vec(),
+                window: hann(len),
+                reference,
+                frame,
+            }
+        }
+    }
 }
 
 #[metabench::benchmark(KERNEL_SPECTRUM, "spectrum", "case", gungraun_setup = prepare_spectrum)]
-#[bench::case_fft_1024(0_usize)]
-#[bench::case_realfft_1024(1_usize)]
-#[bench::case_fft_3072(2_usize)]
-#[bench::case_realfft_3072(3_usize)]
-#[bench::case_fft_4096(4_usize)]
-#[bench::case_realfft_4096(5_usize)]
-fn native_work_22(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_fft_1024(args = (1024_usize, SpectrumImplementation::Fft))]
+#[bench::case_realfft_1024(args = (1024_usize, SpectrumImplementation::Realfft))]
+#[bench::case_fft_3072(args = (3072_usize, SpectrumImplementation::Fft))]
+#[bench::case_realfft_3072(args = (3072_usize, SpectrumImplementation::Realfft))]
+#[bench::case_fft_4096(args = (4096_usize, SpectrumImplementation::Fft))]
+#[bench::case_realfft_4096(args = (4096_usize, SpectrumImplementation::Realfft))]
+fn native_spectrum(prepared: SpectrumPrepared) -> SpectrumPrepared {
+    match prepared {
+        SpectrumPrepared::Fft {
+            fft,
+            frame,
+            mut bins,
+        } => {
+            fft.forward(std::hint::black_box(&frame), &mut bins)
+                .expect("forward");
+            SpectrumPrepared::Fft { fft, frame, bins }
+        }
+        SpectrumPrepared::Realfft {
+            reference,
+            frame,
+            window,
+            mut input,
+            mut output,
+            mut scratch,
+        } => {
+            for ((slot, sample), weight) in input.iter_mut().zip(&frame).zip(&window) {
+                *slot = sample * weight;
+            }
+            reference
+                .process_with_scratch(&mut input, &mut output, &mut scratch)
+                .expect("realfft");
+            SpectrumPrepared::Realfft {
+                reference,
+                frame,
+                window,
+                input,
+                output,
+                scratch,
+            }
+        }
+    }
 }
 
-fn prepare_prediction(size: usize) -> NativeWork {
+struct PredictionPrepared {
+    re: Vec<f32>,
+    im: Vec<f32>,
+    history: [Vec<f32>; 4],
+}
+
+fn prepare_prediction(size: usize) -> PredictionPrepared {
     let re = tone(size);
-    let im: Vec<f32> = re.iter().rev().copied().collect();
-    let mut history: [Vec<f32>; 4] = std::array::from_fn(|_| vec![0.0; size + 1]);
-    NativeWork::new(move || {
-        prediction_difference(
-            [std::hint::black_box(&re), std::hint::black_box(&im)],
-            std::hint::black_box(&mut history).each_mut().map(Vec::as_mut_slice),
-        );
-    })
+    PredictionPrepared {
+        im: re.iter().rev().copied().collect(),
+        history: std::array::from_fn(|_| vec![0.0; size + 1]),
+        re,
+    }
 }
 
 #[metabench::benchmark(KERNEL_PREDICTION, "prediction_difference", "case", gungraun_setup = prepare_prediction)]
-#[bench::case_1(0_usize)]
-#[bench::case_3(1_usize)]
-#[bench::case_17(2_usize)]
-#[bench::case_64(3_usize)]
-#[bench::case_513(4_usize)]
-#[bench::case_1024(5_usize)]
-fn native_work_23(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_1(1_usize)]
+#[bench::case_3(3_usize)]
+#[bench::case_17(17_usize)]
+#[bench::case_64(64_usize)]
+#[bench::case_513(513_usize)]
+#[bench::case_1024(1024_usize)]
+fn native_prediction_difference(mut prepared: PredictionPrepared) -> PredictionPrepared {
+    prediction_difference(
+        [
+            std::hint::black_box(&prepared.re),
+            std::hint::black_box(&prepared.im),
+        ],
+        std::hint::black_box(&mut prepared.history)
+            .each_mut()
+            .map(Vec::as_mut_slice),
+    );
+    prepared
 }
 
-fn prepare_autocorrelation(size: usize) -> NativeWork {
+struct AutocorrelationPrepared {
+    acf: Autocorrelation,
+    frame: Vec<f32>,
+    output: Vec<f32>,
+}
+
+fn prepare_autocorrelation(size: usize) -> AutocorrelationPrepared {
     let region = pools();
-    let frame = tone(size);
-    let mut acf = Autocorrelation::new(NonZeroUsize::new(size).expect("size"), &region).expect("acf");
-    let mut output = vec![0.0_f32; size];
-    NativeWork::new(move || {
-        acf.process(std::hint::black_box(&frame), &mut output);
-    })
+    AutocorrelationPrepared {
+        acf: Autocorrelation::new(NonZeroUsize::new(size).expect("size"), &region)
+            .expect("acf"),
+        frame: tone(size),
+        output: vec![0.0_f32; size],
+    }
 }
 
 #[metabench::benchmark(KERNEL_AUTOCORRELATION, "autocorrelation", "case", gungraun_setup = prepare_autocorrelation)]
-#[bench::case_process_64(0_usize)]
-#[bench::case_process_128(1_usize)]
-#[bench::case_process_256(2_usize)]
-#[bench::case_process_512(3_usize)]
-#[bench::case_process_1024(4_usize)]
-#[bench::case_process_4096(5_usize)]
-fn native_work_24(work: NativeWork) -> NativeWork {
-    work.run()
+#[bench::case_process_64(64_usize)]
+#[bench::case_process_128(128_usize)]
+#[bench::case_process_256(256_usize)]
+#[bench::case_process_512(512_usize)]
+#[bench::case_process_1024(1024_usize)]
+#[bench::case_process_4096(4096_usize)]
+fn native_autocorrelation(mut prepared: AutocorrelationPrepared) -> AutocorrelationPrepared {
+    prepared
+        .acf
+        .process(std::hint::black_box(&prepared.frame), &mut prepared.output);
+    prepared
 }
-

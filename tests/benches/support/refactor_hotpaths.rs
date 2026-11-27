@@ -1,13 +1,11 @@
 use kithara::play::{CurveShape, GainDb};
-struct NativeWork {
-    action: Box<dyn FnMut()>,
+struct NativeWork<F> {
+    action: F,
 }
 
-impl NativeWork {
-    fn new(action: impl FnMut() + 'static) -> Self {
-        Self {
-            action: Box::new(action),
-        }
+impl<F: FnMut()> NativeWork<F> {
+    fn new(action: F) -> Self {
+        Self { action }
     }
 
     fn run(mut self) -> Self {
@@ -16,7 +14,7 @@ impl NativeWork {
     }
 }
 
-fn prepare_resampler(index: usize) -> NativeWork {
+fn prepare_resampler(index: usize) -> NativeWork<impl FnMut()> {
     let (source_rate, target_rate, frames) = [(44_100, 44_100, 4_096), (48_000, 44_100, 8_192)][index];
     let mut resampler = build_resampler(source_rate, target_rate, frames);
     let input = make_planar(frames);
@@ -31,11 +29,11 @@ fn prepare_resampler(index: usize) -> NativeWork {
 #[metabench::benchmark(REFACTOR_RESAMPLER, "refactor_resampler", "case", gungraun_setup = prepare_resampler)]
 #[bench::unity_ratio_process(0_usize)]
 #[bench::fixed_ratio_process(1_usize)]
-fn native_resampler(work: NativeWork) -> NativeWork {
+fn native_resampler(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_audio_file(_: usize) -> NativeWork {
+fn prepare_audio_file(_: usize) -> NativeWork<impl FnMut()> {
     let rt = make_runtime();
     let temp_dir = TempDir::new().expect("audio tempdir");
     let file_path = temp_dir.path().join("bench.mp3");
@@ -77,11 +75,11 @@ fn prepare_audio_file(_: usize) -> NativeWork {
 
 #[metabench::benchmark(REFACTOR_AUDIO, "refactor_audio_pipeline", "case", gungraun_setup = prepare_audio_file)]
 #[bench::new_and_read(0_usize)]
-fn native_audio_file(work: NativeWork) -> NativeWork {
+fn native_audio_file(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_hls(_: usize) -> NativeWork {
+fn prepare_hls(_: usize) -> NativeWork<impl FnMut()> {
     let rt = make_runtime();
     let server = rt.block_on(TestHttpServer::new(app()));
     let master_url: Url = server.url("/master.m3u8");
@@ -141,11 +139,11 @@ fn prepare_hls(_: usize) -> NativeWork {
 
 #[metabench::benchmark(REFACTOR_HLS, "refactor_hls_downloader", "case", gungraun_setup = prepare_hls)]
 #[bench::new_seek_read_cycle(0_usize)]
-fn native_hls(work: NativeWork) -> NativeWork {
+fn native_hls(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_layout(index: usize) -> NativeWork {
+fn prepare_layout(index: usize) -> NativeWork<impl FnMut()> {
     let channels = [2_u16, 6][index / 2];
     let interleave = index.is_multiple_of(2);
     let pools = pools();
@@ -177,11 +175,11 @@ fn prepare_layout(index: usize) -> NativeWork {
 #[bench::deinterleave_2ch(1_usize)]
 #[bench::interleave_6ch(2_usize)]
 #[bench::deinterleave_6ch(3_usize)]
-fn native_layout(work: NativeWork) -> NativeWork {
+fn native_layout(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_render_player(index: usize) -> NativeWork {
+fn prepare_render_player(index: usize) -> NativeWork<impl FnMut()> {
     let (label, frames) = [("settled", 128), ("moving", 257), ("seek_tail", 1023)][index];
     let runtime = make_runtime();
     let player = runtime.block_on(render_player(SessionDuckingMode::Soft));
@@ -211,11 +209,11 @@ fn prepare_render_player(index: usize) -> NativeWork {
 #[bench::settled_128(0_usize)]
 #[bench::moving_257(1_usize)]
 #[bench::seek_tail_1023(2_usize)]
-fn native_render_player(work: NativeWork) -> NativeWork {
+fn native_render_player(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_deck_eq(index: usize) -> NativeWork {
+fn prepare_deck_eq(index: usize) -> NativeWork<impl FnMut()> {
     let rt = make_runtime();
     let harness = rt.block_on(deck_eq_curves::player());
     if index == 6 {
@@ -277,11 +275,11 @@ fn prepare_deck_eq(index: usize) -> NativeWork {
 #[bench::render_cubic_13(4_usize)]
 #[bench::render_cubic_256(5_usize)]
 #[bench::public_host_cubic_1024(6_usize)]
-fn native_deck_eq(work: NativeWork) -> NativeWork {
+fn native_deck_eq(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_filter_sweep(index: usize) -> NativeWork {
+fn prepare_filter_sweep(index: usize) -> NativeWork<impl FnMut()> {
     let rt = make_runtime();
     let harness = rt.block_on(slot_gain::loaded_player());
     let (shape, frames, public) = [
@@ -329,11 +327,11 @@ fn prepare_filter_sweep(index: usize) -> NativeWork {
 #[bench::render_cubic_13(4_usize)]
 #[bench::render_cubic_256(5_usize)]
 #[bench::public_host_cubic_1024(6_usize)]
-fn native_filter_sweep(work: NativeWork) -> NativeWork {
+fn native_filter_sweep(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_slot_gain_host(_: usize) -> NativeWork {
+fn prepare_slot_gain_host(_: usize) -> NativeWork<impl FnMut()> {
     let rt = make_runtime();
     let harness = rt.block_on(slot_gain::loaded_player());
     let item = rt.block_on(harness.with_queue(|queue| queue.current().expect("loaded item").id));
@@ -365,11 +363,11 @@ fn prepare_slot_gain_host(_: usize) -> NativeWork {
 
 #[metabench::benchmark(REFACTOR_SLOT_HOST, "slot_gain_curves", "case", gungraun_setup = prepare_slot_gain_host)]
 #[bench::public_host_cubic_1024(0_usize)]
-fn native_slot_host(work: NativeWork) -> NativeWork {
+fn native_slot_host(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_slot_shape(frames: u16) -> NativeWork {
+fn prepare_slot_shape(frames: u16) -> NativeWork<impl FnMut()> {
     let shape = CurveShape::cubic(0.0, 1.0).expect("S shape");
     let positions: Vec<_> = (256 - frames..256)
         .map(|at| f64::from(at) / 256.0)
@@ -389,11 +387,11 @@ fn prepare_slot_shape(frames: u16) -> NativeWork {
 #[metabench::benchmark(REFACTOR_SLOT_SHAPE, "slot_gain_curves", "case", gungraun_setup = prepare_slot_shape)]
 #[bench::shape_cubic_13(13_u16)]
 #[bench::shape_cubic_256(256_u16)]
-fn native_slot_shape(work: NativeWork) -> NativeWork {
+fn native_slot_shape(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_filter_chain(index: usize) -> NativeWork {
+fn prepare_filter_chain(index: usize) -> NativeWork<impl FnMut()> {
     let pools = pools();
     let rate = NonZeroU32::new(48_000).expect("rate");
     let mut filter = filter_chain::prepared_filter(rate);
@@ -426,11 +424,11 @@ fn prepare_filter_chain(index: usize) -> NativeWork {
 #[bench::lowpass_stereo_128(2_usize)]
 #[bench::lowpass_stereo_257(3_usize)]
 #[bench::lowpass_burst_and_two_quiet_blocks_stereo_257(4_usize)]
-fn native_filter_chain(work: NativeWork) -> NativeWork {
+fn native_filter_chain(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_adopt(_: usize) -> NativeWork {
+fn prepare_adopt(_: usize) -> NativeWork<impl FnMut()> {
     let mut fixture = render_buffer_cases::adopt_fixture();
     NativeWork::new(move || {
         let output = fixture.render(257);
@@ -440,11 +438,11 @@ fn prepare_adopt(_: usize) -> NativeWork {
 
 #[metabench::benchmark(REFACTOR_ADOPT, "render_buffers", "case", gungraun_setup = prepare_adopt)]
 #[bench::adopt_partial_tail_257(0_usize)]
-fn native_adopt(work: NativeWork) -> NativeWork {
+fn native_adopt(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_refill(_: usize) -> NativeWork {
+fn prepare_refill(_: usize) -> NativeWork<impl FnMut()> {
     let (mut fixture, gain) = render_buffer_cases::refill_fixture();
     NativeWork::new(move || {
         let output = fixture.render(16);
@@ -454,11 +452,11 @@ fn prepare_refill(_: usize) -> NativeWork {
 
 #[metabench::benchmark(REFACTOR_REFILL, "render_buffers", "case", gungraun_setup = prepare_refill)]
 #[bench::slot_refill_16(0_usize)]
-fn native_refill(work: NativeWork) -> NativeWork {
+fn native_refill(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_jump(_: usize) -> NativeWork {
+fn prepare_jump(_: usize) -> NativeWork<impl FnMut()> {
     let runtime = make_runtime();
     let mut fixture = runtime.block_on(render_buffer_cases::jump_fixture());
     NativeWork::new(move || {
@@ -469,11 +467,11 @@ fn prepare_jump(_: usize) -> NativeWork {
 
 #[metabench::benchmark(REFACTOR_JUMP, "render_buffers", "case", gungraun_setup = prepare_jump)]
 #[bench::jump_240(0_usize)]
-fn native_jump(work: NativeWork) -> NativeWork {
+fn native_jump(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
 
-fn prepare_duck(_: usize) -> NativeWork {
+fn prepare_duck(_: usize) -> NativeWork<impl FnMut()> {
     let runtime = make_runtime();
     let player = runtime.block_on(render_player(SessionDuckingMode::Off));
     runtime.block_on(render_buffer_cases::prepare_duck(&player));
@@ -485,6 +483,6 @@ fn prepare_duck(_: usize) -> NativeWork {
 
 #[metabench::benchmark(REFACTOR_DUCK, "render_buffers", "case", gungraun_setup = prepare_duck)]
 #[bench::duck_spans_513(0_usize)]
-fn native_duck(work: NativeWork) -> NativeWork {
+fn native_duck(work: NativeWork<impl FnMut()>) -> NativeWork<impl FnMut()> {
     work.run()
 }
