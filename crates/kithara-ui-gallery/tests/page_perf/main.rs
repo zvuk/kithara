@@ -15,7 +15,10 @@ use std::{
 use criterion::{BenchmarkId, Criterion};
 use iced::{Theme, advanced::graphics::text::font_system, theme::Palette};
 use kithara_platform::time::WallInstant as WallClock;
-use kithara_ui::render::{Skin, fonts::FONT_BYTES};
+use kithara_ui::{
+    app::Ui,
+    render::{Skin, fonts::FONT_BYTES},
+};
 use kithara_ui_gallery::{demo, fixture, sections};
 use pages::{Page, Program};
 
