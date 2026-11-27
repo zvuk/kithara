@@ -29,6 +29,10 @@ use kithara_resampler::rubato::RubatoBackend;
 #[cfg(feature = "analysis-waveform")]
 use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCoverage};
 use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
+#[cfg(all(feature = "analysis-beat", not(feature = "analysis-waveform")))]
+use kithara_test_utils::bufpool::pools;
+#[cfg(feature = "analysis-waveform")]
+use kithara_test_utils::bufpool::{TestPools, pools};
 #[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_test_utils::kithara;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -54,7 +58,7 @@ use super::{
         analyzer::AnalyzerBuilder,
         worker::{AnalysisNode, Job},
     },
-    fixtures::{FakeReader, sine},
+    fixtures::{self, FakeReader, sine},
 };
 #[cfg(feature = "analysis-beat")]
 use crate::BeatState;
@@ -63,20 +67,11 @@ use crate::BeatState;
 use crate::analyzer::BeatAnalysisConfig;
 #[cfg(feature = "analysis-waveform")]
 use crate::blob::to_bytes;
-use crate::consts;
 #[cfg(feature = "analysis-waveform")]
 use crate::producer::{AnalysisProducer, ring};
-#[cfg(all(feature = "analysis-beat", not(feature = "analysis-waveform")))]
-use crate::test_pools::pools;
 #[cfg(feature = "analysis-waveform")]
 use crate::{AnalysisParams, WaveformAnalyzer};
-#[cfg(not(feature = "analysis-waveform"))]
 use crate::{AnalysisProgress, TrackAnalysis};
-#[cfg(feature = "analysis-waveform")]
-use crate::{
-    AnalysisProgress, TrackAnalysis,
-    test_pools::{TestPools, pools},
-};
 
 pub(super) struct NodeHarness<B, S>
 where
@@ -154,7 +149,7 @@ where
 
 #[cfg(feature = "analysis-waveform")]
 fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
-    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(consts::NODE_FOLD)
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(crate::consts::NODE_FOLD)
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -165,7 +160,7 @@ fn beat_waveform(
 ) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
     let config = BeatAnalysisConfig::builder()
         .resampler_backend(NoResamplerBackend)
-        .target_rate(consts::FIXTURES_SR)
+        .target_rate(fixtures::consts::FIXTURES_SR)
         .detector_min_window_seconds(min_window_seconds)
         .detector_window_seconds(window_seconds)
         .detector_overlap_seconds(0)
@@ -173,7 +168,7 @@ fn beat_waveform(
     AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
         .with_beat_config(config)
         .with_beat_detector(detector, GridParams::default())
-        .with_waveform(consts::NODE_FOLD)
+        .with_waveform(crate::consts::NODE_FOLD)
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -198,7 +193,7 @@ fn enqueue(
         demand: AnalysisDemand::ALL,
         token: token.into(),
         revision: 0,
-        rate: super::fixtures::spec().sample_rate,
+        rate: fixtures::spec().sample_rate,
         resume: None,
         report: None,
     })
@@ -246,8 +241,8 @@ fn pending_reader_yields_one_scheduler_tick(analysis_pcm: &'static [f32]) {
         demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
-        rate: super::fixtures::spec().sample_rate,
-        ingest: super::fixtures::idle_ingest(),
+        rate: fixtures::spec().sample_rate,
+        ingest: fixtures::idle_ingest(),
         reader: Box::new(FakeReader::chunked_with_pending(
             builder.pools(),
             sine(analysis_pcm, 1024),
@@ -276,8 +271,8 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender(analysis_pcm:
         demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
-        rate: super::fixtures::spec().sample_rate,
-        ingest: super::fixtures::idle_ingest(),
+        rate: fixtures::spec().sample_rate,
+        ingest: fixtures::idle_ingest(),
         reader: Box::new(FakeReader::chunked(
             builder.pools(),
             sine(analysis_pcm, 1024),
@@ -301,7 +296,7 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender(analysis_pcm:
 
 #[cfg(feature = "analysis-waveform")]
 fn offered(analysis_pcm: &'static [f32], ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
-    let rate = super::fixtures::spec().sample_rate;
+    let rate = fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
@@ -323,7 +318,7 @@ fn offered(analysis_pcm: &'static [f32], ranges: &[(u64, usize)]) -> Option<Trac
 
     for (at, frames) in ranges {
         assert_eq!(
-            producer.offer(sine(analysis_pcm, *frames), &super::fixtures::info(*at)),
+            producer.offer(sine(analysis_pcm, *frames), &fixtures::info(*at)),
             Ok(()),
             "the transport takes a range on its own axis"
         );
@@ -356,7 +351,7 @@ fn offered_ranges_land_where_they_were_offered(analysis_pcm: &'static [f32]) {
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32]) {
-    let rate = super::fixtures::spec().sample_rate;
+    let rate = fixtures::spec().sample_rate;
     let open = |token: &str| {
         let (jobs, receiver) = mpsc::channel();
         let (tx, results) = watch::channel(None);
@@ -386,7 +381,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
     let (_idle_jobs, mut idle_node, idle_results, _idle_producer) = open("track-b");
 
     assert_eq!(
-        producer.offer(sine(analysis_pcm, 1024), &super::fixtures::info(0)),
+        producer.offer(sine(analysis_pcm, 1024), &fixtures::info(0)),
         Ok(())
     );
     for _ in 0..64 {
@@ -410,9 +405,9 @@ fn an_offer_reaches_only_the_pass_its_handle_names(analysis_pcm: &'static [f32])
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f32]) {
-    let rate = super::fixtures::spec().sample_rate;
+    let rate = fixtures::spec().sample_rate;
     let foreign = AudioSpec {
-        channels: consts::CH,
+        channels: fixtures::consts::CH,
         sample_rate: NonZeroU32::new(48_000).expect("test rate is non-zero"),
     };
     let (jobs, receiver) = mpsc::channel();
@@ -435,7 +430,7 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f3
     let mut node = NodeHarness::new(waveform_only(), receiver);
 
     assert_eq!(
-        producer.offer(sine(analysis_pcm, 1024), &super::fixtures::info(0)),
+        producer.offer(sine(analysis_pcm, 1024), &fixtures::info(0)),
         Ok(())
     );
     assert_eq!(
@@ -443,7 +438,7 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone(analysis_pcm: &'static [f3
             sine(analysis_pcm, 1024),
             &AudioChunkInfo {
                 spec: foreign,
-                ..super::fixtures::info(4096)
+                ..fixtures::info(4096)
             }
         ),
         Err(AudioObserveError::UnsupportedSampleRate {
@@ -471,7 +466,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
     const BLOCKS: u64 = 90;
     const STALLS: usize = 400;
 
-    let rate = super::fixtures::spec().sample_rate;
+    let rate = fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, mut results) = watch::channel(None);
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
@@ -504,7 +499,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes(analysis_pcm: &'static [f32]) {
 
     for block in 0..BLOCKS {
         assert_eq!(
-            producer.offer(pcm, &super::fixtures::info(block * BLOCK)),
+            producer.offer(pcm, &fixtures::info(block * BLOCK)),
             Ok(()),
             "the worker keeps the transport drained"
         );
@@ -572,7 +567,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
     const PAST: u64 = 40;
     const STALLS: usize = 200;
 
-    let rate = super::fixtures::spec().sample_rate;
+    let rate = fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
@@ -595,7 +590,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
 
     let mut at = 0;
     let refused = loop {
-        match producer.offer(pcm, &super::fixtures::info(at)) {
+        match producer.offer(pcm, &fixtures::info(at)) {
             Ok(()) => at = at.saturating_add(BLOCK),
             Err(AudioObserveError::Full) => break at..at + BLOCK,
             Err(other) => panic!("a range on the pass axis is taken or refused, got {other:?}"),
@@ -607,7 +602,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
             let _ = node.tick();
         }
         assert_eq!(
-            producer.offer(pcm, &super::fixtures::info(refused.start + block * BLOCK)),
+            producer.offer(pcm, &fixtures::info(refused.start + block * BLOCK)),
             Ok(()),
             "a drained transport takes the next range"
         );
@@ -617,7 +612,7 @@ fn refusal_run(analysis_pcm: &'static [f32], reoffer: bool) -> (TrackAnalysis, R
             let _ = node.tick();
         }
         assert_eq!(
-            producer.offer(pcm, &super::fixtures::info(refused.start)),
+            producer.offer(pcm, &fixtures::info(refused.start)),
             Ok(()),
             "the transport has room for the range it refused"
         );
@@ -683,7 +678,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'stati
     // The listener starts halfway in, then seeks back to the opening.
     let order: Vec<u64> = (BLOCKS / 2..BLOCKS).chain(0..BLOCKS / 2).collect();
 
-    let rate = super::fixtures::spec().sample_rate;
+    let rate = fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, mut results) = watch::channel(None);
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
@@ -707,7 +702,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union(analysis_pcm: &'stati
     let mut published: Vec<TrackAnalysis> = Vec::new();
     for block in &order {
         assert_eq!(
-            producer.offer(pcm, &super::fixtures::info(block * BLOCK)),
+            producer.offer(pcm, &fixtures::info(block * BLOCK)),
             Ok(()),
             "the worker keeps the transport drained"
         );
@@ -796,8 +791,8 @@ where
         demand: AnalysisDemand::ALL,
         token: "test-track".into(),
         revision: 0,
-        rate: super::fixtures::spec().sample_rate,
-        ingest: super::fixtures::idle_ingest(),
+        rate: fixtures::spec().sample_rate,
+        ingest: fixtures::idle_ingest(),
         cancel: cancel.clone(),
         resume: None,
         report: None,
@@ -842,16 +837,23 @@ where
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 async fn matches_direct_waveform_analyzer_over_chunked_stream(analysis_pcm: &'static [f32]) {
-    let samples = sine(analysis_pcm, usize::try_from(consts::FIXTURES_SR).unwrap());
-    let frames = u64::try_from(samples.len() / usize::from(consts::CH)).unwrap_or(0);
+    let samples = sine(
+        analysis_pcm,
+        usize::try_from(fixtures::consts::FIXTURES_SR).unwrap(),
+    );
+    let frames = u64::try_from(samples.len() / usize::from(fixtures::consts::CH)).unwrap_or(0);
     let builder = waveform_only();
     let pools = builder.pools().clone();
-    let mut direct = WaveformAnalyzer::new(consts::FIXTURES_SR, AnalysisParams::default(), &pools)
-        .expect("waveform buffers fit the test region");
+    let mut direct = WaveformAnalyzer::new(
+        fixtures::consts::FIXTURES_SR,
+        AnalysisParams::default(),
+        &pools,
+    )
+    .expect("waveform buffers fit the test region");
     direct
-        .push(&pools, samples, usize::from(consts::CH), 0)
+        .push(&pools, samples, usize::from(fixtures::consts::CH), 0)
         .expect("waveform buffers fit the test region");
-    let want = direct.snapshot(consts::NODE_FOLD, Some(frames));
+    let want = direct.snapshot(crate::consts::NODE_FOLD, Some(frames));
 
     let reader = Box::new(FakeReader::chunked(&pools, samples, 4));
     let out = stages(reader, builder, &CancelToken::root()).await;
@@ -925,8 +927,8 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
             })),
     )));
     let builder = beat_waveform(detector, 1, 1);
-    let rate = super::fixtures::spec().sample_rate;
-    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
+    let rate = fixtures::spec().sample_rate;
+    let frames = usize::try_from(fixtures::consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "same-track".into());
@@ -958,12 +960,9 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
         "one source second reaches the detector"
     );
 
-    let offered_at = 2 * u64::from(consts::FIXTURES_SR);
+    let offered_at = 2 * u64::from(fixtures::consts::FIXTURES_SR);
     assert_eq!(
-        producer.offer(
-            sine(analysis_pcm, frames),
-            &super::fixtures::info(offered_at)
-        ),
+        producer.offer(sine(analysis_pcm, frames), &fixtures::info(offered_at)),
         Ok(())
     );
     assert_eq!(
@@ -976,17 +975,17 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress(analysis_pcm: &'static
         .clone()
         .expect("progress is published while detection is blocked");
     assert!(
-        snapshot
-            .analysis()
-            .coverage()
-            .covers(&(u64::from(consts::FIXTURES_SR)..2 * u64::from(consts::FIXTURES_SR))),
+        snapshot.analysis().coverage().covers(
+            &(u64::from(fixtures::consts::FIXTURES_SR)
+                ..2 * u64::from(fixtures::consts::FIXTURES_SR))
+        ),
         "the decoder reached its second chunk"
     );
     assert!(
         snapshot
             .analysis()
             .coverage()
-            .covers(&(offered_at..offered_at + u64::from(consts::FIXTURES_SR))),
+            .covers(&(offered_at..offered_at + u64::from(fixtures::consts::FIXTURES_SR))),
         "the playback ring was drained"
     );
 
@@ -1007,11 +1006,11 @@ fn saturation_retries_the_exact_detection_payload_once(analysis_pcm: &'static [f
             })),
     )));
     let builder = beat_waveform(detector, 1, 1);
-    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
+    let frames = usize::try_from(fixtures::consts::FIXTURES_SR).expect("test rate fits usize");
     let pcm = sine(analysis_pcm, frames);
     let expected: Vec<f32> = pcm
-        .chunks_exact(usize::from(consts::CH))
-        .map(|frame| frame.iter().sum::<f32>() / f32::from(consts::CH))
+        .chunks_exact(usize::from(fixtures::consts::CH))
+        .map(|frame| frame.iter().sum::<f32>() / f32::from(fixtures::consts::CH))
         .collect();
     let (jobs, receiver) = mpsc::channel();
     let results = enqueue(
@@ -1019,7 +1018,7 @@ fn saturation_retries_the_exact_detection_payload_once(analysis_pcm: &'static [f
         "saturated-track",
         Box::new(FakeReader::chunked(builder.pools(), pcm, 1)),
         CancelToken::root(),
-        super::fixtures::idle_ingest(),
+        fixtures::idle_ingest(),
     );
     let mut node = NodeHarness::with_settings(
         builder,
@@ -1096,7 +1095,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass(analysis_pc
             })),
     )));
     let builder = beat_waveform(detector, 1, 1);
-    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
+    let frames = usize::try_from(fixtures::consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let cancel_a = CancelToken::root();
     let mut results_a = enqueue(
@@ -1108,7 +1107,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass(analysis_pc
             1,
         )),
         cancel_a.clone(),
-        super::fixtures::idle_ingest(),
+        fixtures::idle_ingest(),
     );
     let mut results_b = enqueue(
         &jobs,
@@ -1119,7 +1118,7 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass(analysis_pc
             1,
         )),
         CancelToken::root(),
-        super::fixtures::idle_ingest(),
+        fixtures::idle_ingest(),
     );
     let mut node = NodeHarness::new(builder, receiver);
 
@@ -1166,11 +1165,11 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass(analysis_pc
         .artifact()
         .beats();
     assert!(
-        beats.contains(&(3 * u64::from(consts::FIXTURES_SR) / 4)),
+        beats.contains(&(3 * u64::from(fixtures::consts::FIXTURES_SR) / 4)),
         "B's marker is retained: {beats:?}"
     );
     assert!(
-        !beats.contains(&(u64::from(consts::FIXTURES_SR) / 4)),
+        !beats.contains(&(u64::from(fixtures::consts::FIXTURES_SR) / 4)),
         "A's late marker cannot enter B: {beats:?}"
     );
 }
@@ -1191,7 +1190,7 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
             })),
     )));
     let builder = beat_waveform(detector, 2, 2);
-    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
+    let frames = usize::try_from(fixtures::consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let mut results = enqueue(
         &jobs,
@@ -1202,7 +1201,7 @@ fn final_publication_waits_for_trailing_detection(analysis_pcm: &'static [f32]) 
             1,
         )),
         CancelToken::root(),
-        super::fixtures::idle_ingest(),
+        fixtures::idle_ingest(),
     );
     let mut node = NodeHarness::new(builder, receiver);
 
@@ -1262,7 +1261,7 @@ fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) 
             })),
     )));
     let builder = beat_waveform(detector, 2, 2);
-    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
+    let frames = usize::try_from(fixtures::consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let cancel = CancelToken::root();
     let (tx, mut results) = watch::channel(None);
@@ -1277,10 +1276,10 @@ fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) 
             1,
         )),
         cancel: cancel.clone(),
-        ingest: super::fixtures::idle_ingest(),
+        ingest: fixtures::idle_ingest(),
         demand: AnalysisDemand::ALL,
         revision: 0,
-        rate: super::fixtures::spec().sample_rate,
+        rate: fixtures::spec().sample_rate,
         resume: None,
         report: Some(report),
     })
@@ -1338,8 +1337,8 @@ fn cancel_during_trailing_detection_never_settles(analysis_pcm: &'static [f32]) 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test(native, flash(false))]
 fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
-    let rate = super::fixtures::spec().sample_rate;
-    let frames = usize::try_from(consts::FIXTURES_SR).expect("test rate fits usize");
+    let rate = fixtures::spec().sample_rate;
+    let frames = usize::try_from(fixtures::consts::FIXTURES_SR).expect("test rate fits usize");
     let (jobs, receiver) = mpsc::channel();
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
     let mut producer = AnalysisProducer::new(writer, rate, "drain-track".into());
@@ -1362,7 +1361,7 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
         assert_eq!(
             producer.offer(
                 pcm,
-                &super::fixtures::info(block * u64::from(consts::FIXTURES_SR))
+                &fixtures::info(block * u64::from(fixtures::consts::FIXTURES_SR))
             ),
             Ok(())
         );
@@ -1376,7 +1375,7 @@ fn producer_drain_limit_bounds_one_tick(analysis_pcm: &'static [f32]) {
             .expect("each drained source second is published");
         assert_eq!(
             snapshot.analysis().coverage().iter().collect::<Vec<_>>(),
-            &[&(0..expected * u64::from(consts::FIXTURES_SR))],
+            &[&(0..expected * u64::from(fixtures::consts::FIXTURES_SR))],
             "one tick drains exactly one descriptor"
         );
     }
@@ -1404,7 +1403,7 @@ async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
         builder.pools(),
         sine(
             analysis_pcm,
-            17 * usize::try_from(consts::FIXTURES_SR).unwrap(),
+            17 * usize::try_from(fixtures::consts::FIXTURES_SR).unwrap(),
         ),
         3,
     ));
@@ -1455,7 +1454,7 @@ async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
     let last = out.last().expect("at least one publication");
     assert_eq!(
         last.extent(),
-        Some(u64::from(consts::FIXTURES_SR) * 17),
+        Some(u64::from(fixtures::consts::FIXTURES_SR) * 17),
         "end of stream pins the extent to what was covered"
     );
     let grid = last
@@ -1476,7 +1475,7 @@ async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
         .collect();
     gaps.sort_unstable();
     let bar_frames = gaps.get(gaps.len() / 2).copied().unwrap_or(0);
-    let bar_seconds = bar_frames.to_f64().unwrap_or(1.0) / f64::from(consts::FIXTURES_SR);
+    let bar_seconds = bar_frames.to_f64().unwrap_or(1.0) / f64::from(fixtures::consts::FIXTURES_SR);
     let bpm_from_marks = 4.0 * 60.0 / bar_seconds;
     assert!(
         (bpm_from_marks - grid.artifact().bpm()).abs() < 1e-6,
@@ -1485,7 +1484,7 @@ async fn beat_slot_fills_the_beat_grid(analysis_pcm: &'static [f32]) {
     );
     assert_eq!(
         grid.artifact().downbeats()[1],
-        u64::from(consts::FIXTURES_SR) * 2,
+        u64::from(fixtures::consts::FIXTURES_SR) * 2,
         "source frames"
     );
 }
@@ -1514,7 +1513,7 @@ async fn pending_is_tolerated_mid_stream(analysis_pcm: &'static [f32]) {
 ))]
 #[kithara::test]
 fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
-    let rate = super::fixtures::spec().sample_rate;
+    let rate = fixtures::spec().sample_rate;
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
     let (writer, ingest) = ring::open_for(&pools(), rate).expect("test ring fits the pools");
@@ -1535,7 +1534,7 @@ fn a_pass_with_no_detector_publishes_the_rest(analysis_pcm: &'static [f32]) {
     let mut node = NodeHarness::new(waveform_only().with_beat(), receiver);
 
     assert_eq!(
-        producer.offer(&sine(analysis_pcm, 1024), &super::fixtures::info(0)),
+        producer.offer(&sine(analysis_pcm, 1024), &fixtures::info(0)),
         Ok(())
     );
     for _ in 0..128 {

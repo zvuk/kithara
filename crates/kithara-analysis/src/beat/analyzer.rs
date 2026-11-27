@@ -545,19 +545,17 @@ mod tests {
         },
         unit_fixtures::clicks_120_20s,
     };
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
     use num_traits::cast::{AsPrimitive, ToPrimitive};
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
         super::detector::BeatPassError, BeatAnalyzer, Opens, normalize_marks, window_marks,
     };
-    use crate::{
-        BeatAnalysisConfig,
-        beat::BeatPassConfig,
-        consts,
-        test_pools::{TestPools, pools},
-    };
+    use crate::{BeatAnalysisConfig, beat::BeatPassConfig, consts};
 
     #[kithara::test(native, flash(false))]
     fn a_block_boundary_moves_a_mark_without_touching_its_confidence() {

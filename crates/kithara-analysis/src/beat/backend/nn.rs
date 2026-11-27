@@ -47,10 +47,10 @@ mod tests {
     use kithara_beat::BeatConfig;
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_fixtures::analysis_beat_fixtures::nn_tone;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{bufpool::pools, kithara};
 
     use super::super::{BeatDetectorKind, build_detector};
-    use crate::{BeatAnalysisConfig, test_pools::pools};
+    use crate::BeatAnalysisConfig;
 
     fn config(beat: BeatConfig) -> BeatAnalysisConfig<RubatoBackend> {
         BeatAnalysisConfig::builder()

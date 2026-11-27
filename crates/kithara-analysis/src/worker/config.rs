@@ -5,7 +5,32 @@ use kithara_platform::{CancelToken, time::Duration};
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{Priority, Worker};
 
-use crate::{analyzer::AnalyzerBuilder, consts};
+use crate::analyzer::AnalyzerBuilder;
+
+mod consts {
+    use super::{NonZeroU32, NonZeroUsize};
+
+    pub(super) const CAPACITY: NonZeroUsize = match NonZeroUsize::new(64) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+    pub(super) const CONFIG_CHUNK_SECONDS: NonZeroU32 = match NonZeroU32::new(16) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+    pub(super) const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+    pub(super) const PRODUCER_DRAIN_LIMIT: NonZeroUsize = match NonZeroUsize::new(8) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+    pub(super) const PUBLISH_SECONDS: NonZeroU32 = match NonZeroU32::new(5) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
+}
 
 /// Configuration for one analysis dispatcher and its per-pass tasks.
 #[derive(Config)]

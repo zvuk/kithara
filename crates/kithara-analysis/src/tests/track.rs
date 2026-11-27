@@ -8,9 +8,8 @@ use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_test_utils::bufpool::{Pools, sample_buffer};
 use num_traits::cast::ToPrimitive;
-
-use crate::test_pools::{Pools, sample_buffer};
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]

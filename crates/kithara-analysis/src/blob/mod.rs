@@ -4,6 +4,7 @@
 //! nothing about what it carries; this module holds only the `Blob`
 //! implementations for analysis artifacts.
 
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod progress;
 mod track;
 

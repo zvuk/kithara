@@ -26,8 +26,14 @@ impl<W: Write> Sink<W> {
                 outcome,
                 Ok(AnalysisOutcome::Complete(_) | AnalysisOutcome::Incomplete(_))
             );
-            let (extension, bytes) = match format {
-                OutputFormat::Json => ("json", encode::json(&track, &outcome)?),
+            let record = match format {
+                OutputFormat::Json => Some(("json", encode::json(&track, &outcome)?)),
+                OutputFormat::Binary => {
+                    encode::binary(&track, &outcome)?.map(|bytes| ("analysis", bytes))
+                }
+            };
+            let Some((extension, bytes)) = record else {
+                continue;
             };
             if let Some(directory) = &self.directory {
                 let mut temp = NamedTempFile::new_in(directory)?;

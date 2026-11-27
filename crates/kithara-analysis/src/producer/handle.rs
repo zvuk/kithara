@@ -90,13 +90,13 @@ mod tests {
         analysis_beat_fixtures::{producer_mono, producer_stereo, producer_unity},
         analysis_fixtures::{analysis_silence, waveform_mix},
     };
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{pools, sample_buffer},
+        kithara,
+    };
 
     use super::AnalysisProducer;
-    use crate::{
-        producer::ring,
-        test_pools::{pools, sample_buffer},
-    };
+    use crate::producer::ring;
 
     fn spec(rate: u32, channels: u16) -> AudioSpec {
         AudioSpec {

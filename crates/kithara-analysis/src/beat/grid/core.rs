@@ -261,10 +261,10 @@ fn bar_to_bpm(bar_seconds: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{bufpool::pools, kithara};
 
     use super::*;
-    use crate::{consts, test_pools::pools};
+    use crate::consts;
 
     fn marks(times: Vec<f32>) -> Vec<BeatMark> {
         times.into_iter().map(|at| BeatMark::new(at, 0.9)).collect()

@@ -11,10 +11,19 @@ use rangemap::RangeSet;
 use super::{AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate};
 use crate::{
     AnalysisFingerprint, AnalysisProgress, KeyEstimate, Mode, MusicalKey, PitchClass,
-    TrackAnalysis, blob::Writer, consts, progress::AnalysisResume,
+    TrackAnalysis, blob::Writer, progress::AnalysisResume,
 };
 #[cfg(feature = "analysis-waveform")]
-use crate::{AnalyzerBuilder, Bucket, Waveform, test_pools::pools};
+use crate::{AnalyzerBuilder, Bucket, Waveform};
+
+mod consts {
+    pub(super) use crate::archive::file::consts::{
+        FINGERPRINT_MAX, HEADER_FIELDS_LEN, HEADER_LEN, INDEX_ENTRY_LEN,
+    };
+
+    pub(super) const ARCHIVE_EXTENT: u64 = 64;
+    pub(super) const ARCHIVE_CHUNK_FRAMES: u64 = 16;
+}
 
 fn rate(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or(NonZeroU32::MIN)
@@ -158,10 +167,11 @@ fn create_bytes(analysis: TrackAnalysis) -> Vec<u8> {
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
 fn effective_application_fingerprint_fits_the_fixed_header() {
-    let fingerprint = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
-        .with_beat()
-        .with_waveform(NonZeroU32::MIN)
-        .fingerprint();
+    let fingerprint =
+        AnalyzerBuilder::<RubatoBackend, _>::new(kithara_test_utils::bufpool::pools())
+            .with_beat()
+            .with_waveform(NonZeroU32::MIN)
+            .fingerprint();
     assert!(
         fingerprint.beat().is_some_and(|value| value.len() > 256),
         "fixture must exceed the former header limit"
@@ -601,7 +611,7 @@ fn parser_rejects_index_coverage_disagreement() {
 #[kithara::test]
 fn a_stored_waveform_is_served_only_for_its_requested_factor() {
     let fingerprint = |fold| {
-        AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
+        AnalyzerBuilder::<NoResamplerBackend, _>::new(kithara_test_utils::bufpool::pools())
             .with_waveform(fold)
             .fingerprint()
     };
