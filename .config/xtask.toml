@@ -1113,9 +1113,7 @@ default_backend = "none"
 default_features = [
   "kithara-ui/gpu",
   "kithara-ui/masonry",
-  "kithara-ui/perf",
   "kithara-ui-gallery/masonry",
-  "kithara-ui-gallery/perf",
 ]
 undeclared_toggles = ["flash"]
 cargo.packages = ["kithara-ui", "kithara-ui-gallery"]

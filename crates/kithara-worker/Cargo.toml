@@ -17,7 +17,6 @@ features = []
 
 [features]
 mock = []
-perf = []
 usdt = ["kithara-test-utils/usdt"]
 
 [dependencies]

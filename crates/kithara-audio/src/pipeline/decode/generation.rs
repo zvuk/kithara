@@ -591,7 +591,7 @@ mod tests {
         )
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     #[case(None, 4, "an unnamed codec keeps the compensated trim")]
     #[case(
         Some(kithara_stream::AudioCodec::Flac),
@@ -651,14 +651,14 @@ mod tests {
     /// `MediaOnly` trimmer removes nothing), yet those frames are not content:
     /// the seam origin counts them, and the four `quality_switch_continuity`
     /// integration tests fail by exactly this many frames if it stops.
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn origin_counts_codec_priming_the_media_only_trimmer_leaves_in_place() {
         let generation = priming_generation(spec(2, 44_100), GaplessMode::MediaOnly);
 
         assert_eq!(generation.timeline_origin(GaplessMode::MediaOnly), 1_024);
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn seek_to_start_preserves_codec_priming_trim() {
         let pools = pools();
         let spec = spec(2, 44_100);
@@ -675,7 +675,7 @@ mod tests {
         assert_eq!(output.frames(), 1_024);
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn seek_into_content_does_not_reapply_codec_priming_trim() {
         let pools = pools();
         let spec = spec(2, 44_100);
@@ -699,7 +699,7 @@ mod tests {
         assert_eq!(output.frames(), 2_048);
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn staged_holdback_rejects_gap_mixed_spec_and_bad_metadata(decode_quarter: Vec<f32>) {
         let pools = pools();
         let active = spec(2, 44_100);
@@ -757,7 +757,7 @@ mod tests {
         assert!(bad_meta.staged.is_empty(), "bad metadata must be rejected");
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn staged_holdback_never_grows_past_prepared_capacity(decode_quarter: Vec<f32>) {
         let pools = pools();
         let spec = spec(1, 44_100);
@@ -839,7 +839,7 @@ mod tests {
         assert!(held.next().is_none());
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn prepare_holdback_reserves_from_staged_len_to_logical_limit(decode_quarter: Vec<f32>) {
         let pools = pools();
         let spec = spec(1, 44_100);
@@ -888,7 +888,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
     fn holdback_pumps_surplus_gapless_pending_without_decoder_input(decode_quarter: Vec<f32>) {
         const TRAILING_FRAMES: u64 = 10;
@@ -951,7 +951,7 @@ mod tests {
         assert_eq!(generation.staged.capacity(), capacity);
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn checked_holdback_scans_the_preexisting_span_once(decode_quarter: Vec<f32>) {
         const JOIN_FRAMES: u64 = 7_680;
 
@@ -1008,7 +1008,7 @@ mod tests {
         );
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn deferred_seek_only_completes_the_current_epoch() {
         let mut generation = generation(spec(2, 44_100));
         let first = Duration::from_secs(1);
@@ -1045,7 +1045,7 @@ mod tests {
         assert!(!generation.has_output());
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn seek_reopens_a_finished_generation() {
         let spec = spec(2, 44_100);
         let mut generation = generation(spec);
@@ -1131,7 +1131,7 @@ mod tests {
         fn update_byte_len(&self, _len: u64) {}
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn deferred_incoming_seek_prepares_output_before_consuming_a_chunk() {
         use crate::pipeline::decode::{
             transition::{IncomingPrime, OutgoingFrontier},
@@ -1189,7 +1189,7 @@ mod tests {
         assert!(generation.is_finished());
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     #[case::unknown_raw_zero(None, 0, 0, 0, 0, 1_024)]
     #[case::observed_shifted_pcm(Some(10_000_000), 0, 0, 0, 15, 1_024)]
     #[case::known_nonzero(Some(700_000_000), 700_000_000, 1_050, 0, 1_050, 1_024)]

@@ -34,7 +34,6 @@ tls-native = ["reqwest?/native-tls"]
 mock = ["dep:unimock"]
 flash = ["kithara-platform/flash"]
 no-block = ["kithara-platform/no-block"]
-perf = []
 
 [dependencies]
 kithara-bufpool = { workspace = true }

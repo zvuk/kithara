@@ -65,8 +65,7 @@ let activity_writer = audio.take_activity_writer();
 - `resample-rubato` (default), `resample-glide` — sample-rate converters.
 - `client-reqwest` (default), `client-wreq`, `tls-rustls` (default),
   `tls-native` — HTTP and TLS, forwarded to network crates.
-- `mock`, `usdt`, `perf`, `memprof` — test mocks, USDT probes, `hotpath`
-  timing, allocation tracking for profiling examples.
+- `mock`, `usdt` — test mocks and USDT probes.
 
 ## Integration
 

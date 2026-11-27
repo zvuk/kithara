@@ -304,9 +304,7 @@ fn copy_decoded(
     }
 
     out.ensure_len(num_samples)?;
-    ({
-        decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
-    });
+    decoded.copy_to_slice_interleaved(&mut out[..num_samples]);
     out.truncate(num_samples);
     let frames = u32::try_from(decoded.frames()).unwrap_or(u32::MAX);
     out.truncate(usize::try_from(frames)? * usize::from(spec.channels));
@@ -508,6 +506,7 @@ const fn map_codec(codec: AudioCodec) -> DecodeResult<(AudioCodecId, Option<Code
 #[cfg(test)]
 mod tests {
     use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
 
     use super::SymphoniaCodec;
     use crate::{
@@ -542,7 +541,7 @@ mod tests {
     /// A zero sample rate in `TrackInfo` must be rejected with
     /// `DecodeError::InvalidSampleRate` instead of silently building a
     /// `AudioSpec { sample_rate: 0 }`.
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn open_with_config_zero_rate_returns_invalid_sample_rate() {
         match SymphoniaCodec::open_with_config(&zero_rate_track(), &SymphoniaConfig::default()) {
             Err(DecodeError::InvalidSampleRate { .. }) => {}
@@ -554,7 +553,7 @@ mod tests {
     /// An HE-AAC track whose media rate is the 24 kHz core declares its trim
     /// in core frames; the codec decodes SBR to 48 kHz and trims output frames.
     #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn declared_trim_is_scaled_from_the_media_rate_to_the_output_rate() {
         let track = TrackInfo {
             codec: AudioCodec::AacHe,
@@ -578,7 +577,7 @@ mod tests {
     }
 
     #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn declared_trim_follows_implicit_sbr_pcm_geometry_across_reset() {
         use kithara_test_fixtures::assets::he_aac_v1;
 
@@ -661,7 +660,7 @@ mod tests {
         }
     }
 
-    #[kithara_test_macros::test]
+    #[kithara::test]
     fn symphonia_priming_warms_aac_and_defaults_elsewhere() {
         let codec = SymphoniaCodec::open_with_config(&mp3_track(), &SymphoniaConfig::default())
             .expect("BUG: MP3 codec open");

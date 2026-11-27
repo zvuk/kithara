@@ -10,7 +10,6 @@ keywords = ["buffer", "pool", "audio", "performance", "sharded"]
 categories = ["memory-management", "concurrency"]
 
 [features]
-perf = []
 flash = ["kithara-platform/flash"]
 no-block = ["kithara-platform/no-block"]
 

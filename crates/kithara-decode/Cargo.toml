@@ -19,7 +19,6 @@ ignored = ["unimock"]
 # and enable just the platform feature; consumers explicitly avoiding
 # libfdk-aac (LGPL + patent constraints) keep `["symphonia"]` only.
 default = ["symphonia", "fdk-aac", "resample-rubato", "client-reqwest", "tls-rustls"]
-perf = []
 apple = [
     "dep:core-foundation",
     "dep:core-foundation-sys",

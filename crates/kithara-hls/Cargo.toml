@@ -13,7 +13,6 @@ categories = ["multimedia::audio", "network-programming"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-perf = ["kithara-net/perf"]
 usdt = ["kithara-test-utils/usdt"]
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 # HTTP backend forwarding to every kithara-net-reaching dep.

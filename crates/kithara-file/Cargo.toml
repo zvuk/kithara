@@ -16,7 +16,6 @@ ignored = ["serde"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-perf = ["kithara-net/perf"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-net/client-reqwest",

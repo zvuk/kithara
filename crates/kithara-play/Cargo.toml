@@ -71,7 +71,6 @@ usdt = ["kithara-effects/usdt", "kithara-render/usdt", "kithara-test-utils/usdt"
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
 mock = ["kithara-audio/mock", "kithara-render/mock", "kithara-stream/mock"]
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
-perf = ["kithara-audio/perf", "kithara-decode/perf", "kithara-render/perf", "kithara-warp/perf"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }

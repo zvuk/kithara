@@ -23,9 +23,6 @@ client-reqwest = ["kithara-stream/client-reqwest", "kithara-abr/client-reqwest",
 client-wreq = ["kithara-stream/client-wreq", "kithara-abr/client-wreq", "kithara-decode/client-wreq"]
 tls-rustls = ["kithara-stream/tls-rustls", "kithara-abr/tls-rustls", "kithara-decode/tls-rustls"]
 tls-native = ["kithara-stream/tls-native", "kithara-abr/tls-native", "kithara-decode/tls-native"]
-perf = []
-# Enable memory profiling for examples (includes allocation tracking, adds overhead)
-memprof = []
 # Enable Apple AudioToolbox hardware decoder (macOS/iOS).
 apple = ["kithara-decode/apple"]
 # Enable Apple AudioToolbox fused decode+SRC, used by the Apple device FFI set.

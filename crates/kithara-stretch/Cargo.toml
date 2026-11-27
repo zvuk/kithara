@@ -16,7 +16,6 @@ ignored = ["serde"]
 
 [features]
 default = ["stretch-signalsmith"]
-perf = []
 stretch-signalsmith = ["dep:signalsmith-stretch", "dep:kithara-resampler"]
 stretch-bungee = ["dep:bungee-sys", "dep:kithara-resampler"]
 stretch-glide = ["dep:kithara-resampler"]

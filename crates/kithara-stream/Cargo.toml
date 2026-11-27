@@ -14,7 +14,6 @@ ignored = ["unimock"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-perf = []
 usdt = ["kithara-test-utils/usdt"]
 mock = ["dep:unimock", "kithara-test-utils/mock"]
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
