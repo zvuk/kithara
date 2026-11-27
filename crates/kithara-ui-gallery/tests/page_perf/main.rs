@@ -7,9 +7,8 @@ mod retained;
 
 use std::{
     borrow::Cow,
-    cell::{OnceCell, RefCell},
     rc::Rc,
-    sync::LazyLock,
+    sync::{LazyLock, Mutex},
 };
 
 use criterion::{BenchmarkId, Criterion};
@@ -172,7 +171,7 @@ fn measure(
     page: &'static Page,
     run: Run,
     expected: Natives,
-    gpu: Rc<RefCell<Gpu>>,
+    gpu: &'static Mutex<Gpu>,
     fenced: bool,
 ) -> Outcome<'static> {
     /// Frames discarded before measuring. The first carries the mount, the layout,
@@ -402,9 +401,7 @@ fn the_page_table_is_pinned_to_the_gallery() {
 fn gallery_case_count() -> usize {
     consts::PAGES
         .iter()
-        .map(|page| {
-            usize::from(Vec::<Run>::from(page.program).len()) * 2 * if page.fenced { 2 } else { 1 }
-        })
+        .map(|page| Vec::<Run>::from(page.program).len() * 2 * if page.fenced { 2 } else { 1 })
         .sum()
 }
 
@@ -489,36 +486,41 @@ impl GalleryWork {
     }
 }
 
-thread_local! {
-    static ICED_GPU: OnceCell<Rc<RefCell<Gpu>>> = OnceCell::new();
-    static VELLO_GPU: OnceCell<Rc<RefCell<Gpu>>> = OnceCell::new();
-}
+static GPUS: [LazyLock<Mutex<Gpu>>; 2] = [
+    LazyLock::new(|| {
+        Mutex::new(
+            Gpu::try_from(Host::Immediate)
+                .unwrap_or_else(|error| panic!("no host to measure on: {error}")),
+        )
+    }),
+    LazyLock::new(|| {
+        Mutex::new(
+            Gpu::try_from(Host::Retained)
+                .unwrap_or_else(|error| panic!("no host to measure on: {error}")),
+        )
+    }),
+];
 
-fn shared_gpu(host: Host) -> Rc<RefCell<Gpu>> {
-    let cell = match host {
-        Host::Immediate => &ICED_GPU,
-        Host::Retained => &VELLO_GPU,
-    };
-    cell.with(|gpu| {
-        Rc::clone(gpu.get_or_init(|| {
-            Rc::new(RefCell::new(Gpu::try_from(host).unwrap_or_else(|error| {
-                panic!("no host to measure on: {error}")
-            })))
-        }))
-    })
+fn shared_gpu(host: Host) -> &'static Mutex<Gpu> {
+    match host {
+        Host::Immediate => &GPUS[0],
+        Host::Retained => &GPUS[1],
+    }
 }
 
 fn page_driver(
     fixture: Rc<Fixture>,
     page: &'static Page,
     run: Run,
-    gpu: Rc<RefCell<Gpu>>,
+    gpu: &'static Mutex<Gpu>,
 ) -> Box<dyn PageHost> {
     let app = PageApp::new(page, run);
-    let mut borrowed = gpu.borrow_mut();
+    let mut borrowed = gpu
+        .lock()
+        .unwrap_or_else(|error| panic!("gallery GPU lock poisoned: {error}"));
     match &mut *borrowed {
         Gpu::Immediate(gpu) => Box::new(Immediate::new(fixture.compiled(page), page, app, gpu)),
-        Gpu::Retained(_) => Box::new(Retained::new(fixture, page, app, Rc::clone(&gpu))),
+        Gpu::Retained(_) => Box::new(Retained::new(fixture, page, app, gpu)),
     }
 }
 

@@ -353,5 +353,9 @@ pub(crate) fn painted(pixels: &[u8]) -> bool {
     let Some(first) = pixels.get(..4) else {
         return false;
     };
-    pixels.chunks_exact(4).any(|pixel| pixel != first)
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|pixel| pixel.as_slice() != first)
 }
