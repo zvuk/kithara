@@ -640,6 +640,44 @@ mod tests {
         assert_eq!(&buf[..n], b"data");
     }
 
+    #[kithara::test(native, flash(false), timeout(Duration::from_secs(5)))]
+    fn final_checkpoint_includes_a_writer_that_outlives_the_store() {
+        let dir = tempdir().unwrap();
+        let key = ResourceKey::relative(consts::BUILDER_ROOT, "seg.m4s");
+        let hub = FlushHub::new(
+            CancelScope::new(None).token(),
+            FlushPolicy {
+                debounce: Duration::from_secs(60),
+                force_every_n_ops: NonZeroUsize::new(8).unwrap(),
+            },
+        );
+        let writer = {
+            let store = AssetStore::builder(crate::test_pools::pools())
+                .backend(StorageBackend::Disk {
+                    root: dir.path().into(),
+                })
+                .flush_hub(Arc::clone(&hub))
+                .build();
+            let writer = pending(store.acquire_resource(&key, None).unwrap());
+            writer.write_at(0, b"data").unwrap();
+            writer
+        };
+
+        let reader = writer.commit(Some(4)).unwrap();
+        drop(reader);
+        drop(hub);
+
+        let reopened = crate::index::LruIndex::with_persist_at(
+            dir.path().join("_index").join("lru.bin"),
+            crate::test_pools::byte_buffer(&crate::test_pools::pools()),
+        );
+        assert_eq!(
+            reopened.total_bytes_best_effort(),
+            4,
+            "the final owner must checkpoint after the last surviving resource releases"
+        );
+    }
+
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_capabilities_lack_evict_and_lease() {
         let store = AssetStore::builder(crate::test_pools::pools())
