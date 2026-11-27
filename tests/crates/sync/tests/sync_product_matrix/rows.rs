@@ -29,9 +29,7 @@ async fn provider_tempo_controls_measure_without_sync(
         if matches!(prepared.provider(), Provider::HlsMp3(_)) && deck % 2 == 1 {
             continue;
         }
-        let ArtifactSource::Value(mut grid) = prepared.beat_grid(deck) else {
-            panic!("control has a known fixture grid");
-        };
+        let mut grid = prepared.beat_grid(deck);
         let native_bpm = grid.as_raw().bpm;
         #[cfg(not(target_os = "android"))]
         let mut reference = prepared.provider().control_reference(deck).map(|asset| {

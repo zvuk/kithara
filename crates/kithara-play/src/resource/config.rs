@@ -3,7 +3,6 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
 use kithara_audio::{AudioConfigPatch, AudioDecoderConfig};
-use kithara_beat::BeatGridModel;
 use kithara_bufpool::HasPool;
 use kithara_config::Config;
 use kithara_decode::TrackMetadata;
@@ -11,15 +10,14 @@ use kithara_download::Downloader;
 use kithara_events::EventBus;
 use kithara_file::FileConfigPatch;
 use kithara_hls::{HlsConfigPatch, KeyOptions};
-use kithara_key::MusicalKey;
 use kithara_net::Headers;
 use kithara_platform::CancelToken;
-use kithara_waveform::Waveform;
 use url::Url;
 
-use super::{ArtifactSource, ResourceSrc, resampler::PlaybackResamplerBackend};
+use super::{ArtifactRequest, ResourceSrc, resampler::PlaybackResamplerBackend};
 
-/// Source and decoder inputs, artifacts and per-track buffering preferences.
+/// Source and decoder inputs, artifact requests and per-track buffering
+/// preferences.
 #[derive(Config)]
 #[config(construction, builder(on(String, into), start_fn = for_src))]
 #[non_exhaustive]
@@ -76,12 +74,10 @@ where
     /// audio, which never waits for it.
     #[config(skip = "read as the track's cover artifact")]
     pub(crate) artwork: Option<ResourceSrc>,
-    /// A beat grid this track already has, as a structure the caller holds or
-    /// a source its bytes are read from. Analysis fills in only what no
-    /// prepared artifact covers, so a track opened with a grid here is never
-    /// re-analysed for one.
-    #[config(skip = "transferred to the resource artifact source")]
-    pub(crate) beat_grid: Option<ArtifactSource<BeatGridModel>>,
+    /// Where this track's analysis document is read from and the headers its
+    /// download sends. The audio's headers never go with it.
+    #[config(skip = "read as the track's analysis document")]
+    pub(crate) analysis: Option<ArtifactRequest>,
     /// Unified event bus for streaming, decode, and audio events.
     #[config(skip = "transferred to the event bus", builder(name = events))]
     pub(crate) bus: Option<EventBus>,
@@ -108,18 +104,10 @@ where
     /// Base URL for resolving relative HLS playlist/segment URLs.
     #[config(skip = "transferred to HLS URL resolution")]
     pub(crate) hls_base_url: Option<Url>,
-    /// A musical key this track already has, on the same terms as
-    /// [`Self::beat_grid`].
-    #[config(skip = "transferred to the resource artifact source")]
-    pub(crate) key: Option<ArtifactSource<MusicalKey>>,
     /// Desired decoded sample rate. Playback preparation binds it to the
     /// session's output rate; direct readers can request it independently.
     #[config(skip = "transferred to the audio host-rate owner")]
     pub(crate) host_sample_rate: Option<NonZeroU32>,
-    /// A waveform this track already has, on the same terms as
-    /// [`Self::beat_grid`].
-    #[config(skip = "transferred to the resource artifact source")]
-    pub(crate) waveform: Option<ArtifactSource<Waveform>>,
     /// Final rendered chunks required before the lane reports readiness.
     /// An unset value uses the lane configuration's default.
     #[config(skip = "transferred to the render lane's preload quota")]

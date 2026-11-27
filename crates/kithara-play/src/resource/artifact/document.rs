@@ -1,6 +1,4 @@
-use kithara_beat::{BeatGridModel, RawBeatGrid};
-use kithara_key::MusicalKey;
-use kithara_waveform::Waveform;
+use kithara_analysis::TrackAnalysis;
 
 /// A prepared artifact read back from the bytes of its own document.
 ///
@@ -20,25 +18,10 @@ pub trait ArtifactDocument: Sized {
     fn decode(bytes: Vec<u8>) -> Result<Self, String>;
 }
 
-impl ArtifactDocument for BeatGridModel {
-    const KIND: &'static str = "beat grid";
-
-    fn decode(bytes: Vec<u8>) -> Result<Self, String> {
-        let raw: RawBeatGrid = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-        Self::try_from(raw).map_err(|error| error.to_string())
-    }
-}
-
-impl ArtifactDocument for MusicalKey {
-    const KIND: &'static str = "key";
-
-    fn decode(bytes: Vec<u8>) -> Result<Self, String> {
-        serde_json::from_slice(&bytes).map_err(|error| error.to_string())
-    }
-}
-
-impl ArtifactDocument for Waveform {
-    const KIND: &'static str = "waveform";
+/// A track's analysis document: the snapshot an analysis server wrote, read
+/// as this build reads its own analysis snapshots.
+impl ArtifactDocument for TrackAnalysis {
+    const KIND: &'static str = "analysis";
 
     fn decode(bytes: Vec<u8>) -> Result<Self, String> {
         Self::try_from(bytes.as_slice()).map_err(|error| error.to_string())

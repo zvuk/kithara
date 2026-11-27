@@ -1,7 +1,7 @@
 use kithara::{
     link::{GridAnswer, LinkedHostCommand, SyncStatus},
     platform::{sync::Arc, time::Duration},
-    play::{ArtifactSource, ResourceConfig, ResourceSrc},
+    play::{ResourceConfig, ResourceSrc},
     queue::QueueEvent,
 };
 use kithara_integration_tests::{
@@ -94,9 +94,7 @@ async fn same_item_catalogue_replacement_keeps_the_linked_pcm_phase(
         if let HostTempo::Ramp(bpm) = tempo {
             rig.set_tempo(case, bpm, true).await;
         }
-        let ArtifactSource::Value(model) = rig.provider_grid(0) else {
-            panic!("authored beat grid");
-        };
+        let model = rig.provider_grid(0);
         let mut delivered = false;
         let mut applied = false;
         let mut frames = 5 * second;

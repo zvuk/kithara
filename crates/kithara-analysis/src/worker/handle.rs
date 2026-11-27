@@ -371,10 +371,10 @@ impl Drop for AnalysisWorker {
 mod tests {
     use kithara_platform::CancelToken;
     use kithara_resampler::NoResamplerBackend;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{bufpool::pools, kithara};
 
     use super::{AnalysisWorker, AnalysisWorkerConfig};
-    use crate::{AnalyzerBuilder, test_pools::pools};
+    use crate::AnalyzerBuilder;
 
     #[kithara::test(native, flash(false))]
     fn beat_without_a_detector_is_not_an_effective_analyzer() {

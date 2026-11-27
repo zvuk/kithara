@@ -60,11 +60,9 @@ impl Provider {
     }
 
     /// The beat grid deck `deck`'s track was rendered or analysed on.
-    pub(crate) fn beat_grid(self, deck: usize) -> ArtifactSource<BeatGridModel> {
+    pub(crate) fn beat_grid(self, deck: usize) -> Arc<BeatGridModel> {
         match self {
-            Self::Library(names) => {
-                ArtifactSource::Value(Arc::new(analysed_grid(names[deck % names.len()])))
-            }
+            Self::Library(names) => Arc::new(analysed_grid(names[deck % names.len()])),
             Self::Rhythm(names) => {
                 let name =
                     names[deck % names.len()].replace("rhythm_wav_", "rhythm_expected_analysis_");
@@ -77,19 +75,14 @@ impl Provider {
                     .expect("fixture score analysis");
                 let grid =
                     BeatGridModel::try_from(file.latest().analysis()).expect("fixture score grid");
-                ArtifactSource::Value(Arc::new(grid))
+                Arc::new(grid)
             }
             _ => synthetic_grid(),
         }
     }
 
     fn beat_grids(self) -> Vec<Arc<BeatGridModel>> {
-        let materialize = |deck| {
-            let ArtifactSource::Value(grid) = self.beat_grid(deck) else {
-                panic!("fixture grid must be materialized");
-            };
-            grid
-        };
+        let materialize = |deck| self.beat_grid(deck);
         match self {
             Self::Library(names) | Self::Rhythm(names) => {
                 let mut grids = BTreeMap::new();
@@ -128,9 +121,9 @@ impl PreparedSources {
         }
     }
 
-    pub(crate) fn beat_grid(&self, deck: usize) -> ArtifactSource<BeatGridModel> {
+    pub(crate) fn beat_grid(&self, deck: usize) -> Arc<BeatGridModel> {
         let grids = self.grids();
-        ArtifactSource::Value(grids[deck % grids.len()].clone())
+        grids[deck % grids.len()].clone()
     }
 
     pub(crate) fn start_seconds(&self, deck: usize, start: Start) -> f64 {
@@ -178,9 +171,7 @@ fn prepared_grids_preserve_every_model_field_and_the_provider_cycle() {
     ]);
     let prepared = provider.beat_grids();
     for deck in 0..9 {
-        let ArtifactSource::Value(independent) = provider.beat_grid(deck) else {
-            panic!("fixture grid must be materialized");
-        };
+        let independent = provider.beat_grid(deck);
         assert_eq!(
             serde_json::to_vec(prepared[deck % prepared.len()].as_raw())
                 .expect("prepared grid serialization"),

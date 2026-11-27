@@ -14,9 +14,32 @@ default-features = false
 features = ["analysis-waveform", "beat-dsp", "client-reqwest", "tls-rustls", "symphonia", "webcodecs"]
 
 [features]
-default = ["symphonia", "client-reqwest", "tls-rustls"]
-analysis-beat = []
-analysis-waveform = ["kithara-waveform/dsp"]
+default = ["analysis-beat", "analysis-waveform", "symphonia", "client-reqwest", "tls-rustls"]
+# Either analyzer feature compiles the analysis engine; without both the crate
+# holds the snapshot types and the analysis document reader only.
+analysis-beat = [
+    "dep:kithara-audio",
+    "dep:kithara-bufpool",
+    "dep:kithara-config",
+    "dep:kithara-derive",
+    "dep:kithara-dsp",
+    "dep:kithara-resampler",
+    "dep:kithara-worker",
+    "dep:ringbuf",
+    "kithara-key/dsp",
+]
+analysis-waveform = [
+    "dep:kithara-audio",
+    "dep:kithara-bufpool",
+    "dep:kithara-config",
+    "dep:kithara-derive",
+    "dep:kithara-dsp",
+    "dep:kithara-resampler",
+    "dep:kithara-worker",
+    "dep:ringbuf",
+    "kithara-key/dsp",
+    "kithara-waveform/dsp",
+]
 beat-backend = ["analysis-beat"]
 # `beat-nn` is the neural backend; one of the three below picks the model it
 # embeds, and the choice is named in the analysis fingerprint.
@@ -27,33 +50,33 @@ beat-nn-full = ["beat-nn", "kithara-beat/embed-full-model"]
 beat-nn-full-int8 = ["beat-nn", "kithara-beat/embed-full-int8-model"]
 beat-dsp = ["beat-backend", "kithara-beat/dsp"]
 mock = ["dep:unimock"]
-usdt = ["kithara-worker/usdt"]
-client-reqwest = ["kithara-audio/client-reqwest", "kithara-test-utils/client-reqwest"]
-client-wreq = ["kithara-audio/client-wreq", "kithara-test-utils/client-wreq"]
-tls-rustls = ["kithara-audio/tls-rustls", "kithara-test-utils/tls-rustls"]
-tls-native = ["kithara-audio/tls-native", "kithara-test-utils/tls-native"]
-apple = ["kithara-audio/apple"]
-android = ["kithara-audio/android"]
-symphonia = ["kithara-audio/symphonia"]
-webcodecs = ["kithara-audio/webcodecs"]
-fdk-aac = ["kithara-audio/fdk-aac"]
+usdt = ["kithara-worker?/usdt"]
+client-reqwest = ["kithara-audio?/client-reqwest", "kithara-test-utils/client-reqwest"]
+client-wreq = ["kithara-audio?/client-wreq", "kithara-test-utils/client-wreq"]
+tls-rustls = ["kithara-audio?/tls-rustls", "kithara-test-utils/tls-rustls"]
+tls-native = ["kithara-audio?/tls-native", "kithara-test-utils/tls-native"]
+apple = ["kithara-audio?/apple"]
+android = ["kithara-audio?/android"]
+symphonia = ["kithara-audio?/symphonia"]
+webcodecs = ["kithara-audio?/webcodecs"]
+fdk-aac = ["kithara-audio?/fdk-aac"]
 
 [dependencies]
-kithara-audio = { workspace = true, default-features = false }
+kithara-audio = { workspace = true, default-features = false, optional = true }
 kithara-beat = { workspace = true }
 kithara-blob = { workspace = true }
-kithara-bufpool = { workspace = true }
-kithara-config = { workspace = true }
-kithara-derive = { workspace = true, features = ["patch"] }
-kithara-dsp = { workspace = true }
-kithara-key = { workspace = true, features = ["dsp"] }
+kithara-bufpool = { workspace = true, optional = true }
+kithara-config = { workspace = true, optional = true }
+kithara-derive = { workspace = true, features = ["patch"], optional = true }
+kithara-dsp = { workspace = true, optional = true }
+kithara-key = { workspace = true }
 kithara-platform = { workspace = true }
-kithara-resampler = { workspace = true, default-features = false }
+kithara-resampler = { workspace = true, default-features = false, optional = true }
 kithara-signal = { workspace = true }
 kithara-sync = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-waveform = { workspace = true }
-kithara-worker = { workspace = true }
+kithara-worker = { workspace = true, optional = true }
 
 bitflags = { workspace = true }
 bon = { workspace = true }
@@ -65,7 +88,7 @@ derive_more = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
 rangemap = { workspace = true }
-ringbuf = { workspace = true }
+ringbuf = { workspace = true, optional = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

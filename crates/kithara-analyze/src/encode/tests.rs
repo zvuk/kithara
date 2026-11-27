@@ -16,7 +16,7 @@ use kithara::{
 use kithara_test_fixtures::assets;
 use serde_json::{Value, json};
 
-use super::json as encode;
+use super::{binary, json as encode};
 use crate::{Args, Batch, analysis::Engine, input::Track};
 
 fn publication() -> AnalysisProgress {
@@ -179,6 +179,54 @@ fn incomplete_record_keeps_gaps_and_an_unmapped_origin() {
     assert!(record["grid_unavailable"].as_str().is_some());
     assert!(record["key"].is_null());
     assert!(record["waveform"].is_null());
+}
+
+/// Nothing beside the document marks an incomplete pass: its extent and
+/// coverage give the same missing ranges the JSON record names.
+#[kithara::test]
+fn an_incomplete_binary_record_reads_back_with_the_json_missing_ranges() {
+    let analysis = TrackAnalysis::builder()
+        .token(AnalysisToken::from("t1"))
+        .source_sample_rate(NonZeroU32::new(44_100).expect("rate"))
+        .extent(100)
+        .coverage(RangeSet::from_iter([0..20, 40..100]))
+        .revision(0)
+        .settled(true)
+        .build();
+    let outcome = Ok(AnalysisOutcome::Incomplete(
+        AnalysisProgress::try_from(analysis).expect("settled"),
+    ));
+    let record: Value =
+        serde_json::from_slice(&encode(&track(), &outcome).expect("json")).expect("record");
+    let bytes = binary(&track(), &outcome)
+        .expect("encode")
+        .expect("a settled pass has a document");
+
+    let document = TrackAnalysis::try_from(bytes.as_slice()).expect("an analysis document");
+    assert!(document.is_settled());
+    assert!(!document.is_complete());
+    let missing: Vec<[u64; 2]> = document
+        .missing()
+        .iter()
+        .map(|range| [range.start, range.end])
+        .collect();
+    assert_eq!(json!(missing), record["missing"]);
+    assert_eq!(document.token().as_str(), "t1");
+}
+
+#[kithara::test]
+fn failed_and_cancelled_passes_have_no_binary_record() {
+    for outcome in [
+        AnalysisOutcome::Failed {
+            error: AnalysisError::Empty,
+            last: Some(publication()),
+        },
+        AnalysisOutcome::Cancelled {
+            last: Some(publication()),
+        },
+    ] {
+        assert!(binary(&track(), &Ok(outcome)).expect("encode").is_none());
+    }
 }
 
 #[kithara::test(tokio, native, flash(false))]

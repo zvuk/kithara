@@ -3,7 +3,10 @@ use std::num::NonZeroU32;
 use kithara_platform::{CancelScope, CancelToken};
 use kithara_resampler::NoResamplerBackend;
 use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{Pools, TestPools, pools},
+    kithara,
+};
 use kithara_worker::{Worker, WorkerConfig};
 
 use super::{
@@ -14,7 +17,6 @@ use super::{
     },
     fixtures::{FakeReader, sine},
 };
-use crate::test_pools::{Pools, TestPools, pools};
 
 fn waveform_only(pools: Pools) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
     AnalyzerBuilder::<NoResamplerBackend, _>::new(pools).with_waveform(NonZeroU32::MIN)

@@ -1,7 +1,8 @@
+use kithara_analysis::TrackAnalysis;
 use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_platform::{CancelToken, sync::Arc};
-use kithara_play::ResourceConfig;
+use kithara_play::{ArtifactRequest, ResourceConfig};
 
 use crate::error::QueueError;
 
@@ -20,6 +21,54 @@ pub enum LoadReport {
         load: CancelToken,
         cover: Arc<Vec<u8>>,
     },
+    /// What the read of the track's analysis document answered: the analysis,
+    /// or `None` when the read failed. `read` names the read it answers for;
+    /// an answer for a read the track no longer holds is past news.
+    Analysis {
+        id: TrackId,
+        read: u64,
+        analysis: Option<Arc<TrackAnalysis>>,
+    },
+}
+
+/// One read of a track's analysis document, as the queue hands it to the
+/// loader: the settings it reads with, the request they carry, and the token
+/// and number its answer comes back with.
+pub(crate) struct AnalysisRead<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(crate) id: TrackId,
+    pub(crate) number: u64,
+    pub(crate) token: CancelToken,
+    pub(crate) config: ResourceConfig<S>,
+    pub(crate) request: ArtifactRequest,
+}
+
+/// A track's hold on its current analysis read: the read's token, a child of
+/// the queue's master cancel, and its number. Dropping it cancels the read,
+/// so removing the track or replacing its request ends the read it no longer
+/// wants.
+pub(crate) struct AnalysisClaim {
+    token: CancelToken,
+    number: u64,
+}
+
+impl AnalysisClaim {
+    pub(crate) const fn new(token: CancelToken, number: u64) -> Self {
+        Self { token, number }
+    }
+
+    /// Whether `read` is the read this claim holds.
+    pub(crate) const fn holds(&self, read: u64) -> bool {
+        self.number == read
+    }
+}
+
+impl Drop for AnalysisClaim {
+    fn drop(&mut self) {
+        self.token.cancel();
+    }
 }
 
 /// A track's live load: the token its open and its resource are cancelled

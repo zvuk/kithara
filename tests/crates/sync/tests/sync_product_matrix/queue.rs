@@ -1240,9 +1240,7 @@ impl QueueMusic {
             let path = asset.path().expect("musical fixture materialized on disk");
             let path_secs = path_started.elapsed().as_secs_f64();
             let grid_started = WallInstant::now();
-            let ArtifactSource::Value(model) = provider.beat_grid(index) else {
-                panic!("declared fixture analysis");
-            };
+            let model = provider.beat_grid(index);
             let model = if !self.forward_oracle && *name == "library_flac_ryabina" {
                 Arc::new(ryabina_listening_grid(&model))
             } else {
@@ -1288,7 +1286,6 @@ impl QueueMusic {
             )
             .store(memory_asset_store())
             .discriminator(format!("queue321-{index}"))
-            .beat_grid(ArtifactSource::Value(model.clone()))
             .build();
             let (decoded, observer) = DecodedRecorder::open();
             let control = self.deck.control().clone();

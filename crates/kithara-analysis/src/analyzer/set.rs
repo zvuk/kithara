@@ -242,7 +242,10 @@ mod tests {
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCoverage};
     use kithara_test_fixtures::analysis_fixtures::analysis_silence;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{Pools, TestPools, pools, sample_buffer},
+        kithara,
+    };
     use kithara_waveform::Waveform;
     use num_traits::cast::ToPrimitive;
     use unimock::{MockFn, Unimock, matching};
@@ -258,7 +261,6 @@ mod tests {
     use crate::{
         BeatGridModel, BeatGridState, BeatState,
         beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats},
-        test_pools::{Pools, TestPools, pools, sample_buffer},
     };
 
     fn spec() -> AudioSpec {

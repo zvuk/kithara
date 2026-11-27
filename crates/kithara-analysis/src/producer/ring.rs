@@ -126,10 +126,9 @@ mod tests {
             limiter_peak as twos, trim_codec_priming_drops_leading_frames_and_fades_in as ones,
         },
     };
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{bufpool::pools, kithara};
 
     use super::open;
-    use crate::test_pools::pools;
 
     fn info(frame_offset: u64) -> AudioChunkInfo {
         AudioChunkInfo {

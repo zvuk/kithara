@@ -12,8 +12,17 @@ use crate::{
     AnalysisFingerprint, AnalysisProgress, TrackAnalysis,
     archive::{AnalysisFileError, AnalysisFilePatch, AnalysisFileUpdate, AnalysisFileWrite},
     blob::{MAX_PREALLOC, Reader},
-    consts,
 };
+
+pub(super) mod consts {
+    use std::mem::size_of;
+
+    pub(in crate::archive) const FINGERPRINT_MAX: usize = 1024;
+    pub(in crate::archive) const INDEX_ENTRY_LEN: usize = 1;
+    pub(in crate::archive) const HEADER_FIELDS_LEN: usize = 88;
+    pub(in crate::archive) const HEADER_LEN: usize =
+        HEADER_FIELDS_LEN + 3 * (size_of::<u32>() + FINGERPRINT_MAX);
+}
 
 /// Immutable identity and fixed-chunk layout of one analysis file.
 #[derive(Clone, Debug)]
@@ -168,7 +177,7 @@ impl AnalysisFile {
             .get(..consts::HEADER_LEN)
             .ok_or(AnalysisFileError::Corrupt)?;
         let header = Header::decode(header_bytes)?;
-        if !header.fingerprint.serves(expected_fingerprint) {
+        if !serves(&header.fingerprint, expected_fingerprint) {
             return Err(AnalysisFileError::Config);
         }
         let spec = AnalysisFileSpec::new(
@@ -642,6 +651,21 @@ fn index_entry_offset(layout: Layout, id: u64) -> Result<u64, AnalysisFileError>
         .index_offset
         .checked_add(relative)
         .ok_or(AnalysisFileError::TooLarge)
+}
+
+/// Whether a file made under the `stored` tags serves where `active` is in
+/// force: a pass opened for part of what `active` produces. At least one tag
+/// is present, and each present tag equals the active one.
+fn serves(stored: &AnalysisFingerprint, active: &AnalysisFingerprint) -> bool {
+    let tags = [
+        (stored.beat(), active.beat()),
+        (stored.waveform(), active.waveform()),
+        (stored.key(), active.key()),
+    ];
+    tags.iter().any(|(own, _)| own.is_some())
+        && tags
+            .iter()
+            .all(|(own, active)| own.is_none() || own == active)
 }
 
 fn validate_fingerprint(fingerprint: &AnalysisFingerprint) -> Result<(), AnalysisFileError> {

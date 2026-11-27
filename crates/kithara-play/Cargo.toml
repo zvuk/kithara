@@ -74,6 +74,8 @@ no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
+# The analysis document reader only: no analyzer feature is enabled here.
+kithara-analysis = { workspace = true }
 kithara-assets = { workspace = true }
 # Kithara sub-crates
 kithara-audio = { workspace = true, default-features = false }

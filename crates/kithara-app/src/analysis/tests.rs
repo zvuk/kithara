@@ -6,8 +6,8 @@ use std::{
 
 use ::kithara::{
     analysis::{
-        AnalysisFile, AnalysisFingerprint, AnalysisProgress, BeatGridModel, FrameCoverage,
-        FrameSpan, KeyEstimate, Mode, MusicalKey, PitchClass, RangeSet, TrackAnalysis, Waveform,
+        AnalysisFile, AnalysisFingerprint, AnalysisProgress, FrameCoverage, FrameSpan, KeyEstimate,
+        Mode, MusicalKey, PitchClass, RangeSet, TrackAnalysis,
     },
     assets::{
         AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, ReadSide, StorageBackend,
@@ -20,7 +20,7 @@ use ::kithara::{
         time::{self, Duration},
         tokio::sync::watch,
     },
-    play::PlayWorkerConfig,
+    play::{ArtifactState, PlayWorkerConfig},
 };
 use kithara_test_utils::{TestTempDir, kithara, off_thread::OffThread, temp_dir};
 
@@ -28,15 +28,13 @@ use super::{
     AnalysisService, GridState, TrackArtifacts,
     entry::Stage,
     fixtures::{
-        analysis, app_config, axis, beats_only, document, fingerprint, grid, long_wav,
-        memory_store, other_axis, persistence, progress, queue_off, queue_off_named, revision_held,
-        revision_of, rhythm_a_mp3, rhythm_a_short_mp3, rhythm_b_mp3, served_grid, served_key,
-        served_waveform, short_wav, snapshot, test_pools, tone_mp3, tone_short_mp3, track,
-        track_prepared, track_sourced,
+        analysis, app_config, axis, beats_only, fingerprint, grid, long_wav, memory_store,
+        other_axis, persistence, progress, queue_off, queue_off_named, revision_held, revision_of,
+        rhythm_a_mp3, rhythm_a_short_mp3, rhythm_b_mp3, short_wav, snapshot, test_pools, tone_mp3,
+        tone_short_mp3, track,
     },
-    run::{Activity, Run},
+    run::{Activity, Run, settled},
     service::{Owner, resource_config_from_source},
-    supply::{Prepared, Supply},
 };
 use crate::{
     pools::{
@@ -1200,7 +1198,7 @@ async fn the_source_gave_everything_it_can(url: &str) {
         "only the priming the decoder cannot deliver is missing: {missing:?}"
     );
     assert!(
-        Prepared::default().settled_for(
+        settled(
             &owner
                 .cache
                 .get(&target_of(&owner, &source), axis())
@@ -1219,245 +1217,6 @@ async fn the_source_gave_everything_it_can(url: &str) {
 }
 
 const MPEG_FRAME_SAMPLES: u64 = 1152;
-/// One pass opened over a track handed `grid` and `waveform`, run to its end.
-struct PreparedPass {
-    cancel: CancelToken,
-    host: OffThread<(AppHost, AppQueueControl)>,
-    owner: Owner,
-    held: TrackArtifacts,
-}
-
-impl PreparedPass {
-    async fn run(url: &str, grid: Option<BeatGridModel>, waveform: Option<Waveform>) -> Self {
-        let cancel = CancelToken::root();
-        let mut owner = owner(&cancel);
-        let (host, queue) = queue_off().await;
-        let (track_id, source) =
-            track_prepared(&host, 1, url, &owner.config.clone(), grid, waveform, None).await;
-        let rx = owner.subscribe(queue, track_id, source, axis());
-        assert_eq!(
-            running_track(&owner),
-            Some(track_id),
-            "an artifact is still missing, so a pass opens"
-        );
-        settle(&mut owner).await;
-        let held = rx.borrow().clone().expect("the deck holds the publication");
-        Self {
-            cancel,
-            host,
-            owner,
-            held,
-        }
-    }
-
-    fn analysis(&self) -> &TrackAnalysis {
-        self.held.analysis().expect("the pass published")
-    }
-
-    async fn close(self) {
-        self.cancel.cancel();
-        self.host.close().await;
-    }
-}
-
-#[kithara::test(native, tokio, flash(false))]
-async fn a_track_supplied_with_all_but_its_key_is_analysed_for_the_key(tone_mp3: String) {
-    let pass = PreparedPass::run(&tone_mp3, Some(served_grid()), Some(served_waveform())).await;
-
-    assert!(
-        pass.held.grid().is_some(),
-        "the served grid reaches the deck"
-    );
-    assert!(
-        pass.held.waveform().is_some(),
-        "and so does the served waveform"
-    );
-    let analysis = pass.analysis();
-    assert!(
-        analysis.fingerprint().key().is_some(),
-        "the pass was opened for the key"
-    );
-    assert!(
-        analysis.beat().is_none() && analysis.waveform().is_none(),
-        "and for nothing the caller handed over"
-    );
-    assert!(
-        pass.owner
-            .track_facts()
-            .get(&crate::catalog::canonical_source(&tone_mp3))
-            .and_then(|facts| facts.key)
-            .is_some(),
-        "the tone's key reaches the library row"
-    );
-    pass.close().await;
-}
-
-/// Cache a settled pass over `target` that heard C major.
-fn cache_c_major(owner: &mut Owner, target: AnalysisTarget) {
-    let c_major = MusicalKey {
-        tonic: PitchClass::C,
-        mode: Mode::Major,
-    };
-    let mut coverage = RangeSet::new();
-    coverage.insert(0..1_000);
-    let cached = TrackAnalysis::builder()
-        .token("test-track".into())
-        .revision(3)
-        .source_sample_rate(axis())
-        .extent(1_000)
-        .settled(true)
-        .coverage(coverage)
-        .fingerprint(owner.runner.fingerprint().clone())
-        .key(KeyEstimate::new(c_major, 0.9).expect("a fixture strength is in range"))
-        .build();
-    owner.cache.put(target, progress(cached));
-}
-
-fn key_fact(owner: &Owner, url: &str) -> Option<MusicalKey> {
-    owner
-        .track_facts()
-        .get(&crate::catalog::canonical_source(url))
-        .and_then(|facts| facts.key)
-}
-
-#[kithara::test(native, tokio)]
-async fn a_track_opened_with_every_artifact_supplied_opens_no_pass(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let (track_id, source) = track_prepared(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(served_grid()),
-        Some(served_waveform()),
-        Some(served_key()),
-    )
-    .await;
-
-    let rx = owner.subscribe(queue, track_id, source, axis());
-
-    assert!(
-        owner.active.is_none() && owner.pending.is_empty(),
-        "the caller handed over everything this runtime analyses"
-    );
-    assert!(
-        rx.borrow()
-            .as_ref()
-            .is_some_and(|held| held.grid().is_some() && held.waveform().is_some()),
-        "the deck is served at once"
-    );
-    assert_eq!(key_fact(&owner, &tone_mp3), Some(served_key()));
-    cancel.cancel();
-    host.close().await;
-}
-
-#[kithara::test(native, tokio, flash(false))]
-async fn a_key_read_from_a_source_becomes_the_track_key(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let bytes = serde_json::to_vec(&served_key()).expect("the key serializes");
-    let (track_id, source) = track_sourced(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(Arc::new(served_grid()).into()),
-        Some(Arc::new(served_waveform()).into()),
-        Some(document("key.json", &bytes).into()),
-    )
-    .await;
-    let target = target_of(&owner, &source);
-
-    let _rx = owner.subscribe(queue, track_id, source, axis());
-
-    assert_eq!(
-        key_fact(&owner, &tone_mp3),
-        None,
-        "no key while its source is read"
-    );
-    assert!(
-        owner.active.is_none() && owner.pending.is_empty(),
-        "and none is analysed meanwhile"
-    );
-    cache_c_major(&mut owner, target);
-    assert_eq!(key_fact(&owner, &tone_mp3), None, "not even a cached one");
-    read_artifacts(&mut owner, 1).await;
-    assert_eq!(
-        key_fact(&owner, &tone_mp3),
-        Some(served_key()),
-        "the key the source holds is the track's key"
-    );
-    assert!(
-        owner.active.is_none() && owner.pending.is_empty(),
-        "and still nothing is analysed"
-    );
-    cancel.cancel();
-    host.close().await;
-}
-
-#[kithara::test(native, tokio, flash(false))]
-async fn a_key_source_that_does_not_parse_never_becomes_local_work(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let (track_id, source) = track_sourced(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(Arc::new(served_grid()).into()),
-        Some(Arc::new(served_waveform()).into()),
-        Some(document("broken-key.json", b"{}").into()),
-    )
-    .await;
-    let target = target_of(&owner, &source);
-
-    let _rx = owner.subscribe(queue, track_id, source, axis());
-    read_artifacts(&mut owner, 1).await;
-
-    assert_eq!(key_fact(&owner, &tone_mp3), None, "the track shows no key");
-    assert!(
-        owner.active.is_none() && owner.pending.is_empty(),
-        "and a key the caller asked a source for is not analysed instead"
-    );
-    cache_c_major(&mut owner, target);
-    assert_eq!(key_fact(&owner, &tone_mp3), None, "not even a cached one");
-    cancel.cancel();
-    host.close().await;
-}
-
-#[kithara::test(native, tokio)]
-async fn a_supplied_key_outranks_the_key_of_a_cached_analysis(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let (track_id, source) = track_prepared(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(served_grid()),
-        Some(served_waveform()),
-        Some(served_key()),
-    )
-    .await;
-    let target = target_of(&owner, &source);
-    cache_c_major(&mut owner, target);
-
-    let _rx = owner.subscribe(queue, track_id, source, axis());
-
-    assert_eq!(
-        key_fact(&owner, &tone_mp3),
-        Some(served_key()),
-        "the supplied key, whatever the cache holds"
-    );
-    cancel.cancel();
-    host.close().await;
-}
-
 #[kithara::test]
 fn a_settled_pass_owes_the_key_until_its_tag_is_published() {
     let active = AnalysisFingerprint::builder()
@@ -1466,7 +1225,7 @@ fn a_settled_pass_owes_the_key_until_its_tag_is_published() {
         .build();
     let without_key = progress(snapshot("test-track".into(), 1, 1_000, fingerprint(), None));
     assert!(
-        !Prepared::default().settled_for(&without_key, &active),
+        !settled(&without_key, &active),
         "a pass opened without key demand leaves the key owed"
     );
     let with_key = progress(snapshot(
@@ -1477,117 +1236,7 @@ fn a_settled_pass_owes_the_key_until_its_tag_is_published() {
         None,
     ));
     assert!(with_key.analysis().key().is_none(), "the pass heard no key");
-    assert!(
-        Prepared::default().settled_for(&with_key, &active),
-        "and still settles it"
-    );
-}
-
-#[kithara::test(
-    native,
-    tokio,
-    flash(false),
-    tracing(
-        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
-    )
-)]
-async fn a_served_waveform_leaves_only_the_beats_to_analyse(tone_mp3: String) {
-    let pass = PreparedPass::run(&tone_mp3, None, Some(served_waveform())).await;
-
-    assert!(
-        pass.held.waveform().is_some(),
-        "the served waveform is published beside the pass"
-    );
-    let analysis = pass.analysis();
-    assert!(
-        analysis.waveform().is_none(),
-        "and the pass itself analysed no waveform"
-    );
-    assert!(analysis.beat().is_some(), "only the beats were analysed");
-    pass.close().await;
-}
-
-#[kithara::test(native, tokio)]
-async fn a_supplied_grid_over_a_cached_waveform_opens_no_pass(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let (track_id, source) = track_prepared(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(served_grid()),
-        None,
-        None,
-    )
-    .await;
-    let cached = snapshot(
-        "test-track".into(),
-        6,
-        1_000,
-        owner.runner.fingerprint().clone(),
-        None,
-    );
-    owner
-        .cache
-        .put(target_of(&owner, &source), progress(cached));
-
-    let rx = owner.subscribe(queue, track_id, source, axis());
-
-    assert!(
-        owner.active.is_none() && owner.pending.is_empty(),
-        "between the caller and the cache both artifacts are covered"
-    );
-    let held = rx.borrow().clone().expect("the deck is served at once");
-    assert_eq!(
-        held.grid().expect("a grid is published").as_raw().model_id,
-        served_grid().as_raw().model_id,
-        "the grid is the caller's"
-    );
-    assert!(
-        held.waveform().is_some(),
-        "and the waveform is the cached pass's"
-    );
-    cancel.cancel();
-    host.close().await;
-}
-
-#[kithara::test(native, tokio)]
-async fn a_supplied_waveform_over_cached_beats_opens_no_pass(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let (track_id, source) = track_prepared(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        None,
-        Some(served_waveform()),
-        None,
-    )
-    .await;
-    let cached = beats_only(owner.runner.fingerprint().clone());
-    owner
-        .cache
-        .put(target_of(&owner, &source), progress(cached));
-
-    let rx = owner.subscribe(queue, track_id, source, axis());
-
-    assert!(
-        owner.active.is_none() && owner.pending.is_empty(),
-        "the beats are cached and the waveform was handed over"
-    );
-    let held = rx.borrow().clone().expect("the deck is served at once");
-    assert!(held.grid().is_some(), "the cached beats are published");
-    assert_eq!(
-        held.waveform().map(Waveform::buckets),
-        Some(served_waveform().buckets()),
-        "and the waveform is the one the caller handed over, bucket for bucket"
-    );
-    cancel.cancel();
-    host.close().await;
+    assert!(settled(&with_key, &active), "and still settles it");
 }
 
 #[kithara::test(native, tokio)]
@@ -1617,296 +1266,8 @@ async fn a_repeated_revision_is_published_once(tone_mp3: String) {
     host.close().await;
 }
 
-#[kithara::test(native, tokio)]
-async fn a_cached_pass_never_replaces_the_grid_the_caller_supplied(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let (track_id, source) = track_prepared(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(served_grid()),
-        Some(served_waveform()),
-        None,
-    )
-    .await;
-    let cached = snapshot(
-        "test-track".into(),
-        5,
-        1_000,
-        owner.runner.fingerprint().clone(),
-        Some(grid()),
-    );
-    owner
-        .cache
-        .put(target_of(&owner, &source), progress(cached));
-
-    let rx = owner.subscribe(queue, track_id, source, axis());
-
-    let held = rx.borrow().clone().expect("the deck is served at once");
-    assert_eq!(
-        revision_held(&rx),
-        Some(5),
-        "the cached pass is published, as a pass result"
-    );
-    assert_eq!(
-        held.grid().expect("a grid is published").as_raw().model_id,
-        served_grid().as_raw().model_id,
-        "but the grid the deck reads is the one the caller handed over"
-    );
-    assert!(
-        owner.active.is_none() && owner.pending.is_empty(),
-        "and nothing reopens to reconcile the two"
-    );
-    cancel.cancel();
-    host.close().await;
-}
-
-#[kithara::test(
-    native,
-    tokio,
-    flash(false),
-    tracing(
-        "kithara_app::analysis=debug,kithara_app::waveform=debug,kithara_analysis=trace,kithara_audio=trace,kithara_decode=debug,kithara_file=trace"
-    )
-)]
-async fn a_supplied_grid_is_published_beside_a_locally_analysed_waveform(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let (track_id, source) = track_prepared(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(served_grid()),
-        None,
-        None,
-    )
-    .await;
-
-    let rx = owner.subscribe(queue, track_id, source, axis());
-    assert_eq!(
-        running_track(&owner),
-        Some(track_id),
-        "the waveform is still missing, so a pass opens"
-    );
-    settle(&mut owner).await;
-
-    let held = rx.borrow().clone().expect("the deck holds the publication");
-    let grid = held.grid().expect("the supplied grid is published");
-    assert_eq!(
-        grid.as_raw()
-            .beats
-            .iter()
-            .map(|beat| beat.ordinal)
-            .collect::<Vec<_>>(),
-        served_grid()
-            .as_raw()
-            .beats
-            .iter()
-            .map(|beat| beat.ordinal)
-            .collect::<Vec<_>>(),
-        "the pass that filled in the waveform renamed no beat of the grid it was handed"
-    );
-    assert!(
-        held.waveform().is_some(),
-        "and the waveform the pass produced is published beside it"
-    );
-    let analysis = held.analysis().expect("the pass published");
-    assert!(
-        analysis.beat().is_none(),
-        "the pass analysed no beats: the track already had a grid"
-    );
-    assert!(
-        analysis.waveform().is_some(),
-        "only the waveform was analysed"
-    );
-    cancel.cancel();
-    host.close().await;
-}
-
-#[kithara::test(native, tokio, flash(false))]
-async fn a_supplied_artifact_publishes_without_claiming_a_settled_pass(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let (track_id, source) = track_prepared(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(served_grid()),
-        None,
-        None,
-    )
-    .await;
-
-    let rx = owner.subscribe(queue, track_id, source, axis());
-
-    let held = rx.borrow().clone().expect("the grid publishes at once");
-    assert!(
-        held.grid().is_some(),
-        "the supplied grid is usable immediately"
-    );
-    assert!(
-        held.analysis().is_none(),
-        "no pass has finished, so the publication claims nothing a pass would claim"
-    );
-    assert!(
-        held.waveform().is_none(),
-        "and it invents no waveform to go with the grid it has"
-    );
-    cancel.cancel();
-    host.close().await;
-}
-
-/// Wait until the entry holds the artifact its source answers with. The owner
-/// is driven by hand here, the way every other test in this file drives it.
-async fn read_artifacts(owner: &mut Owner, reads: usize) {
-    for _ in 0..reads {
-        time::timeout(Duration::from_secs(5), owner.drive())
-            .await
-            .expect("the artifact read answers");
-    }
-}
-
-/// Drives the owner until no pass runs and no artifact read is outstanding.
-#[kithara::hang_watchdog(timeout = Duration::from_secs(2), ctx = String)]
-async fn settle_with_reads(owner: &mut Owner) {
-    while owner.active.is_some()
-        || owner.entries.iter().any(|entry| {
-            let prepared = entry.prepared();
-            prepared.beat_grid.is_pending()
-                || prepared.key.is_pending()
-                || prepared.waveform.is_pending()
-        })
-    {
-        hang_tick!("analysis pass or artifact read awaits progress".to_owned());
-        drive_once(owner).await;
-        hang_reset!();
-    }
-}
-
-#[kithara::test(native, tokio, flash(false))]
-async fn a_grid_read_from_a_source_reaches_the_deck_beside_a_key_pass(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let bytes = serde_json::to_vec(served_grid().as_raw()).expect("the grid serializes");
-    let (track_id, source) = track_sourced(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(document("grid.json", &bytes).into()),
-        Some(Arc::new(served_waveform()).into()),
-        None,
-    )
-    .await;
-
-    let rx = owner.subscribe(queue, track_id, source, axis());
-    settle_with_reads(&mut owner).await;
-
-    let held = rx.borrow().clone().expect("the deck is served");
-    assert_eq!(
-        held.grid().map(|grid| grid.as_raw().model_id.clone()),
-        Some("served".to_owned()),
-        "the grid the source served reaches the deck"
-    );
-    let analysis = held.analysis().expect("the key pass published");
-    assert!(
-        analysis.fingerprint().key().is_some(),
-        "the pass was opened for the key"
-    );
-    assert!(
-        analysis.beat().is_none() && analysis.waveform().is_none(),
-        "and the grid still being read was not analysed"
-    );
-    cancel.cancel();
-    host.close().await;
-}
-
-#[kithara::test(native, tokio, flash(false))]
-async fn a_grid_source_that_does_not_parse_never_becomes_local_work(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let (track_id, source) = track_sourced(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(document("broken.json", b"{}").into()),
-        Some(Arc::new(served_waveform()).into()),
-        None,
-    )
-    .await;
-
-    let rx = owner.subscribe(queue, track_id, source, axis());
-    settle_with_reads(&mut owner).await;
-
-    let held = rx.borrow().clone().expect("the deck is served");
-    assert!(held.grid().is_none(), "no grid was served");
-    assert!(
-        held.waveform().is_some(),
-        "and the waveform beside it is unharmed"
-    );
-    let analysis = held.analysis().expect("the key pass published");
-    assert!(
-        analysis.fingerprint().key().is_some(),
-        "the pass was opened for the key"
-    );
-    assert!(
-        analysis.beat().is_none() && analysis.waveform().is_none(),
-        "and a grid the caller asked a source for was not analysed instead"
-    );
-    cancel.cancel();
-    host.close().await;
-}
-
-#[kithara::test(native, tokio, flash(false))]
-async fn an_artifact_answering_a_closed_load_is_dropped(tone_mp3: String) {
-    let cancel = CancelToken::root();
-    let mut owner = owner(&cancel);
-    let (host, queue) = queue_off().await;
-    let bytes = serde_json::to_vec(served_grid().as_raw()).expect("the grid serializes");
-    let (first, source) = track_sourced(
-        &host,
-        1,
-        &tone_mp3,
-        &owner.config.clone(),
-        Some(document("late.json", &bytes).into()),
-        None,
-        None,
-    )
-    .await;
-    let rx = owner.subscribe(queue.clone(), first, source, axis());
-    // The same resource re-pointed at another track: one entry, a new load.
-    let (second, plain) = track(&host, 2, &tone_mp3).await;
-    let _ = owner.subscribe(queue, second, plain, axis());
-
-    read_artifacts(&mut owner, 1).await;
-
-    assert!(
-        rx.borrow()
-            .as_ref()
-            .is_none_or(|held| held.grid().is_none()),
-        "the entry moved on, so the late grid is dropped"
-    );
-    cancel.cancel();
-    host.close().await;
-}
-
 #[kithara::test]
 fn a_publication_answers_its_grid_once_nothing_more_can_come() {
-    let prepared = |beat_grid| Prepared {
-        beat_grid,
-        key: Supply::Missing,
-        waveform: Supply::Missing,
-    };
     let running = TrackAnalysis::builder()
         .token("running".into())
         .revision(1)
@@ -1918,30 +1279,47 @@ fn a_publication_answers_its_grid_once_nothing_more_can_come() {
         GridState::Refused(refusal) => Some(Err(refusal)),
     };
 
-    assert_eq!(
-        answer(TrackArtifacts::new(None, prepared(Supply::Pending), false)),
-        None,
-        "a supplied grid still being read"
-    );
     assert_eq!(answer(running.into()), None, "a pass still running");
+    let gridded = beats_only(fingerprint());
     assert_eq!(
-        answer(TrackArtifacts::new(
-            None,
-            prepared(Supply::Ready(Arc::new(served_grid()))),
-            false,
-        )),
-        Some(Ok(served_grid())),
-        "a supplied grid"
-    );
-    assert!(
-        matches!(
-            answer(TrackArtifacts::new(None, prepared(Supply::Failed), false)),
-            Some(Err(_))
-        ),
-        "a supplied grid that failed to load"
+        answer(gridded.clone().into()),
+        gridded.grid().cloned().map(Ok),
+        "a pass that found a grid"
     );
     assert!(
         matches!(answer(analysis().into()), Some(Err(_))),
         "a settled pass that found no grid"
     );
+    assert!(
+        matches!(answer(TrackArtifacts::new(None, true)), Some(Err(_))),
+        "a pass that failed"
+    );
+}
+
+/// The local build gives no analysis request: a queued track it analyses
+/// requests no document.
+#[kithara::test(native, tokio)]
+async fn a_queued_track_in_the_local_build_requests_no_document(tone_mp3: String) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
+
+    owner.warm(&queue, &[track_id], axis());
+
+    assert!(
+        resource_config_from_source(source, &owner.config)
+            .expect("the source yields a resource")
+            .analysis()
+            .is_none(),
+        "the local build put an analysis request in the track's settings"
+    );
+    let entry = queue
+        .tracks()
+        .into_iter()
+        .find(|entry| entry.id == track_id)
+        .expect("the track is queued");
+    assert!(matches!(entry.analysis(), ArtifactState::NotRequested));
+    cancel.cancel();
+    host.close().await;
 }

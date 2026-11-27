@@ -21,7 +21,7 @@ pub struct Args {
     #[arg(long)]
     pub(crate) jobs: Option<NonZeroUsize>,
     /// Directory for atomic per-track files; omit for stdout NDJSON.
-    #[arg(long)]
+    #[arg(long, required_if_eq("format", "binary"))]
     pub(crate) out: Option<PathBuf>,
     /// Record encoding.
     #[arg(long, value_enum, default_value = "json")]
@@ -48,7 +48,10 @@ pub(crate) enum Artifact {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum OutputFormat {
+    /// One self-describing JSON record per track.
     Json,
+    /// One analysis document per track, written as `<id>.analysis`.
+    Binary,
 }
 
 #[derive(Debug, Deserialize)]

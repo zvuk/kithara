@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara::{
+    analysis::TrackAnalysis,
     events::TrackId,
     platform::{
         CancelToken,
@@ -18,10 +19,10 @@ use tracing::{debug, warn};
 
 use super::{
     TrackArtifacts, TrackFacts,
+    artifacts::key_of,
     entry::{Entry, Stage},
     handle::{AnalysisHandle, Request},
-    load::LoadReply,
-    run::Activity,
+    run::{Activity, settled},
 };
 use crate::{
     config::AppConfig,
@@ -43,15 +44,10 @@ pub(super) struct Owner {
     pub(super) config: AppConfig,
     pub(super) active: Option<Activity>,
     pub(super) axis: Option<NonZeroU32>,
-    pub(super) replies: mpsc::Receiver<LoadReply>,
-    /// Where an artifact read hands its answer back to the one task that owns
-    /// the entries, and where that task takes it.
-    pub(super) loads: mpsc::Sender<LoadReply>,
     pub(super) cache: TrackAnalysisCache,
     pub(super) runner: TrackAnalysisRunner,
     pub(super) entries: Vec<Entry>,
     pub(super) pending: VecDeque<usize>,
-    load_epoch: u64,
 }
 
 impl AnalysisService {
@@ -60,11 +56,6 @@ impl AnalysisService {
         persistence: AnalysisPersistence,
         cancel: CancelToken,
     ) -> (Self, AnalysisHandle) {
-        /// How many artifact answers may queue before a reading task waits. One track
-        /// answers at most twice, so this only ever bounds a burst of re-pointed
-        /// entries.
-        const LOAD_REPLIES: usize = 16;
-
         let (facts, published) = watch::channel(Arc::new(BTreeMap::new()));
         let (handle, rx) = AnalysisHandle::channel(published);
         let runner = TrackAnalysisRunner::new(
@@ -80,10 +71,7 @@ impl AnalysisService {
             config.worker.pools(),
             config.analysis_chunk_seconds,
         );
-        let (loads, replies) = mpsc::channel(LOAD_REPLIES);
         let owner = Owner {
-            loads,
-            replies,
             runner,
             cache,
             persistence,
@@ -92,7 +80,6 @@ impl AnalysisService {
             pending: VecDeque::new(),
             active: None,
             axis: None,
-            load_epoch: 0,
         };
         (
             Self {
@@ -140,10 +127,11 @@ impl Owner {
             .filter_map(|entry| {
                 let analysis = self.cache.analysis(entry.target());
                 let facts = TrackFacts {
-                    bpm: TrackArtifacts::grid_from(analysis, entry.prepared())
+                    bpm: analysis
+                        .and_then(TrackAnalysis::grid)
                         .map(|grid| grid.as_raw().bpm)
                         .filter(|bpm| bpm.is_finite() && *bpm > 0.0),
-                    key: TrackArtifacts::key_from(analysis, entry.prepared()),
+                    key: key_of(analysis),
                 };
                 (facts != TrackFacts::default())
                     .then(|| (entry.config().source().to_string(), facts))
@@ -181,17 +169,6 @@ impl Owner {
             self.entries.len() - 1
         });
         Some((index, config))
-    }
-
-    fn point_entry(
-        &mut self,
-        index: usize,
-        config: AppResourceConfig,
-        queue: AppQueueControl,
-        track_id: TrackId,
-    ) {
-        self.load_epoch = self.load_epoch.wrapping_add(1);
-        self.entries[index].point_at(config, queue, track_id, self.load_epoch);
     }
 
     pub(super) fn prune_entries(&mut self) {
@@ -312,7 +289,7 @@ impl Owner {
         let held = entry.is_held();
         if entry
             .value_for(axis)
-            .is_some_and(|progress| entry.prepared().settled_for(&progress, fingerprint))
+            .is_some_and(|progress| settled(&progress, fingerprint))
         {
             debug!(?track_id, held, "analysis: settled; nothing to schedule");
             return;
@@ -370,11 +347,10 @@ impl Owner {
         let Some((index, config)) = self.entry_for(&queue, track_id, source) else {
             return watch::channel(None).1;
         };
-        self.point_entry(index, config, queue, track_id);
+        self.entries[index].point_at(config, queue, track_id);
         if matches!(self.entries[index].stage(), Stage::Failed(_)) {
             self.entries[index].set_stage(Stage::Idle);
         }
-        self.start_loads(index);
         self.seed(index, axis);
         let rx = self.entries[index].subscribe();
         self.schedule(index, axis);
@@ -398,8 +374,7 @@ impl Owner {
                 continue;
             };
             if !self.entries[index].is_held() {
-                self.point_entry(index, config, queue.clone(), track_id);
-                self.start_loads(index);
+                self.entries[index].point_at(config, queue.clone(), track_id);
             }
             self.schedule(index, axis);
         }

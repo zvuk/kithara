@@ -9,7 +9,8 @@ mod resampler;
 mod source;
 
 pub use artifact::{
-    ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactSource, Cover, MAX_ARTIFACT_BYTES,
+    ArtifactDocument, ArtifactFetch, ArtifactLoadError, ArtifactRequest, ArtifactState, Cover,
+    MAX_ARTIFACT_BYTES,
 };
 pub use config::ResourceConfig;
 pub use lane::ResourceLane;

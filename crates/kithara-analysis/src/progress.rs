@@ -9,8 +9,11 @@ use rangemap::RangeSet;
 use crate::{
     BlobError, TrackAnalysis,
     blob::{MAX_PREALLOC, Reader, Writer},
-    consts,
 };
+
+mod consts {
+    pub(super) const RESUME_VERSION: u32 = 0x4b41_5204;
+}
 
 /// One atomic analysis publication and the opaque state needed to continue it.
 #[derive(Clone, Debug)]
