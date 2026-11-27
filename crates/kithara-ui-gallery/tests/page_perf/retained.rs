@@ -1,8 +1,8 @@
 use std::{
-    cell::RefCell,
     collections::hash_map::DefaultHasher,
     hash::{Hash as _, Hasher as _},
     rc::Rc,
+    sync::Mutex,
 };
 
 use kithara_platform::time::Duration;
@@ -24,7 +24,7 @@ use crate::{
 /// The retained host: the tree stays mounted, input walks it, and a frame is a
 /// refresh, a paint into a Vello scene, and the two native passes around it.
 pub(crate) struct Retained {
-    gpu: Rc<RefCell<Gpu>>,
+    gpu: &'static Mutex<Gpu>,
     pointer_at: Pt,
     // Ui borrows the fixture's resolver and registry. It is dropped before the
     // fixture owner declared below.
@@ -39,7 +39,7 @@ impl Retained {
         fixture: Rc<Fixture>,
         page: &Page,
         app: PageApp,
-        gpu: Rc<RefCell<Gpu>>,
+        gpu: &'static Mutex<Gpu>,
     ) -> Self {
         let mut ui = Ui::new(app, fixture.config(), (width(), height()), 1.0)
             .unwrap_or_else(|error| panic!("the page-perf fixture must mount: {error}"));
@@ -93,12 +93,16 @@ impl Retained {
             shaders: frame.shaders().len(),
             vis: frame.vis().len(),
         };
-        let mut gpu = self.gpu.borrow_mut();
+        let mut gpu = self
+            .gpu
+            .lock()
+            .unwrap_or_else(|error| panic!("gallery GPU lock poisoned: {error}"));
         match &mut *gpu {
             Gpu::Retained(gpu) if fence => gpu.fenced_passes(&frame),
             Gpu::Retained(gpu) => gpu.passes(&frame),
             Gpu::Immediate(_) => panic!("retained page host received an immediate GPU"),
         }
+        drop(gpu);
         self.ui.complete_frame();
         Census {
             scene: Some(scene),
@@ -142,7 +146,10 @@ impl PageHost for Retained {
     }
 
     fn pixels(&mut self) -> Vec<u8> {
-        let gpu = self.gpu.borrow();
+        let gpu = self
+            .gpu
+            .lock()
+            .unwrap_or_else(|error| panic!("gallery GPU lock poisoned: {error}"));
         match &*gpu {
             Gpu::Retained(gpu) => readback_vello(&gpu.device, &gpu.queue, &gpu.texture),
             Gpu::Immediate(_) => panic!("retained page host received an immediate GPU"),
