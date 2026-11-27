@@ -119,13 +119,9 @@ impl Backend {
     }
 }
 
-fn driver<'fixture>(
-    backend: &Backend,
-    fixture: &'fixture Fixture,
-    reads: Rc<CensusReads>,
-) -> Box<dyn FrameHost + 'fixture> {
+fn driver(backend: &Backend, fixture: Rc<Fixture>, reads: Rc<CensusReads>) -> Box<dyn FrameHost> {
     match backend {
-        Backend::Immediate(engine) => Box::new(Immediate::new(fixture, reads, engine)),
+        Backend::Immediate(engine) => Box::new(Immediate::new(&fixture, reads, engine)),
         Backend::Retained => Box::new(Retained::new(fixture, reads)),
     }
 }
@@ -314,40 +310,24 @@ impl FrameWork {
                 })
                 .collect(),
             receipts: self.driver.borrow().receipts(),
-            scheduled: self.driver.scheduled(),
+            scheduled: self.driver.borrow().scheduled(),
         };
         audit("frame", std::slice::from_ref(&reading));
     }
 }
 
-thread_local! {
-    static ICED_BACKEND: OnceCell<Box<Backend>> = OnceCell::new();
-    static VELLO_BACKEND: OnceCell<Box<Backend>> = OnceCell::new();
-    static FIXTURES: std::collections::BTreeMap<usize, Box<Fixture>> =
-        std::collections::BTreeMap::new();
-}
-
+static BACKENDS: [LazyLock<Result<Backend, String>>; 2] = [
+    LazyLock::new(|| Backend::try_from(Host::Immediate)),
+    LazyLock::new(|| Backend::try_from(Host::Retained)),
+];
 fn shared_backend(host: Host) -> &'static Backend {
-    let cell = match host {
-        Host::Immediate => &ICED_BACKEND,
-        Host::Retained => &VELLO_BACKEND,
+    let backend = match host {
+        Host::Immediate => &BACKENDS[0],
+        Host::Retained => &BACKENDS[1],
     };
-    cell.with(|backend| {
-        backend.get_or_init(|| {
-            Box::new(
-                Backend::try_from(host)
-                    .unwrap_or_else(|error| panic!("no host to measure on: {error}")),
-            )
-        })
-    })
-}
-
-fn shared_fixture(index: usize, scenario: &Scenario) -> &'static Fixture {
-    FIXTURES.with(|fixtures| {
-        fixtures
-            .entry(index)
-            .or_insert_with(|| Box::new(Fixture::new(scenario.control)))
-    })
+    backend
+        .as_ref()
+        .unwrap_or_else(|error| panic!("no host to measure on: {error}"))
 }
 
 fn prepare_frame(index: usize) -> FrameWork {
@@ -358,20 +338,18 @@ fn prepare_frame(index: usize) -> FrameWork {
         Host::Retained
     };
     let scenario = &consts::SCENARIOS[index % consts::SCENARIOS.len()];
-    let label = if matches!(host, Host::Immediate) {
-        "iced"
-    } else {
-        "vello"
-    };
     let backend = shared_backend(host);
-    let fixture = shared_fixture(index, scenario);
+    let fixture = Rc::new(Fixture::new(scenario.control));
     let reads = Rc::new(CensusReads::default());
-    let rect = laid_out_rect(fixture, &reads, &backend.geometry());
-    let mut driver = driver(&backend, fixture, Rc::clone(&reads));
+    let rect = laid_out_rect(&fixture, &reads, &backend.geometry());
+    let mut driver = driver(backend, Rc::clone(&fixture), Rc::clone(&reads));
     let _warm = driver.frame();
     let steps = scenario.interaction.steps(rect);
     let action_steps = steps.clone();
+    let driver = Rc::new(std::cell::RefCell::new(driver));
+    let action_driver = Rc::clone(&driver);
     let action = Box::new(move || {
+        let mut driver = action_driver.borrow_mut();
         for step in &action_steps {
             driver.interact(*step);
         }
@@ -379,7 +357,7 @@ fn prepare_frame(index: usize) -> FrameWork {
     });
     FrameWork {
         action,
-        driver: Rc::new(std::cell::RefCell::new(driver)),
+        driver,
         rect,
         name: scenario.name,
         steps,
