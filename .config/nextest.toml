@@ -24,6 +24,10 @@
 [test-groups.macos-app]
 max-threads = 1
 
+# Nested Cargo checks share one target lock and each wait spends the test's own budget.
+[test-groups.pool-owner-probes]
+max-threads = 1
+
 [profile.default]
 default-filter = """
 not (
@@ -174,6 +178,18 @@ test-group = 'macos-app'
 platform = 'cfg(target_os = "macos")'
 filter = 'package(kithara-app)'
 test-group = 'macos-app'
+
+[[profile.default.overrides]]
+filter = 'package(kithara-derive) and test(/^pool::tests::a_.*fails_to_compile$/)'
+test-group = 'pool-owner-probes'
+
+[[profile.ci.overrides]]
+filter = 'package(kithara-derive) and test(/^pool::tests::a_.*fails_to_compile$/)'
+test-group = 'pool-owner-probes'
+
+[[profile.stress.overrides]]
+filter = 'package(kithara-derive) and test(/^pool::tests::a_.*fails_to_compile$/)'
+test-group = 'pool-owner-probes'
 
 [[profile.default.overrides]]
 filter = 'binary_id(=kithara-sync-tests::sync) and test(/^sync_product_matrix::queue::/)'
