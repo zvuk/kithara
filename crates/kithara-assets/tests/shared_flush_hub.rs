@@ -65,3 +65,45 @@ fn shared_hub_flush_now_persists_every_store() {
         "store B availability must land after shared flush_now"
     );
 }
+
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn shared_hub_checkpoint_covers_a_live_pending_writer_pin() {
+    let dir = tempdir().unwrap();
+    let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+
+    let _store_a = AssetStore::builder(support::pools())
+        .backend(StorageBackend::Disk {
+            root: dir.path().join("a"),
+        })
+        .flush_hub(hub.clone())
+        .build();
+    let store_b = AssetStore::builder(support::pools())
+        .backend(StorageBackend::Disk {
+            root: dir.path().join("b"),
+        })
+        .flush_hub(hub.clone())
+        .build();
+    let scope_b = store_b.scope::<Test>(&source("track-b")).unwrap();
+    let key_b = scope_b.key(&resource("payload.bin")).unwrap();
+    let AcquisitionResult::Pending(writer) = store_b.acquire_resource(&key_b, None).unwrap() else {
+        panic!("expected a live pending writer");
+    };
+
+    hub.flush_now().expect("hub.flush_now must succeed");
+
+    let bytes = std::fs::read(dir.path().join("b/_index/pins.bin")).unwrap();
+    let archived = rkyv::access::<
+        kithara_assets::index::schema::ArchivedPinsIndexFile,
+        rkyv::rancor::Error,
+    >(&bytes)
+    .unwrap();
+    let expected_root = scope_b.asset_root().to_string();
+    assert!(
+        archived
+            .pinned
+            .iter()
+            .any(|(root, pinned)| root.as_str() == expected_root.as_str() && *pinned),
+        "checkpoint must publish the pin while its writer is still alive"
+    );
+    drop(writer);
+}

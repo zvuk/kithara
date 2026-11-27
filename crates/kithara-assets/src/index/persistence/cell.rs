@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use kithara_platform::sync::Arc;
+use kithara_platform::sync::{Arc, Mutex, MutexGuard};
 
 use super::{FlushHub, Flushable, IndexTarget};
 use crate::error::AssetsResult;
@@ -16,12 +16,25 @@ pub(crate) trait IndexState: Send + Sync + 'static {
     const NAME: &'static str;
 }
 
+#[derive(Default)]
+pub(crate) struct PublicationState {
+    pub(crate) dirty: AtomicBool,
+    pub(super) non_durable: AtomicBool,
+    pub(super) lock: Mutex<()>,
+}
+
+impl PublicationState {
+    pub(crate) fn guard(&self) -> MutexGuard<'_, ()> {
+        self.lock.lock()
+    }
+}
+
 /// An index's state together with what every persisted index shares: the
-/// dirty flag the [`FlushHub`] drains, the hub binding, and the file target.
+/// publication state drained by [`FlushHub`], the hub binding, and the file target.
 /// Without a target the index is ephemeral and a flush writes nothing.
 pub(crate) struct IndexCell<S> {
     pub(crate) state: S,
-    pub(crate) dirty: AtomicBool,
+    pub(crate) publication: PublicationState,
     hub: OnceLock<Arc<FlushHub>>,
     pub(super) target: OnceLock<IndexTarget<S>>,
 }
@@ -30,7 +43,7 @@ impl<S> IndexCell<S> {
     pub(crate) fn new(state: S) -> Self {
         Self {
             state,
-            dirty: AtomicBool::new(false),
+            publication: PublicationState::default(),
             hub: OnceLock::new(),
             target: OnceLock::new(),
         }
@@ -44,9 +57,13 @@ impl<S> IndexCell<S> {
         self.hub.get()
     }
 
+    pub(crate) fn publication_guard(&self) -> MutexGuard<'_, ()> {
+        self.publication.guard()
+    }
+
     /// Records a change for the next flush and wakes the hub, if bound.
     pub(crate) fn mark_dirty(&self) {
-        self.dirty.store(true, Ordering::Release);
+        self.publication.dirty.store(true, Ordering::Release);
         if let Some(hub) = self.hub.get() {
             hub.signal();
         }
@@ -69,10 +86,11 @@ impl<S: IndexState> IndexCell<S> {
 }
 
 /// The flush itself never clears `dirty`: the shared flush protocol consumes it
-/// before snapshotting, and a change that lands during the write stays marked.
+/// under the source's publication lock, before snapshotting, and preserves a
+/// change that lands during the write.
 impl<S: IndexState> Flushable for IndexCell<S> {
-    fn dirty(&self) -> &AtomicBool {
-        &self.dirty
+    fn publication(&self) -> &PublicationState {
+        &self.publication
     }
 
     fn flush(&self) -> AssetsResult<()> {

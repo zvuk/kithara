@@ -7,7 +7,7 @@ use kithara_platform::sync::Arc;
 
 use crate::{
     error::AssetsResult,
-    index::persistence::{FlushHub, Flushable, IndexCell, IndexState, flush_sync},
+    index::persistence::{FlushHub, IndexCell, IndexState, flush_source, flush_sync_locked},
 };
 
 /// How long a pin has to outlive its holder.
@@ -97,16 +97,18 @@ impl PinsIndex {
     /// Pin an `asset_root`. Returns `true` on the 0→1 transition (newly pinned),
     /// `false` when an existing pin's refcount was incremented.
     ///
-    /// Disk-backed instances flush the snapshot synchronously when the
-    /// **durable** count goes 0→1; every other increment, and every
-    /// [`PinDurability::Local`] pin, stays in memory. An `Err` here means the
-    /// pin is **not** durable. Ephemeral instances cannot fail.
+    /// Disk-backed instances synchronously publish the durable 0->1 transition.
+    /// Durable acquisitions serialize with any earlier publication before
+    /// changing the count; later duplicate holders coalesce without another
+    /// write. A failed insertion is rolled back before the error is returned.
     ///
     /// # Errors
     ///
     /// Propagates the underlying [`AssetsError`](crate::error::AssetsError)
     /// when the on-disk flush fails (mmap open, atomic swap, rkyv serialise).
     pub fn add(&self, asset_root: &str, durability: PinDurability) -> AssetsResult<bool> {
+        let _publication =
+            (durability == PinDurability::Durable).then(|| self.inner.publication_guard());
         let (newly_pinned, persisted_set_changed) =
             match self.inner.state.entry(asset_root.to_string()) {
                 Entry::Occupied(mut e) => (false, e.get_mut().pin(durability)),
@@ -117,8 +119,14 @@ impl PinsIndex {
                     (true, changed)
                 }
             };
-        if persisted_set_changed {
-            flush_sync(&self.inner, self.inner.hub())?;
+        if persisted_set_changed && let Err(error) = flush_sync_locked(&self.inner) {
+            if let Entry::Occupied(mut entry) = self.inner.state.entry(asset_root.to_string()) {
+                entry.get_mut().unpin(durability);
+                if !entry.get().is_pinned() {
+                    entry.remove();
+                }
+            }
+            return Err(error);
         }
         Ok(newly_pinned)
     }
@@ -148,9 +156,10 @@ impl PinsIndex {
     ///
     /// Propagates the first per-source flush error encountered.
     pub fn flush(&self) -> AssetsResult<()> {
-        self.inner
-            .hub()
-            .map_or_else(|| Flushable::flush(&*self.inner), |hub| hub.flush_now())
+        self.inner.hub().map_or_else(
+            || flush_source(&*self.inner, false, true).map(|_| ()),
+            |hub| hub.flush_now(),
+        )
     }
 
     /// Unpin an `asset_root`. Returns `true` on the 1→0 transition (entry
@@ -165,6 +174,8 @@ impl PinsIndex {
     /// Propagates the underlying [`AssetsError`](crate::error::AssetsError)
     /// when the on-disk flush fails.
     pub fn remove(&self, asset_root: &str, durability: PinDurability) -> AssetsResult<bool> {
+        let _publication =
+            (durability == PinDurability::Durable).then(|| self.inner.publication_guard());
         let mut persisted_set_changed = false;
         let fully_unpinned =
             if let Entry::Occupied(mut e) = self.inner.state.entry(asset_root.to_string()) {
@@ -179,7 +190,7 @@ impl PinsIndex {
                 false
             };
         if persisted_set_changed {
-            flush_sync(&self.inner, self.inner.hub())?;
+            flush_sync_locked(&self.inner)?;
         }
         Ok(fully_unpinned)
     }
@@ -203,6 +214,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::index::persistence::{FlushHub, FlushPolicy};
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn empty_index_has_no_pins() {
@@ -344,6 +356,45 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(1)))]
+    fn durable_add_after_failure_must_publish_or_report_error() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("pins.bin");
+        let idx = disk_index(&path);
+        let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
+        idx.attach_to(&hub);
+        idx.add("asset_a", PinDurability::Local).unwrap();
+        fs::create_dir(&path).unwrap();
+
+        assert!(idx.add("asset_a", PinDurability::Durable).is_err());
+        assert_eq!(
+            idx.inner
+                .state
+                .get("asset_a")
+                .map(|entry| (entry.durable, entry.local)),
+            Some((0, 1)),
+            "a failed durable insertion must leave only the pre-existing reader"
+        );
+        assert!(
+            idx.add("asset_a", PinDurability::Durable).is_err(),
+            "a later writer must not succeed merely because the failed writer incremented the count"
+        );
+        fs::remove_dir(&path).unwrap();
+        idx.add("asset_a", PinDurability::Durable).unwrap();
+        drop(idx);
+        drop(hub);
+
+        assert_eq!(
+            disk_index(&path)
+                .inner
+                .state
+                .get("asset_a")
+                .map(|entry| (entry.durable, entry.local)),
+            Some((1, 0)),
+            "the repaired retry must publish exactly one durable pin"
+        );
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(1)))]
     fn durable_pins_persist_across_instances() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("shared.bin");
@@ -440,8 +491,6 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(60)))]
     fn an_eager_unpin_is_never_resurrected_by_a_concurrent_flush() {
         use std::sync::Barrier;
-
-        use crate::index::persistence::{FlushHub, FlushPolicy};
 
         const ROUNDS: usize = 200;
         const FLUSHERS: usize = 3;

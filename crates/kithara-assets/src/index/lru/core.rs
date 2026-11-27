@@ -78,7 +78,7 @@ impl LruIndex {
             st.remove(asset_root)
         };
         if removed {
-            flush_sync(&self.inner, self.inner.hub())?;
+            flush_sync(&self.inner)?;
         }
         Ok(())
     }
@@ -104,7 +104,7 @@ impl LruIndex {
             let mut st = self.inner.state.lock();
             st.touch(asset_root, bytes_hint)
         };
-        flush_sync(&self.inner, self.inner.hub())?;
+        flush_sync(&self.inner)?;
         Ok(created)
     }
 
