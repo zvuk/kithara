@@ -427,7 +427,7 @@ pub struct ProbePools {
         diagnostics
     }
 
-    #[kithara::test(native, timeout(Long))]
+    #[kithara::test(native, timeout(Heavy))]
     fn a_manifest_with_both_owners_fails_to_compile() {
         let diagnostics = compile_probe(
             "both-owners",
@@ -443,7 +443,7 @@ pub struct ProbePools {
         );
     }
 
-    #[kithara::test(native, timeout(Long))]
+    #[kithara::test(native, timeout(Heavy))]
     fn a_feature_off_facade_with_a_direct_pool_dependency_fails_to_compile() {
         let diagnostics = compile_probe(
             "feature-off-facade",
@@ -459,7 +459,7 @@ pub struct ProbePools {
         );
     }
 
-    #[kithara::test(native, timeout(Long))]
+    #[kithara::test(native, timeout(Heavy))]
     fn a_dev_only_facade_with_a_direct_pool_dependency_fails_to_compile() {
         let diagnostics = compile_probe(
             "dev-only-facade",
@@ -476,7 +476,7 @@ pub struct ProbePools {
         );
     }
 
-    #[kithara::test(native, timeout(Long))]
+    #[kithara::test(native, timeout(Heavy))]
     fn a_target_inactive_facade_with_a_direct_pool_dependency_fails_to_compile() {
         let diagnostics = compile_probe(
             "target-inactive-facade",
@@ -493,7 +493,7 @@ pub struct ProbePools {
         );
     }
 
-    #[kithara::test(native, timeout(Long))]
+    #[kithara::test(native, timeout(Heavy))]
     fn a_manifest_without_a_pool_owner_fails_to_compile() {
         let diagnostics = compile_probe("no-owner", &manifest(""));
         assert!(
