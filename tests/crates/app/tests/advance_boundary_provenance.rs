@@ -74,6 +74,180 @@ const TONE_WINDOW_FRAMES: usize = 1_024;
 const TONE_MAG_FLOOR: f64 = 1.0;
 const PROVENANCE_LEVEL: f32 = 0.5;
 const LINEAR_PATH_MAX_PEAK: f32 = 0.9;
+const EOF_TRACE_RECORD_LIMIT: usize = 131_072;
+const EOF_TRACE_BYTE_LIMIT: usize = 32 * 1024 * 1024;
+const EOF_TRACE_PROBES: [&str; 14] = [
+    "render",
+    "pcm_consumed",
+    "pcm_consumed_packet",
+    "pcm_consumed_identity",
+    "pcm_consumed_origin",
+    "pcm_consumed_geometry",
+    "feeder_refill_unavailable",
+    "pcm_recycle_refused",
+    "pcm_context_refused",
+    "source_motion_invalid_packet",
+    "source_motion_disconnected_packet",
+    "source_motion_normalization_refused",
+    "source_motion_advance_refused",
+    "chunk_admitted",
+];
+
+async fn write_eof_source_trace(
+    case: &str,
+    corrupted: &[Range<usize>],
+    raw_runs: &[ClassRun],
+    collapsed_runs: &[ClassRun],
+) {
+    let (events, overflowed) = kithara_test_utils::test::usdt::recorded();
+    let case = case.to_owned();
+    let writer_case = case.clone();
+    let corrupted = corrupted.to_vec();
+    let raw_runs = raw_runs.to_vec();
+    let collapsed_runs = collapsed_runs.to_vec();
+    let writer = kithara::platform::tokio::task::spawn_sync(move || {
+        write_eof_source_trace_sync(
+            &writer_case,
+            &corrupted,
+            &raw_runs,
+            &collapsed_runs,
+            &events,
+            overflowed,
+        );
+    });
+    if let Err(error) = writer.await {
+        kithara_test_utils::tracing::error!(case = %case, %error, "EOF source history writer failed");
+    }
+}
+
+fn eof_source_trace_payload(
+    case: &str,
+    corrupted: &[Range<usize>],
+    raw_runs: &[ClassRun],
+    collapsed_runs: &[ClassRun],
+    events: &[kithara_test_utils::test::usdt::ProbeEvent],
+    overflowed: bool,
+) -> Value {
+    let mut selected = Vec::new();
+    let mut selected_count = 0;
+    for (sequence, event) in events.iter().enumerate() {
+        if event.target != "kithara_render_probe" || !EOF_TRACE_PROBES.contains(&event.probe) {
+            continue;
+        }
+        selected_count += 1;
+        if selected.len() == EOF_TRACE_RECORD_LIMIT {
+            continue;
+        }
+        selected.push(serde_json::json!({
+            "sequence": sequence,
+            "probe": event.probe,
+            "target": event.target,
+            "file": event.file,
+            "line": event.line,
+            "thread": format!("{:?}", event.thread),
+            "fields": event.fields().collect::<Vec<_>>(),
+        }));
+    }
+    let within_record_limit = selected_count <= EOF_TRACE_RECORD_LIMIT;
+    let complete = !overflowed && within_record_limit;
+    let omission_reason = if overflowed {
+        Some("the scoped USDT recorder overflowed at least one probe")
+    } else if !within_record_limit {
+        Some("selected records exceeded EOF_TRACE_RECORD_LIMIT")
+    } else {
+        None
+    };
+    serde_json::json!({
+        "schema": "kithara.eof-source-observation.v2",
+        "case": case,
+        "corrupted_output_frames": corrupted,
+        "output_frame_units": "OfflinePlayer render frames at the case render_sample_rate",
+        "raw_class_runs": format!("{raw_runs:?}"),
+        "collapsed_class_runs": format!("{collapsed_runs:?}"),
+        "history_complete": complete,
+        "any_probe_overflowed": overflowed,
+        "recorder_events": events.len(),
+        "selected_records": selected_count,
+        "record_limit": EOF_TRACE_RECORD_LIMIT,
+        "byte_limit": EOF_TRACE_BYTE_LIMIT,
+        "omission_reason": omission_reason,
+        "track_identity": "Join pcm_consumed to its containing same-thread render probe's track_id",
+        "source_geometry": "Six ordered pcm_consumed_geometry probes carry the 24-word SourceSpan",
+        "packet_identity": "pcm_consumed_packet binds segment, packet lane_frame/offset, consumed frames and source_revision inside the containing render",
+        "events": if complete { Value::Array(selected) } else { Value::Null },
+    })
+}
+
+fn eof_source_trace_bytes(case: &str, payload: &Value) -> Option<Vec<u8>> {
+    serde_json::to_vec(payload)
+        .map_err(|error| {
+            kithara_test_utils::tracing::error!(%error, case, "EOF source history serialization failed");
+        })
+        .ok()
+}
+
+fn write_eof_source_trace_sync(
+    case: &str,
+    corrupted: &[Range<usize>],
+    raw_runs: &[ClassRun],
+    collapsed_runs: &[ClassRun],
+    events: &[kithara_test_utils::test::usdt::ProbeEvent],
+    overflowed: bool,
+) {
+    let mut payload = eof_source_trace_payload(
+        case,
+        corrupted,
+        raw_runs,
+        collapsed_runs,
+        events,
+        overflowed,
+    );
+    let Some(mut bytes) = eof_source_trace_bytes(case, &payload) else {
+        return;
+    };
+    if bytes.len() > EOF_TRACE_BYTE_LIMIT {
+        payload["serialized_bytes_before_omission"] = serde_json::json!(bytes.len());
+        payload["history_complete"] = Value::Bool(false);
+        payload["omission_reason"] = Value::String(
+            "serialized history exceeded EOF_TRACE_BYTE_LIMIT; events omitted".to_owned(),
+        );
+        payload["events"] = Value::Null;
+        let Some(truncated) = eof_source_trace_bytes(case, &payload) else {
+            return;
+        };
+        bytes = truncated;
+    }
+    if bytes.len() > EOF_TRACE_BYTE_LIMIT {
+        kithara_test_utils::tracing::error!(
+            case,
+            "EOF source history metadata exceeded its byte limit"
+        );
+        return;
+    }
+    let directory = std::env::var_os("KITHARA_HANG_DUMP_DIR")
+        .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+    let path = directory.join(format!(
+        "kithara-eof-source-{case}-{}.json",
+        std::process::id()
+    ));
+    let written = std::fs::create_dir_all(&directory).and_then(|()| std::fs::write(&path, bytes));
+    match written {
+        Ok(()) => kithara_test_utils::tracing::error!(
+            path = %path.display(),
+            complete = %payload["history_complete"],
+            "EOF source history saved"
+        ),
+        Err(error) => kithara_test_utils::tracing::error!(
+            path = %path.display(),
+            %error,
+            "EOF source history write failed"
+        ),
+    }
+}
+
+fn class_run_frames(run: &ClassRun) -> Range<usize> {
+    frame_for_window(run.1)..frame_for_window(run.1 + run.2)
+}
 
 type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
@@ -281,6 +455,7 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(
     #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
 ) {
+    let _eof_trace = kithara_test_utils::test::usdt::scope();
     let (_server, sources) = flac_tracks;
     let setup = setup_queue(&sources, &temp_dir).await;
 
@@ -353,6 +528,13 @@ async fn natural_eof_advance_emits_only_b_after_a_flac(
             setup.queue.current_index(),
         ),
     );
+    if !replays.is_empty() {
+        let corrupted: Vec<Range<usize>> = replays
+            .iter()
+            .map(|replay| replay.start_frame..replay.start_frame + replay.len)
+            .collect();
+        write_eof_source_trace("flac", &corrupted, &runs, &runs).await;
+    }
     assert!(
         replays.is_empty(),
         "track A phase must be monotonic until B starts; {}",
@@ -643,6 +825,7 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
     #[future(awt)] flac_tracks: (TestServerHelper, [Url; 2]),
     temp_dir: TestTempDir,
 ) {
+    let _eof_trace = kithara_test_utils::test::usdt::scope();
     let (_server, sources) = flac_tracks;
     let setup = setup_queue_with_sample_rate(&sources, &temp_dir, RESAMPLED_RENDER_RATE).await;
 
@@ -709,6 +892,17 @@ async fn natural_eof_advance_emits_only_b_flac_resampled_48k(
         current_index: setup.queue.current_index(),
     };
 
+    if ascending_runs.len() != 1 {
+        let mut corrupted: Vec<Range<usize>> = raw_runs
+            .iter()
+            .filter(|run| {
+                run.0 == FrameClass::Silence && run.1 > onset_window && run.1 < b_onset_window
+            })
+            .map(class_run_frames)
+            .collect();
+        corrupted.extend(ascending_runs.iter().skip(1).map(class_run_frames));
+        write_eof_source_trace("flac-resampled-48k", &corrupted, &raw_runs, &collapsed_runs).await;
+    }
     assert_eq!(
         ascending_runs.len(),
         1,

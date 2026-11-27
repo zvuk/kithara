@@ -923,17 +923,25 @@ async fn completion_observer_keeps_current_changes_in_bus_order(
 // gate exists to probe. It therefore has no state-wait equivalent and is left
 // as a timer on purpose.
 #[kithara::test(tokio, multi_thread, timeout(Long))]
+#[case::iterations_00_04(0..5)]
+#[case::iterations_05_09(5..10)]
+#[case::iterations_10_14(10..15)]
+#[case::iterations_15_19(15..20)]
+#[case::iterations_20_24(20..25)]
+#[case::iterations_25_29(25..30)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn concurrent_completion_race_does_not_barge_in(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
+    #[case] iterations: std::ops::Range<u32>,
 ) {
     let (_helper, fast, slow) = race_tracks;
     let fast_url = fast.master_url();
     let slow_url = slow.master_url();
 
     let mut failures: Vec<String> = Vec::new();
+    let expected_iterations = iterations.len();
 
-    for iter in 0..consts::STRESS_ITERATIONS {
+    for iter in iterations {
         hang_tick!(format!("completion-race iteration {iter}"));
         let temp = temp_dir();
         let (queue, downloader, store) = build_queue(&temp).await;
@@ -998,10 +1006,11 @@ async fn concurrent_completion_race_does_not_barge_in(
 
     assert!(
         failures.is_empty(),
-        "concurrent completion race: {n}/{iters} iteration(s) violated selection event ordering:\n{}",
+        "concurrent completion race: {n}/{iters} iteration(s) violated selection event ordering; full scenario={total}:\n{}",
         failures.join("\n"),
         n = failures.len(),
-        iters = consts::STRESS_ITERATIONS,
+        iters = expected_iterations,
+        total = consts::STRESS_ITERATIONS,
     );
 }
 

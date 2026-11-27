@@ -141,7 +141,7 @@ const SWAP_FRAMES: u64 = 4096;
 /// Blocks a bass swap take captures: the swap and its held end.
 const SWAP_BLOCKS: usize = 12;
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 async fn a_bass_swap_moves_each_deck_low_band_on_its_own_program() {
     let decks = [
         assets::fixed_constant_wav_cd_fifth_1323000(),

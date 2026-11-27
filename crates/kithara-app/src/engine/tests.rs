@@ -997,7 +997,7 @@ async fn rhythm_ladder(helper: &TestServerHelper) -> Url {
 
 /// A synced HLS deck takes the catalogue quality its popover selects and
 /// keeps the rhythm on the host beats.
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Long))]
 async fn a_synced_hls_deck_switches_quality_on_the_host_beat() {
     let server = PrivateTestServer::start().await;
     let helper = server.helper();

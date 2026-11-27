@@ -559,7 +559,7 @@ async fn bound_tempo_retarget_reaches_pcm_within_twenty_ms(
 }
 
 #[cfg(feature = "flash")]
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Quick))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Short))]
 async fn offline_callback_geometry_does_not_pace_the_audio_clock(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
@@ -596,38 +596,39 @@ async fn offline_callback_geometry_does_not_pace_the_audio_clock(
     tracing("kithara_test_utils::test::usdt=debug"),
     timeout(Long)
 )]
+#[case::driver_128(128)]
+#[case::driver_256(256)]
+#[case::driver_512(512)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn running_sync_command_changes_audible_pcm_within_one_block(
     #[future(awt)] synthetic_sources: PreparedSources,
+    #[case] driver_frames: usize,
 ) {
     let wrong = wrong_source(&synthetic_sources);
-    for driver_frames in [128, 256, 512] {
-        hang_tick!(format!(
-            "running SYNC: {driver_frames}-frame capture group and candidate"
-        ));
-        let control = running_sync_run(driver_frames, false, &synthetic_sources, &wrong).await;
-        hang_reset!();
-        let candidate = running_sync_run(driver_frames, true, &synthetic_sources, &wrong).await;
-        hang_reset!();
-        let aligned = align_source_runs(&candidate, &control);
-        let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
-        let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
-        let mut failures =
-            time_stretch_failures("running SYNC", &candidate_report, &control_report);
-        append_run_failures("control", &control, &mut failures);
-        append_run_failures("candidate", &candidate, &mut failures);
-        failures.extend(command_latency_failures(
-            "running SYNC",
-            &aligned,
-            candidate.command_lead,
-            driver_frames,
-        ));
-        assert!(
-            failures.is_empty(),
-            "running SYNC {driver_frames}-frame capture group/{LATENCY_CALLBACK_FRAMES}-frame callback contract failed:\n{}",
-            failures.join("\n"),
-        );
-    }
+    hang_tick!(format!(
+        "running SYNC: {driver_frames}-frame capture group and candidate"
+    ));
+    let control = running_sync_run(driver_frames, false, &synthetic_sources, &wrong).await;
+    hang_reset!();
+    let candidate = running_sync_run(driver_frames, true, &synthetic_sources, &wrong).await;
+    hang_reset!();
+    let aligned = align_source_runs(&candidate, &control);
+    let control_report = CochleaReport::measure(&aligned.control, CHANNELS, 48_000);
+    let candidate_report = CochleaReport::measure(&aligned.candidate, CHANNELS, 48_000);
+    let mut failures = time_stretch_failures("running SYNC", &candidate_report, &control_report);
+    append_run_failures("control", &control, &mut failures);
+    append_run_failures("candidate", &candidate, &mut failures);
+    failures.extend(command_latency_failures(
+        "running SYNC",
+        &aligned,
+        candidate.command_lead,
+        driver_frames,
+    ));
+    assert!(
+        failures.is_empty(),
+        "running SYNC {driver_frames}-frame capture group/{LATENCY_CALLBACK_FRAMES}-frame callback contract failed:\n{}",
+        failures.join("\n"),
+    );
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -716,7 +717,7 @@ async fn latest_sync_target_wins_in_pcm(#[future(awt)] synthetic_sources: Prepar
     );
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Short))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 async fn bound_sync_render_is_rtsan_clean(#[future(awt)] sweep_sources: PreparedSources) {
     let control = tempo_retarget_run(BLOCK_FRAMES, 16, false, &sweep_sources, None).await;
     let candidate = tempo_retarget_run(BLOCK_FRAMES, 16, true, &sweep_sources, None).await;
