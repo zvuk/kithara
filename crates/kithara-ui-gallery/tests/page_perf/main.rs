@@ -5,17 +5,17 @@ mod immediate;
 mod pages;
 mod retained;
 
-use std::{borrow::Cow, cell::OnceCell, sync::LazyLock};
+use std::{
+    borrow::Cow,
+    cell::{OnceCell, RefCell},
+    rc::Rc,
+    sync::LazyLock,
+};
 
 use criterion::{BenchmarkId, Criterion};
 use iced::{Theme, advanced::graphics::text::font_system, theme::Palette};
 use kithara_platform::time::WallInstant as WallClock;
-use kithara_ui::{
-    app::Ui,
-    draw::Pt,
-    render::{Skin, fonts::FONT_BYTES},
-    view::ViewState,
-};
+use kithara_ui::render::{Skin, fonts::FONT_BYTES};
 use kithara_ui_gallery::{demo, fixture, sections};
 use pages::{Page, Program};
 
@@ -28,25 +28,18 @@ use crate::{
     retained::Retained,
 };
 
-/// What drives a page from one frame to the next.
-#[derive(Clone, Copy)]
-enum Program {
-    /// Nothing at all. The page is measured drawing itself unprompted, which is
-    /// what makes it the control every other page is read against.
-    Idle,
-    /// The page's own animation, at a sweep of waveform bucket counts.
-    Buckets(&'static [u16]),
-    /// The page's own animation.
-    Tick,
-    /// `n` wheel events per frame, at a sweep of `n`.
-    Wheels(&'static [usize]),
-    /// A button held down for the whole run and `n` pointer moves per frame, at
-    /// a sweep of `n`. This is the program the eye complains about: a fader
-    /// under the hand, redrawn as fast as the host can.
-    Drag(&'static [usize]),
+/// One run per sweep step, each named by the value it swept to.
+impl Page {
+    fn open(&self, ui: &mut Ui<'_, PageApp>) {
+        if self.own.is_some() {
+            return;
+        }
+        ui.stand(sections::PAGE, self.tab).unwrap_or_else(|error| {
+            panic!("the page-perf fixture must open {}: {error}", self.name)
+        });
+    }
 }
 
-/// One run per sweep step, each named by the value it swept to.
 impl From<Program> for Vec<Run> {
     fn from(program: Program) -> Self {
         match program {
@@ -91,6 +84,58 @@ impl Run {
     }
 }
 
+trait PageHost {
+    fn drawn_as(&self) -> &'static str;
+    fn fenced_frame(&mut self) -> Census;
+    fn frame(&mut self) -> Census;
+    fn move_by(&mut self, dx: f32) -> f32;
+    fn picture(&mut self) -> u64;
+    fn pixels(&mut self) -> Vec<u8>;
+    fn place_pointer(&mut self);
+    fn press(&mut self);
+    fn reading(&self, endpoint: Option<&str>) -> Option<u64>;
+    fn release(&mut self);
+    fn wheel(&mut self, lines: f32);
+}
+
+fn theme(skin: &Skin) -> Theme {
+    let palette = &skin.palette;
+    Theme::custom(
+        "Kithara".to_owned(),
+        Palette {
+            background: palette.bg.into(),
+            text: palette.text.into(),
+            primary: palette.accent.into(),
+            success: palette.success.into(),
+            danger: palette.danger.into(),
+            warning: palette.warning.into(),
+        },
+    )
+}
+
+fn load_fonts() {
+    static LOADED: LazyLock<()> = LazyLock::new(|| {
+        let mut fonts = font_system()
+            .write()
+            .expect("iced font system lock must not be poisoned");
+        for bytes in FONT_BYTES {
+            fonts.load_font(Cow::Borrowed(bytes));
+        }
+    });
+    LazyLock::force(&LOADED);
+}
+
+struct Outcome<'run> {
+    page: &'run Page,
+    drawn_as: &'static str,
+    expected: Natives,
+    run: Run,
+    tally: Tally,
+    reading: [Option<u64>; 2],
+    picture: [u64; 2],
+    painted: bool,
+}
+
 impl TryFrom<Host> for Gpu {
     type Error = String;
 
@@ -119,23 +164,19 @@ enum Host {
 /// Nothing here judges. Every number is printed; the assertions are only that a
 /// run did the thing it claims to measure, because a device-less, wheel-less or
 /// motionless run otherwise reports a beautiful number for nothing.
-fn measure<'run>(
-    fixture: &Fixture,
-    page: &'run Page,
+fn measure(
+    fixture: Rc<Fixture>,
+    page: &'static Page,
     run: Run,
     expected: Natives,
-    gpu: &mut Gpu,
+    gpu: Rc<RefCell<Gpu>>,
     fenced: bool,
-) -> Outcome<'run> {
+) -> Outcome<'static> {
     /// Frames discarded before measuring. The first carries the mount, the layout,
     /// the shaping caches and every pipeline either host compiles lazily.
     const WARMUP: usize = 3;
 
-    let app = PageApp::new(page, run);
-    let mut driver: Box<dyn PageHost + '_> = match gpu {
-        Gpu::Immediate(gpu) => Box::new(Immediate::new(fixture.compiled(page), page, app, gpu)),
-        Gpu::Retained(gpu) => Box::new(Retained::new(fixture.config(), page, app, gpu)),
-    };
+    let mut driver = page_driver(fixture, page, run, gpu);
     driver.place_pointer();
     for _ in 0..WARMUP {
         driver.frame();
@@ -383,10 +424,10 @@ fn gallery_case(mut index: usize) -> (usize, Host, Run, bool) {
     panic!("unknown gallery case {index}")
 }
 
-struct GalleryWork<'run> {
-    driver: Box<dyn PageHost + 'run>,
+struct GalleryWork {
+    driver: Box<dyn PageHost>,
     host: Host,
-    page: &'run Page,
+    page: &'static Page,
     run: Run,
     fenced: bool,
     expected: Natives,
@@ -395,7 +436,7 @@ struct GalleryWork<'run> {
     tally: Option<Tally>,
 }
 
-impl<'run> GalleryWork<'run> {
+impl GalleryWork {
     fn run(&mut self) {
         self.tally = Some(frames(
             self.driver.as_mut(),
@@ -417,36 +458,28 @@ impl<'run> GalleryWork<'run> {
             painted: painted(&self.driver.pixels()),
         };
         let baseline = match self.run {
-            Run::Wheels(count) if count > 0 => {
-                let fixture = Fixture::default();
-                let mut gpu = shared_gpu(self.host);
-                Some(
-                    measure(
-                        &fixture,
-                        self.page,
-                        Run::Wheels(0),
-                        self.expected,
-                        &mut gpu,
-                        false,
-                    )
-                    .picture[1],
+            Run::Wheels(count) if count > 0 => Some(
+                measure(
+                    Rc::new(Fixture::default()),
+                    self.page,
+                    Run::Wheels(0),
+                    self.expected,
+                    shared_gpu(self.host),
+                    false,
                 )
-            }
-            Run::Moves(count) if count > 0 => {
-                let fixture = Fixture::default();
-                let mut gpu = shared_gpu(self.host);
-                Some(
-                    measure(
-                        &fixture,
-                        self.page,
-                        Run::Moves(0),
-                        self.expected,
-                        &mut gpu,
-                        false,
-                    )
-                    .picture[1],
+                .picture[1],
+            ),
+            Run::Moves(count) if count > 0 => Some(
+                measure(
+                    Rc::new(Fixture::default()),
+                    self.page,
+                    Run::Moves(0),
+                    self.expected,
+                    shared_gpu(self.host),
+                    false,
                 )
-            }
+                .picture[1],
+            ),
             _ => None,
         };
         prove(self.page.name, &outcome, baseline);
@@ -454,47 +487,46 @@ impl<'run> GalleryWork<'run> {
 }
 
 thread_local! {
-    static ICED_GPUS: OnceCell<Box<Gpu>> = OnceCell::new();
-    static VELLO_GPUS: OnceCell<Box<Gpu>> = OnceCell::new();
-    static FIXTURES: std::collections::BTreeMap<usize, Box<Fixture>> =
-        std::collections::BTreeMap::new();
+    static ICED_GPU: OnceCell<Rc<RefCell<Gpu>>> = OnceCell::new();
+    static VELLO_GPU: OnceCell<Rc<RefCell<Gpu>>> = OnceCell::new();
 }
 
-fn shared_gpu(host: Host) -> &'static mut Gpu {
+fn shared_gpu(host: Host) -> Rc<RefCell<Gpu>> {
     let cell = match host {
-        Host::Immediate => &ICED_GPUS,
-        Host::Retained => &VELLO_GPUS,
+        Host::Immediate => &ICED_GPU,
+        Host::Retained => &VELLO_GPU,
     };
     cell.with(|gpu| {
-        gpu.get_or_init(|| {
-            Box::new(
-                Gpu::try_from(host)
-                    .unwrap_or_else(|error| panic!("no host to measure on: {error}")),
-            )
-        })
+        Rc::clone(gpu.get_or_init(|| {
+            Rc::new(RefCell::new(Gpu::try_from(host).unwrap_or_else(|error| {
+                panic!("no host to measure on: {error}")
+            })))
+        }))
     })
 }
 
-fn shared_fixture(index: usize) -> &'static Fixture {
-    FIXTURES.with(|fixtures| {
-        fixtures
-            .entry(index)
-            .or_insert_with(|| Box::new(Fixture::default()))
-    })
+fn page_driver(
+    fixture: Rc<Fixture>,
+    page: &'static Page,
+    run: Run,
+    gpu: Rc<RefCell<Gpu>>,
+) -> Box<dyn PageHost> {
+    let app = PageApp::new(page, run);
+    let mut borrowed = gpu.borrow_mut();
+    match &mut *borrowed {
+        Gpu::Immediate(gpu) => Box::new(Immediate::new(fixture.compiled(page), page, app, gpu)),
+        Gpu::Retained(_) => Box::new(Retained::new(fixture, page, app, Rc::clone(&gpu))),
+    }
 }
 
-fn prepare_gallery(index: usize) -> GalleryWork<'static> {
+fn prepare_gallery(index: usize) -> GalleryWork {
     load_fonts();
     let (page_index, host, run, fenced) = gallery_case(index);
     let page = &consts::PAGES[page_index];
-    let fixture = shared_fixture(page_index);
+    let fixture = Rc::new(Fixture::default());
     let gpu = shared_gpu(host);
     let expected = leaves(&fixture.compiled(page));
-    let app = PageApp::new(page, run);
-    let mut driver: Box<dyn PageHost + 'static> = match &mut *gpu {
-        Gpu::Immediate(gpu) => Box::new(Immediate::new(fixture.compiled(page), page, app, gpu)),
-        Gpu::Retained(gpu) => Box::new(Retained::new(fixture.config(), page, app, gpu)),
-    };
+    let mut driver = page_driver(fixture, page, run, gpu);
     driver.place_pointer();
     for _ in 0..3 {
         driver.frame();
