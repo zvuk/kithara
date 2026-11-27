@@ -73,8 +73,6 @@ impl FileCoord {
     pub(crate) fn position(&self) -> u64 {
         self.position.load(Ordering::Acquire)
     }
-
-    #[kithara::measure]
     pub(crate) fn read_pos(&self) -> u64 {
         self.read_pos.load(Ordering::Acquire)
     }
@@ -103,8 +101,6 @@ impl FileCoord {
     pub(crate) fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
     }
-
-    #[kithara::measure]
     pub(crate) fn set_read_pos(&self, value: u64) {
         self.read_pos.store(value, Ordering::Release);
         self.reader_advanced.notify_one();

@@ -59,7 +59,6 @@ impl<T: StreamType> Stream<T> {
     /// is all-or-nothing and a slow tail would otherwise block a read the resident head could
     /// already satisfy. If the resource is evicted between `wait_range` and `read_at`, it
     /// re-acquires immediately without parking.
-    #[kithara::measure]
     #[kithara::hang_watchdog]
     pub(super) fn try_read_with(
         &mut self,

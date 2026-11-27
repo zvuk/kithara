@@ -905,7 +905,6 @@ impl SymphoniaDemuxer {
     }
 
     #[kithara::probe]
-    #[kithara::measure(label = "decode.symphonia.demux")]
     fn read_frame(&mut self, wait: PrepareWait) -> DecodeResult<DemuxOutcome<'_>> {
         loop {
             let packet = match self.format_reader.read(wait) {

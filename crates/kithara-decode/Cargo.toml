@@ -10,7 +10,7 @@ keywords = ["audio", "decoder", "codec", "pcm", "hls"]
 categories = ["multimedia::audio"]
 
 [package.metadata.cargo-machete]
-ignored = ["hotpath", "unimock"]
+ignored = ["unimock"]
 
 [features]
 # Default pulls in Symphonia + fdk-aac so `cargo build` on any platform
@@ -19,7 +19,6 @@ ignored = ["hotpath", "unimock"]
 # and enable just the platform feature; consumers explicitly avoiding
 # libfdk-aac (LGPL + patent constraints) keep `["symphonia"]` only.
 default = ["symphonia", "fdk-aac", "resample-rubato", "client-reqwest", "tls-rustls"]
-perf = ["dep:hotpath", "hotpath/hotpath"]
 apple = [
     "dep:core-foundation",
     "dep:core-foundation-sys",
@@ -103,9 +102,6 @@ core-foundation-sys = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-fdk = { workspace = true, optional = true }
-
-# hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
-hotpath = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true, optional = true }

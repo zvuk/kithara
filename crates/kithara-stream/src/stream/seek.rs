@@ -131,7 +131,6 @@ impl<T: StreamType> Seek for Stream<T> {
     /// Off the real-time path, discovers the length for an `End`-relative seek by priming, since
     /// `probe_seek` cannot and errors instead. The cursor is published before priming so the peer,
     /// which aims from the cursor, targets the new position rather than the stale one.
-    #[kithara::measure]
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         self.seek_with_control(pos, None)
     }

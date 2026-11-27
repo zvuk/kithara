@@ -10,11 +10,9 @@ keywords = ["hls", "streaming", "audio", "abr", "vod"]
 categories = ["multimedia::audio", "network-programming"]
 
 [package.metadata.cargo-machete]
-ignored = ["hotpath"]
 
 [features]
 default = ["client-reqwest", "tls-rustls"]
-perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 usdt = ["kithara-test-utils/usdt"]
 no-block = ["kithara-platform/no-block", "kithara-test-utils/no-block"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
@@ -79,8 +77,6 @@ url = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspace-hack" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# hotpath (perf/memprof profiling) does not build on wasm32; keep it off the wasm closure.
-hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-abr = { workspace = true, default-features = false, features = ["mock"] }

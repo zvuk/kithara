@@ -41,8 +41,6 @@ impl PcmReceiver {
         });
     }
 }
-
-#[kithara::measure(label = "render.pcm.wait")]
 fn wait_until(receiver: &PcmReceiver, watchdog: &mut HangDetector, available: impl Fn() -> bool) {
     let Some(ready) = receiver.ready.as_ref().and_then(Weak::upgrade) else {
         return;

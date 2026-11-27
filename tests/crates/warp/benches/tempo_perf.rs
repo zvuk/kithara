@@ -1,14 +1,17 @@
-use ::kithara::{
-    platform::time::{Duration, Instant},
-    signal::ExponentialApproach,
-    warp::{Pitch, WarpControls},
-};
-use kithara_test_utils::{kithara, tracing};
-use num_traits::ToPrimitive;
+#![forbid(unsafe_code)]
 
-use super::{
-    AudioChunk, AudioChunkInfo, SpeedCurve, StretchKind, Warp, WarpConfig, chunk, pools, spec,
+use std::{fs::OpenOptions, io::Write, num::NonZeroU32};
+
+use criterion::{BatchSize, BenchmarkId, Criterion};
+use kithara::{
+    platform::time::{Duration, Instant},
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec, ExponentialApproach},
+    stretch::StretchKind,
+    sync::SpeedCurve,
+    warp::{Pitch, Warp, WarpConfig, WarpControls},
 };
+use kithara_integration_tests::bufpool_ext::{Pools, pools, sample_buffer};
+use num_traits::ToPrimitive;
 
 const QUANTUM: usize = 512;
 const UPDATE_FRAMES: usize = 882;
@@ -23,6 +26,22 @@ enum Motion {
     Retarget,
 }
 
+fn spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(44_100).expect("tempo sample rate"))
+}
+
+fn chunk(pools: &Pools, spec: AudioSpec, samples: &[f32], offset: u64) -> AudioChunk {
+    AudioChunk::new(
+        AudioChunkInfo {
+            spec,
+            frame_offset: offset,
+            frames: u32::try_from(samples.len() / 2).expect("chunk frames"),
+            ..AudioChunkInfo::default()
+        },
+        sample_buffer(pools, samples),
+    )
+}
+
 fn source_position(position: (u128, std::num::NonZeroU128)) -> f64 {
     position.0.to_f64().expect("source numerator fits f64")
         / position
@@ -32,23 +51,69 @@ fn source_position(position: (u128, std::num::NonZeroU128)) -> f64 {
             .expect("source denominator fits f64")
 }
 
-fn summary(durations: &mut [Duration]) -> (f64, f64, f64) {
-    durations.sort_unstable();
-    let total = durations.iter().map(Duration::as_secs_f64).sum::<f64>();
-    let p99 = durations[durations.len() * 99 / 100].as_secs_f64();
-    let maximum = durations.last().expect("measured blocks").as_secs_f64();
-    (total, p99, maximum)
+fn total(durations: &[Duration]) -> f64 {
+    durations.iter().map(Duration::as_secs_f64).sum()
 }
 
-#[kithara::test(native, flash(false), tracing("info"))]
-#[case::constant_keylock(Motion::Constant, true)]
-#[case::approach_keylock(Motion::Approach, true)]
-#[case::retarget_keylock(Motion::Retarget, true)]
-#[case::constant_varispeed(Motion::Constant, false)]
-#[case::approach_varispeed(Motion::Approach, false)]
-#[case::retarget_varispeed(Motion::Retarget, false)]
-#[ignore = "opt-in CPU profile; run alone with --ignored --nocapture"]
-fn tempo_worker_profile(#[case] motion: Motion, #[case] keylock: bool) {
+fn observe(identity: &str, worker: f64, service: f64, render: f64) {
+    let Some(path) = std::env::var_os("KITHARA_BENCH_OBSERVATIONS") else {
+        return;
+    };
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .expect("open tempo observations");
+    serde_json::to_writer(
+        &mut file,
+        &serde_json::json!({
+            "identity": format!("tempo_worker/case/{identity}"),
+            "observation": {
+                "tempo": {
+                    "worker_seconds": worker,
+                    "service_seconds": service,
+                    "render_seconds": render,
+                    "decks": DECKS,
+                    "measured_frames": MEASURED_FRAMES,
+                }
+            }
+        }),
+    )
+    .expect("write tempo observation");
+    file.write_all(b"\n").expect("terminate tempo observation");
+}
+
+struct TempoWork {
+    motion: Motion,
+    identity: &'static str,
+    pools: [Pools; DECKS],
+    renderers:
+        [kithara::warp::WarpRenderer<kithara_integration_tests::bufpool_ext::TestPools>; DECKS],
+    samples: Vec<f32>,
+    blocks: Vec<Duration>,
+    service: Vec<Duration>,
+    render: Vec<Duration>,
+}
+
+impl TempoWork {
+    fn teardown(&mut self) {
+        observe(
+            self.identity,
+            total(&self.blocks),
+            total(&self.service),
+            total(&self.render),
+        );
+    }
+}
+
+impl Drop for TempoWork {
+    fn drop(&mut self) {
+        self.teardown();
+    }
+}
+
+fn prepare_tempo(index: usize) -> TempoWork {
+    let (motion, keylock, identity) = case(index);
     let config = WarpConfig::builder()
         .backend(StretchKind::Signalsmith)
         .maybe_controls(
@@ -58,19 +123,34 @@ fn tempo_worker_profile(#[case] motion: Motion, #[case] keylock: bool) {
         .speed(1.05)
         .build();
     let pools: [_; DECKS] = std::array::from_fn(|_| pools());
-    let mut renderers: [_; DECKS] =
+    let renderers: [_; DECKS] =
         std::array::from_fn(|deck| Warp::new((), &config).renderer(spec(), pools[deck].clone()));
     let tone = kithara_test_fixtures::unit_fixtures::warp_sine();
     let source_frames = (WARM_FRAMES + MEASURED_FRAMES) * 2 + 65_536;
-    let samples: Vec<_> = tone
+    let samples = tone
         .iter()
         .copied()
         .cycle()
         .take(source_frames * 2)
         .collect();
-    let mut blocks = Vec::with_capacity(32_768);
-    let mut service = Vec::with_capacity(32_768);
-    let mut render = Vec::with_capacity(32_768);
+    TempoWork {
+        motion,
+        identity,
+        pools,
+        renderers,
+        samples,
+        blocks: Vec::with_capacity(32_768),
+        service: Vec::with_capacity(32_768),
+        render: Vec::with_capacity(32_768),
+    }
+}
+
+fn run_tempo(work: &mut TempoWork) {
+    let motion = work.motion;
+    let pools = &work.pools;
+    let renderers = &mut work.renderers;
+    let samples = &work.samples;
+    let source_frames = (WARM_FRAMES + MEASURED_FRAMES) * 2 + 65_536;
     let mut source = [0_usize; DECKS];
     let mut output_frames = 0;
     let mut next_update = UPDATE_FRAMES;
@@ -78,7 +158,6 @@ fn tempo_worker_profile(#[case] motion: Motion, #[case] keylock: bool) {
     let mut previous_end: [Option<f64>; DECKS] = [None; DECKS];
     let mut energy = [0.0_f64; DECKS];
     let mut measured = 0;
-    let mut over_budget_blocks = 0;
     let mut moving_rate = 1.05;
     while output_frames < WARM_FRAMES + MEASURED_FRAMES {
         let begin = Instant::now();
@@ -100,7 +179,7 @@ fn tempo_worker_profile(#[case] motion: Motion, #[case] keylock: bool) {
                 )),
             };
             if let Some(curve) = curve {
-                for renderer in &mut renderers {
+                for renderer in &mut *renderers {
                     renderer
                         .set_speed(curve.clone(), revision)
                         .expect("supported shared tempo curve");
@@ -185,12 +264,10 @@ fn tempo_worker_profile(#[case] motion: Motion, #[case] keylock: bool) {
             }
         }
         if output_frames >= WARM_FRAMES {
-            service.push(prepared);
-            render.push(rendered);
-            blocks.push(elapsed);
+            work.service.push(prepared);
+            work.render.push(rendered);
+            work.blocks.push(elapsed);
             measured += frames;
-            let audio_seconds = frames.to_f64().expect("output frames fit f64") / 44_100.0;
-            over_budget_blocks += usize::from(elapsed.as_secs_f64() > audio_seconds);
         }
         output_frames += frames;
         std::hint::black_box(outputs);
@@ -199,25 +276,61 @@ fn tempo_worker_profile(#[case] motion: Motion, #[case] keylock: bool) {
     for energy in energy {
         assert!(energy / (measured * 2).to_f64().expect("sample count fits f64") > 0.01);
     }
-    let worker = summary(&mut blocks);
-    let service = summary(&mut service);
-    let render = summary(&mut render);
-    tracing::info!(
-        ?motion,
-        keylock,
-        decks = DECKS,
-        audio_seconds = 12.0,
-        measured_blocks = blocks.len(),
-        over_budget_blocks,
-        worker_total_seconds = worker.0,
-        worker_p99_seconds = worker.1,
-        worker_max_seconds = worker.2,
-        service_total_seconds = service.0,
-        service_p99_seconds = service.1,
-        service_max_seconds = service.2,
-        render_total_seconds = render.0,
-        render_p99_seconds = render.1,
-        render_max_seconds = render.2,
-        "tempo worker profile"
-    );
 }
+
+#[metabench::benchmark(TEMPO_WORKER, "tempo_worker", "case", gungraun_setup = prepare_tempo)]
+#[bench::constant_keylock(0_usize)]
+#[bench::approach_keylock(1_usize)]
+#[bench::retarget_keylock(2_usize)]
+#[bench::constant_varispeed(3_usize)]
+#[bench::approach_varispeed(4_usize)]
+#[bench::retarget_varispeed(5_usize)]
+fn native_tempo(mut work: TempoWork) -> TempoWork {
+    run_tempo(&mut work);
+    work
+}
+
+fn case(index: usize) -> (Motion, bool, &'static str) {
+    [
+        (Motion::Constant, true, "constant_keylock"),
+        (Motion::Approach, true, "approach_keylock"),
+        (Motion::Retarget, true, "retarget_keylock"),
+        (Motion::Constant, false, "constant_varispeed"),
+        (Motion::Approach, false, "approach_varispeed"),
+        (Motion::Retarget, false, "retarget_varispeed"),
+    ][index]
+}
+
+fn criterion_benchmarks(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tempo_worker");
+    group.sample_size(10);
+    for (index, id) in [
+        "constant_keylock",
+        "approach_keylock",
+        "retarget_keylock",
+        "constant_varispeed",
+        "approach_varispeed",
+        "retarget_varispeed",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        group.bench_function(BenchmarkId::new("case", id), |b| {
+            b.iter_batched(
+                || prepare_tempo(index),
+                |mut work| {
+                    run_tempo(&mut work);
+                    work
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [TEMPO_WORKER],
+    allocator = std::alloc::System,
+);

@@ -104,7 +104,6 @@ impl<T: StreamType<Events = EventBus>> Audio<Stream<T>> {
     ///
     /// # Errors
     /// Returns a source, decoder, or buffer-pool setup failure.
-    #[kithara::measure(label = "audio.prepare")]
     pub async fn prepare<B, S>(
         config: AudioConfig<T, B>,
         wake: Arc<dyn WorkerWake>,
