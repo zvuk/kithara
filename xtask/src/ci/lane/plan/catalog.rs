@@ -171,12 +171,21 @@ impl Catalog {
     }
 
     pub(super) fn fingerprint(&self) -> Result<String> {
-        Ok(digest(&serde_json::to_vec(self)?))
+        canonical_digest(self)
     }
 }
 
 pub(super) fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+/// Digests a value's JSON with every object's keys sorted, so the result
+/// does not depend on field declaration order or on whether a build unifies
+/// `serde_json`'s `preserve_order` feature.
+pub(super) fn canonical_digest(value: &impl Serialize) -> Result<String> {
+    let mut value = serde_json::to_value(value)?;
+    value.sort_all_objects();
+    Ok(digest(&serde_json::to_vec(&value)?))
 }
 
 pub(super) fn normalize_kind(kind: &str) -> &str {
