@@ -1,6 +1,6 @@
-use std::{collections::BTreeMap, hint::black_box, sync::LazyLock};
+use std::{collections::BTreeMap, sync::LazyLock};
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion};
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
@@ -150,10 +150,10 @@ fn bench_compile_expand(c: &mut Criterion) {
         for width in [10, 100, 300] {
             let fixture = nested_fixture(depth, width, false);
             group.bench_with_input(
-                BenchmarkId::new(format!("depth-{depth}"), format!("width-{width}")),
+                BenchmarkId::new("compile", format!("depth_{depth}_width_{width}")),
                 &(depth, width),
                 |b, _| {
-                    b.iter(|| black_box(fixture.compile()));
+                    b.iter(|| std::hint::black_box(fixture.compile()));
                 },
             );
         }
@@ -166,7 +166,7 @@ fn bench_view_build(c: &mut Criterion) {
     let reads = BenchReads::new();
     c.bench_function("ui/view_build/250-controls", |b| {
         b.iter(|| {
-            black_box(tree::render(
+            std::hint::black_box(tree::render(
                 &ui.root,
                 &ui,
                 &reads,
@@ -185,7 +185,7 @@ fn bench_data_push(c: &mut Criterion) {
     c.bench_function("ui/data_push/8192-wave-8-stereo-view", |b| {
         b.iter(|| {
             reads.push();
-            black_box(tree::render(
+            std::hint::black_box(tree::render(
                 &ui.root,
                 &ui,
                 &reads,
@@ -207,20 +207,24 @@ fn bench_event_apply(c: &mut Criterion) {
             path: "nested/level-0/fader-0-0".to_owned(),
             action: ControlAction::SetScalar(0.63),
         };
-        group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, _| {
-            b.iter(|| {
-                reads.apply(black_box(&event));
-                black_box(tree::render(
-                    &ui.root,
-                    &ui,
-                    &reads,
-                    &view::EMPTY,
-                    builtin::skin(),
-                    Clock::default(),
-                    None,
-                ));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("apply", format!("depth_{depth}")),
+            &depth,
+            |b, _| {
+                b.iter(|| {
+                    reads.apply(std::hint::black_box(&event));
+                    std::hint::black_box(tree::render(
+                        &ui.root,
+                        &ui,
+                        &reads,
+                        &view::EMPTY,
+                        builtin::skin(),
+                        Clock::default(),
+                        None,
+                    ));
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -558,11 +562,104 @@ const fn waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
     })
 }
 
-criterion_group!(
-    benches,
-    bench_compile_expand,
-    bench_view_build,
-    bench_data_push,
-    bench_event_apply,
+fn criterion_benchmarks(c: &mut Criterion) {
+    bench_compile_expand(c);
+    bench_view_build(c);
+    bench_data_push(c);
+    bench_event_apply(c);
+}
+
+fn compile_prepare(index: usize) -> Fixture {
+    let depth = [1, 4, 8][index / 3];
+    let width = [10, 100, 300][index % 3];
+    nested_fixture(depth, width, false)
+}
+
+#[metabench::benchmark(UI_COMPILE, "ui/compile_expand", "compile", gungraun_setup = compile_prepare)]
+#[bench::depth_1_width_10(0_usize)]
+#[bench::depth_1_width_100(1_usize)]
+#[bench::depth_1_width_300(2_usize)]
+#[bench::depth_4_width_10(3_usize)]
+#[bench::depth_4_width_100(4_usize)]
+#[bench::depth_4_width_300(5_usize)]
+#[bench::depth_8_width_10(6_usize)]
+#[bench::depth_8_width_100(7_usize)]
+#[bench::depth_8_width_300(8_usize)]
+fn native_compile(fixture: Fixture) -> (Fixture, CompiledUi) {
+    let compiled = fixture.compile();
+    (fixture, compiled)
+}
+
+struct ViewPrepared {
+    ui: CompiledUi,
+    reads: BenchReads,
+}
+
+fn view_prepare() -> ViewPrepared {
+    ViewPrepared {
+        ui: realistic_fixture().compile(),
+        reads: BenchReads::new(),
+    }
+}
+
+fn render_view(prepared: &ViewPrepared) {
+    std::hint::black_box(tree::render(
+        &prepared.ui.root,
+        &prepared.ui,
+        &prepared.reads,
+        &view::EMPTY,
+        builtin::skin(),
+        Clock::default(),
+        None,
+    ));
+}
+
+#[metabench::benchmark(UI_VIEW_BUILD, "ui/view_build", "250-controls", gungraun_setup = view_prepare)]
+fn native_view_build(prepared: ViewPrepared) -> ViewPrepared {
+    render_view(&prepared);
+    prepared
+}
+
+#[metabench::benchmark(UI_DATA_PUSH, "ui/data_push", "8192-wave-8-stereo-view", gungraun_setup = view_prepare)]
+fn native_data_push(mut prepared: ViewPrepared) -> ViewPrepared {
+    prepared.reads.push();
+    render_view(&prepared);
+    prepared
+}
+
+struct EventPrepared {
+    view: ViewPrepared,
+    event: Published,
+}
+
+fn event_prepare(depth: usize) -> EventPrepared {
+    EventPrepared {
+        view: ViewPrepared {
+            ui: nested_fixture(depth, 10, true).compile(),
+            reads: BenchReads::new(),
+        },
+        event: Published::Gesture {
+            path: "nested/level-0/fader-0-0".to_owned(),
+            action: ControlAction::SetScalar(0.63),
+        },
+    }
+}
+
+#[metabench::benchmark(UI_EVENT_APPLY, "ui/event_apply", "apply", gungraun_setup = event_prepare)]
+#[bench::depth_1(1_usize)]
+#[bench::depth_4(4_usize)]
+#[bench::depth_8(8_usize)]
+fn native_event_apply(mut prepared: EventPrepared) -> EventPrepared {
+    prepared
+        .view
+        .reads
+        .apply(std::hint::black_box(&prepared.event));
+    render_view(&prepared.view);
+    prepared
+}
+
+metabench::main!(
+    criterion = criterion_benchmarks,
+    benchmarks = [UI_COMPILE, UI_VIEW_BUILD, UI_DATA_PUSH, UI_EVENT_APPLY],
+    allocator = std::alloc::System,
 );
-criterion_main!(benches);

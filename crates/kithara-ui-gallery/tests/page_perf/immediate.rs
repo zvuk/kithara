@@ -1,6 +1,5 @@
 use std::{mem, slice};
 
-use hotpath::measure_block;
 use iced::{
     Color, Event, Pixels, Point, Size, Theme,
     advanced::{clipboard, graphics::Viewport, mouse::Cursor, renderer::Style},
@@ -79,53 +78,45 @@ impl Immediate {
         let before = self.ui.draw_pool_stats();
         self.app.tick();
         let bounds = Size::new(WIDTH, HEIGHT);
-        let element = measure_block!(
-            "iced.view",
-            self.app.reads(|reads| tree::render(
+        let element = self.app.reads(|reads| {
+            tree::render(
                 &self.ui.root,
                 &self.ui,
                 reads,
                 &view::EMPTY,
                 builtin::skin(),
                 Clock::default(),
-                None
-            ))
-        );
-        let mut interface = measure_block!(
-            "iced.build",
-            UserInterface::build(
-                element,
-                bounds,
-                mem::take(&mut self.cache),
-                &mut self.renderer
+                None,
             )
+        });
+        let mut interface = UserInterface::build(
+            element,
+            bounds,
+            mem::take(&mut self.cache),
+            &mut self.renderer,
         );
         let mut messages: Vec<Published> = Vec::new();
         self.scheduled = !self.pending.is_empty();
         let cursor = self.cursor;
-        measure_block!("iced.update", {
-            for event in mem::take(&mut self.pending) {
-                let (state, _statuses) = interface.update(
-                    slice::from_ref(&event),
-                    cursor,
-                    &mut self.renderer,
-                    &mut clipboard::Null,
-                    &mut messages,
-                );
-                self.scheduled |= redraw_asked(&state);
-            }
-        });
-        let base = self.theme.base();
-        measure_block!("iced.draw", {
-            interface.draw(
-                &mut self.renderer,
-                &self.theme,
-                &Style {
-                    text_color: base.text_color,
-                },
+        for event in mem::take(&mut self.pending) {
+            let (state, _statuses) = interface.update(
+                slice::from_ref(&event),
                 cursor,
+                &mut self.renderer,
+                &mut clipboard::Null,
+                &mut messages,
             );
-        });
+            self.scheduled |= redraw_asked(&state);
+        }
+        let base = self.theme.base();
+        interface.draw(
+            &mut self.renderer,
+            &self.theme,
+            &Style {
+                text_color: base.text_color,
+            },
+            cursor,
+        );
         self.cache = interface.into_cache();
         let mut standing = ViewState::default();
         for published in messages {
@@ -171,7 +162,7 @@ impl PageHost for Immediate {
 
     fn fenced_frame(&mut self) -> Census {
         let census = self.draw();
-        measure_block!("iced.encode.gpu.fenced", {
+        ({
             self.present();
             drain(&self.device);
         });
@@ -180,7 +171,7 @@ impl PageHost for Immediate {
 
     fn frame(&mut self) -> Census {
         let census = self.draw();
-        measure_block!("iced.encode", self.present());
+        (self.present());
         census
     }
 
@@ -214,10 +205,6 @@ impl PageHost for Immediate {
     fn press(&mut self) {
         self.pending
             .push(Event::Mouse(MouseEvent::ButtonPressed(MouseButton::Left)));
-    }
-
-    fn published(&self) -> usize {
-        self.app.published
     }
 
     fn reading(&self, endpoint: Option<&str>) -> Option<u64> {

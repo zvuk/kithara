@@ -20,6 +20,108 @@ fn command(root: &Path, program: &str, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 
+const KERNEL_SOURCE: &str = r#"
+use std::{env, fs::{self, OpenOptions}, io::Write};
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let ids = include_str!("../ids");
+    assert!(
+        args.iter().any(|arg| arg == "--criterion" || arg == "--allocations"),
+        "fixture requires an explicit Metabench engine selector"
+    );
+    let mut filter = String::new();
+    let mut first = true;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--criterion-arg" && index + 1 < args.len() {
+            if first {
+                filter = args[index + 1].clone();
+                first = false;
+            }
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    let list = args.iter().any(|arg| arg == "--list");
+    let test = args.iter().any(|arg| arg == "--test");
+    if matches!(filter.as_str(), "paired" | "head-only") && (list || test) {
+        let invoked = env::args_os().next().unwrap();
+        assert_eq!(
+            fs::canonicalize(&invoked).unwrap(),
+            fs::canonicalize(env::current_exe().unwrap()).unwrap()
+        );
+        let mode = if test { "--test" } else { "--list" };
+        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+        writeln!(events, "{mode}:{filter}:{}", invoked.to_str().unwrap()).unwrap();
+        let mut selected: Vec<_> = ids.lines()
+            .filter(|id| filter != "paired" || !id.starts_with("forms/"))
+            .collect();
+        if test && selected.contains(&"group/reverse") {
+            selected.reverse();
+        }
+        for id in selected {
+            match mode {
+                "--list" => println!("{id}: benchmark"),
+                "--test" => {
+                    println!("Testing {id}");
+                    match id {
+                        "group/exit" => std::process::exit(2),
+                        "group/no-success" => return,
+                        "group/duplicate" => println!("Success\nTesting {id}"),
+                        "group/artifact" => {
+                            let home = env::var("CRITERION_HOME").unwrap();
+                            fs::write(std::path::Path::new(&home).join("sample.json"), "{}").unwrap();
+                        }
+                        _ => {}
+                    }
+                    println!("Success");
+                }
+                _ => unreachable!(),
+            }
+        }
+        return;
+    }
+    if matches!(filter.as_str(), "paired" | "head-only") {
+        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+        writeln!(events, "timing").unwrap();
+        std::process::exit(4);
+    }
+    if list {
+        for id in ids.lines() { println!("{id}: benchmark"); }
+        return;
+    }
+    if args.iter().any(|arg| arg == "--allocations") {
+        let output = args.windows(2)
+            .find(|pair| pair[0] == "--export-json")
+            .map(|pair| pair[1].clone())
+            .unwrap();
+        let entries: Vec<_> = ids.lines()
+            .filter(|id| *id != "group/missing")
+            .map(|id| format!(
+                "{{\"identity\":{id:?},\"results\":{{\"alloc_tracker\":{{\"metrics\":{{\"Allocations\":{{\"value\":2}},\"Allocated bytes\":{{\"value\":128}}}},\"raw_artifacts\":[\"runs/1/allocations/0.json\"]}}}}}}"
+            ))
+            .collect();
+        fs::write(output, format!("{{\"entries\":[{}]}}", entries.join(","))).unwrap();
+        if let Some(path) = env::var_os("KITHARA_BENCH_OBSERVATIONS") {
+            let observations: Vec<_> = ids.lines()
+                .filter(|id| *id != "group/missing")
+                .map(|id| format!(
+                    "{{\"identity\":{id:?},\"observation\":{{\"heap\":{{\"held_bytes\":0,\"peak_bytes\":0,\"baseline_bytes\":64,\"window\":\"reset; action; read\",\"policy\":\"counting\",\"inner_backend\":\"system\"}}}}}}"
+                ))
+                .collect();
+            fs::write(path, format!("{}\n", observations.join("\n"))).unwrap();
+        }
+        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+        writeln!(events, "allocation:{}", include_str!("../arm").trim()).unwrap();
+        return;
+    }
+    let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
+    writeln!(events, "run:{}", include_str!("../arm").trim()).unwrap();
+    println!("{args:?}");
+}
+"#;
+
 fn fixture(base_ids: &str, head_ids: &str) -> (TempDir, Ctx, String) {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("repository");
@@ -51,63 +153,7 @@ required-features = ["spectrum", "portable"]
     .unwrap();
     fs::write(
         root.join("benches/kernel.rs"),
-        r#"
-use std::{env, fs::{self, OpenOptions}, io::Write};
-fn main() {
-    let args: Vec<_> = env::args().skip(1).collect();
-    let args: Vec<_> = args.iter().map(String::as_str).collect();
-    let ids = include_str!("../ids");
-    if let ["--bench", mode, filter @ ("paired" | "head-only")] = args.as_slice() {
-        let invoked = env::args_os().next().unwrap();
-        assert_eq!(
-            fs::canonicalize(&invoked).unwrap(),
-            fs::canonicalize(env::current_exe().unwrap()).unwrap()
-        );
-        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
-        writeln!(events, "{mode}:{filter}:{}", invoked.to_str().unwrap()).unwrap();
-        let mut selected: Vec<_> = ids.lines()
-            .filter(|id| *filter != "paired" || !id.starts_with("forms/"))
-            .collect();
-        if *mode == "--test" && selected.contains(&"group/reverse") {
-            selected.reverse();
-        }
-        for id in selected {
-            match *mode {
-                "--list" => println!("{id}: benchmark"),
-                "--test" => {
-                    println!("Testing {id}");
-                    match id {
-                        "group/exit" => std::process::exit(2),
-                        "group/no-success" => return,
-                        "group/duplicate" => println!("Success\nTesting {id}"),
-                        "group/artifact" => {
-                            let home = env::var("CRITERION_HOME").unwrap();
-                            fs::write(std::path::Path::new(&home).join("sample.json"), "{}").unwrap();
-                        }
-                        _ => {}
-                    }
-                    println!("Success");
-                }
-                _ => std::process::exit(3),
-            }
-        }
-        return;
-    }
-    if args.iter().any(|arg| matches!(*arg, "paired" | "head-only")) {
-        let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
-        writeln!(events, "timing").unwrap();
-        std::process::exit(4);
-    }
-    if args.contains(&"--list") {
-        for id in ids.lines() { println!("{id}: benchmark"); }
-        return;
-    }
-    let mut events = OpenOptions::new().create(true).append(true).open(EVENTS).unwrap();
-    writeln!(events, "run:{}", include_str!("../arm").trim()).unwrap();
-    println!("{args:?}");
-}
-"#
-        .replace("EVENTS", &events),
+        KERNEL_SOURCE.replace("EVENTS", &events),
     )
     .unwrap();
     let config = "[tools.critcmp]\nprogram = 'missing-benchmark-comparison-tool'\n";
@@ -378,6 +424,58 @@ fn assert_builds_before_measurements(log: &str, builds: usize) {
 }
 
 #[test]
+fn bench_allocation_mode_retains_raw_and_canonical_case_results() {
+    let (temp, ctx, _) = fixture("group/a", "group/a");
+    let mut request = request("");
+    request.mode = BenchMode::Allocation;
+    request.allocator_policy = AllocatorPolicy::Counting;
+    execute(&ctx, &request, true, None).unwrap();
+    assert_eq!(
+        fs::read_to_string(temp.path().join("events")).unwrap(),
+        "allocation:head\n"
+    );
+    let results = fs::read_dir(ctx.root.join("bench-results"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let raw: Value =
+        serde_json::from_slice(&fs::read(results.join("kernel-head-allocation.json")).unwrap())
+            .unwrap();
+    assert_eq!(raw["entries"][0]["identity"], "group/a");
+    let canonical: Value =
+        serde_json::from_slice(&fs::read(results.join("kernel-head-canonical.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        canonical["target"],
+        "fixture-bench:kernel:portable,spectrum"
+    );
+    assert_eq!(canonical["allocator_policy"], "counting");
+    assert_eq!(canonical["inner_backend"], "system");
+    assert_eq!(canonical["cases"][0]["allocations"], 2);
+    let log = fs::read_to_string(ctx.root.join("bench-results.txt")).unwrap();
+    assert!(log.contains("\"--allocations\""));
+    assert!(!log.contains("\"--save-baseline\""));
+}
+
+#[test]
+fn bench_allocation_mode_rejects_missing_collection_results() {
+    let (temp, ctx, _) = fixture("group/missing", "group/missing");
+    let mut request = request("");
+    request.mode = BenchMode::Allocation;
+    let error = execute(&ctx, &request, true, None).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("allocation report has no cases"),
+        "{error:#}"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("events")).unwrap(),
+        "allocation:head\n"
+    );
+}
+
+#[test]
 fn bench_refuses_empty_or_unpaired_ids_before_measurement() {
     for (base_ids, head_ids, compared) in [
         ("group/a", "", false),
@@ -414,6 +512,16 @@ struct Cli {
 }
 
 #[test]
+fn bench_rejects_unknown_mode_and_allocator_policy() {
+    for (option, value) in [
+        ("--bench-mode", "gungraun"),
+        ("--bench-allocator-policy", "mimalloc"),
+    ] {
+        assert!(Cli::try_parse_from(["bench", "run", option, value]).is_err());
+    }
+}
+
+#[test]
 fn bench_target_admission_explains_manifest_feature_differences() {
     let (temp, ctx, base) = fixture("group/a", "group/a");
     let manifest = ctx.root.join("Cargo.toml");
@@ -441,7 +549,7 @@ fn bench_target_admission_explains_manifest_feature_differences() {
 }
 
 #[test]
-fn bench_cli_preserves_all_four_parameters() {
+fn bench_cli_preserves_target_source_mode_and_policy_parameters() {
     let cli = Cli::try_parse_from([
         "bench",
         "run",
@@ -473,9 +581,24 @@ fn bench_cli_preserves_all_four_parameters() {
             ("BENCH_TARGET", "p:b:f"),
             ("BENCH_FILTER", "group/(a|b)$"),
             ("BENCH_REF", "feature/branch"),
-            ("BENCH_BASE_REF", "main")
+            ("BENCH_BASE_REF", "main"),
+            ("BENCH_MODE", "timing"),
+            ("BENCH_ALLOCATOR_POLICY", "system")
         ]
     );
+}
+
+fn case(id: &str) -> Value {
+    json!({
+        "id": id,
+        "parameters": {"input": "shared"},
+        "boundary": {
+            "setup": "outside the measured action",
+            "action": "one completed operation",
+            "drop": "inside the measured action",
+            "async_completion": "synchronous; no outstanding work",
+        }
+    })
 }
 
 fn preflight_request(ctx: &Ctx, base: &str, id: &str) -> (Request, Value) {
@@ -489,10 +612,13 @@ fn preflight_request(ctx: &Ctx, base: &str, id: &str) -> (Request, Value) {
                 "filter": "paired",
                 "expected_base_ids": [id],
                 "expected_head_ids": [id],
+                "base_cases": [case(id)],
+                "cases": [case(id)],
             },
             "a-forms": {
                 "filter": "head-only",
                 "expected_head_ids": [id, "forms/b"],
+                "cases": [case(id), case("forms/b")],
             },
         },
     });
@@ -556,6 +682,18 @@ fn bench_preflight_builds_lists_then_executes_only_untimed_callbacks() {
         fs::read_to_string(results.join("a-forms/head/test.txt")).unwrap(),
         "Testing forms/b\nSuccess\nTesting group/a\nSuccess\n"
     );
+    let admitted: Value =
+        serde_json::from_slice(&fs::read(results.join("a-forms/head/cases.json")).unwrap())
+            .unwrap();
+    assert_eq!(admitted[0]["id"], "group/a");
+    assert_eq!(admitted[1]["id"], "forms/b");
+    assert_eq!(admitted[0]["parameters"]["input"], "shared");
+    assert_eq!(
+        admitted[0]["boundary"]["async_completion"],
+        "synchronous; no outstanding work"
+    );
+    assert_eq!(admitted[0]["fingerprint"].as_str().unwrap().len(), 64);
+    assert_ne!(admitted[0]["fingerprint"], admitted[1]["fingerprint"]);
     ensure_no_criterion_results(&results).unwrap();
     let proof = fs::read_to_string(results.join("provenance.txt")).unwrap();
     assert!(proof.contains(&format!("parent {base}")));
@@ -607,6 +745,8 @@ fn bench_preflight_rejects_callback_reordering_for_the_same_binary() {
         "filter": "paired",
         "expected_base_ids": cases,
         "expected_head_ids": cases,
+        "base_cases": [case("group/a"), case("group/reverse")],
+        "cases": [case("group/a"), case("group/reverse")],
     }});
     let actual = execute(&ctx, &request, false, Some(&declaration.to_string())).unwrap_err();
     assert!(
@@ -664,11 +804,36 @@ fn bench_preflight_rejects_invalid_requests_before_children() {
             json!("--test"),
             "valid filter",
         ),
+        (
+            "/collections/a-forms/cases",
+            json!([]),
+            "no case declarations",
+        ),
+        (
+            "/collections/a-forms/cases",
+            json!([case("group/a"), case("group/a")]),
+            "duplicate case declarations",
+        ),
+        (
+            "/collections/a-forms/cases/0/parameters",
+            json!({}),
+            "non-empty named parameters",
+        ),
+        (
+            "/collections/a-forms/cases/0/boundary/drop",
+            json!(""),
+            "non-empty drop boundary",
+        ),
+        (
+            "/collections/z-paired/base_cases/0/parameters/input",
+            json!("different"),
+            "different base/head parameters or boundaries",
+        ),
     ] {
         let mut invalid = declaration.clone();
         *invalid.pointer_mut(pointer).unwrap() = value;
         let actual = execute(&ctx, &request, false, Some(&invalid.to_string())).unwrap_err();
-        assert!(actual.to_string().contains(error), "{actual}");
+        assert!(format!("{actual:#}").contains(error), "{actual:#}");
     }
     for name in [
         "",

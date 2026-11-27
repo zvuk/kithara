@@ -277,6 +277,7 @@ kithara-render = { workspace = true }
 kithara-test-dylib = { workspace = true }
 
 criterion = { workspace = true }
+metabench = { workspace = true }
 
 [[test]]
 name = "suite_light"

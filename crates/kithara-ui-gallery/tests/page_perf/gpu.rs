@@ -4,7 +4,6 @@ use std::{
 };
 
 use futures_lite::future::block_on;
-use hotpath::measure_block;
 use iced::advanced::graphics::Shell;
 use iced_wgpu::{
     Engine,
@@ -152,16 +151,16 @@ impl RetainedGpu {
         let view = self
             .texture
             .create_view(&vello_wgpu::TextureViewDescriptor::default());
-        measure_block!("vello.pass.shader.gpu.fenced", {
+        ({
             self.shaders
                 .render(&self.device, &self.queue, &mut self.vello, frame.shaders());
             drain_vello(&self.device);
         });
-        measure_block!("vello.scene.gpu.fenced", {
+        ({
             self.scene(frame, &view);
             drain_vello(&self.device);
         });
-        measure_block!("vello.pass.vis.gpu.fenced", {
+        ({
             self.vis.render(
                 &self.device,
                 &self.queue,
@@ -180,23 +179,18 @@ impl RetainedGpu {
         let view = self
             .texture
             .create_view(&vello_wgpu::TextureViewDescriptor::default());
-        measure_block!(
-            "vello.pass.shader",
-            self.shaders
-                .render(&self.device, &self.queue, &mut self.vello, frame.shaders())
-        );
-        measure_block!("vello.scene", self.scene(frame, &view));
-        measure_block!(
-            "vello.pass.vis",
-            self.vis.render(
-                &self.device,
-                &self.queue,
-                &view,
-                frame.vis(),
-                1.0,
-                [width(), height()],
-            )
-        );
+        (self
+            .shaders
+            .render(&self.device, &self.queue, &mut self.vello, frame.shaders()));
+        (self.scene(frame, &view));
+        (self.vis.render(
+            &self.device,
+            &self.queue,
+            &view,
+            frame.vis(),
+            1.0,
+            [width(), height()],
+        ));
     }
 
     fn scene(&mut self, frame: &Frame, view: &vello_wgpu::TextureView) {
@@ -359,5 +353,9 @@ pub(crate) fn painted(pixels: &[u8]) -> bool {
     let Some(first) = pixels.get(..4) else {
         return false;
     };
-    pixels.chunks_exact(4).any(|pixel| pixel != first)
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|pixel| pixel.as_slice() != first)
 }
