@@ -3,7 +3,7 @@
     reason = "proc_macro parse_macro_input! produces owned values"
 )]
 
-use kithara_test_args::{TestArgs, TestFlags};
+use kithara_test_args::{TestArgs, TestFlags, TestPlatform};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
@@ -62,34 +62,86 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
     if !args.flags().contains(TestFlags::MIRI) {
         attributes.push(syn::parse_quote!(#[cfg_attr(miri, ignore = "not selected for Miri")]));
     }
-    let remaining_attrs: Vec<_> = attributes.iter().collect();
     let params = extract_params(&func)?;
 
     // The emit paths enter dynamic flash after installing ambient. Ordinary
     // platform time calls then use the same mode in the body and its callees.
 
-    let ctx = GenCtx {
-        args: &args,
-        params: &params,
-        remaining_attrs: &remaining_attrs,
-        cases: &cases,
-        is_async: func.sig.asyncness.is_some(),
-        vis: &func.vis,
-        fn_name: &func.sig.ident,
-        ret_type: &func.sig.output,
-        body_stmts: &func.block.stmts,
-    };
+    let mut tests = TokenStream2::new();
+    for (platform, cases) in platform_groups(&args, cases)? {
+        let mut attributes = attributes.clone();
+        let fn_name = match platform {
+            Some(platform) => {
+                let condition = platform_cfg(platform);
+                attributes.push(syn::parse_quote!(#[cfg(#condition)]));
+                format_ident!(
+                    "platform_{}_{}",
+                    platform.name(),
+                    func.sig.ident,
+                    span = func.sig.ident.span()
+                )
+            }
+            None => func.sig.ident.clone(),
+        };
+        let remaining_attrs: Vec<_> = attributes.iter().collect();
+        let ctx = GenCtx {
+            args: &args,
+            params: &params,
+            remaining_attrs: &remaining_attrs,
+            cases: &cases,
+            is_async: func.sig.asyncness.is_some(),
+            vis: &func.vis,
+            fn_name: &fn_name,
+            ret_type: &func.sig.output,
+            body_stmts: &func.block.stmts,
+        };
+        tests.extend(generate_branch(&ctx));
+    }
+    Ok(tests)
+}
 
-    if args.flags().contains(TestFlags::WASM_ONLY) {
-        return Ok(generate_wasm_only(&ctx));
+/// The cases that share one required platform.
+type PlatformGroup = (Option<TestPlatform>, Vec<Case>);
+
+/// Groups cases by the platform each requires, in declaration order; a case
+/// without its own declaration takes the test's.
+fn platform_groups(args: &TestArgs, cases: Vec<Case>) -> syn::Result<Vec<PlatformGroup>> {
+    let mut groups: Vec<PlatformGroup> = Vec::new();
+    if cases.is_empty() {
+        groups.push((args.platform(), Vec::new()));
     }
-    if args.flags().contains(TestFlags::NATIVE_ONLY) && !args.flags().contains(TestFlags::BROWSER) {
-        return Ok(generate_native_only(&ctx));
+    for case in cases {
+        let platform = case.platform.or_else(|| args.platform());
+        if let Some(platform) = platform {
+            args.validate_platform(platform)?;
+        }
+        match groups.iter_mut().find(|(group, _)| *group == platform) {
+            Some((_, group)) => group.push(case),
+            None => groups.push((platform, vec![case])),
+        }
     }
-    if args.flags().contains(TestFlags::BROWSER) {
-        return Ok(generate_browser(&ctx));
+    Ok(groups)
+}
+
+/// The compile-time condition a declared platform requires.
+fn platform_cfg(platform: TestPlatform) -> TokenStream2 {
+    match platform {
+        TestPlatform::Apple => quote! { any(target_os = "macos", target_os = "ios") },
     }
-    Ok(generate_default(&ctx))
+}
+
+fn generate_branch(ctx: &GenCtx<'_>) -> TokenStream2 {
+    let flags = ctx.args.flags();
+    if flags.contains(TestFlags::WASM_ONLY) {
+        return generate_wasm_only(ctx);
+    }
+    if flags.contains(TestFlags::NATIVE_ONLY) && !flags.contains(TestFlags::BROWSER) {
+        return generate_native_only(ctx);
+    }
+    if flags.contains(TestFlags::BROWSER) {
+        return generate_browser(ctx);
+    }
+    generate_default(ctx)
 }
 
 /// Shared context for the `generate*` per-branch helpers.
@@ -143,8 +195,8 @@ fn generate_wasm_only(ctx: &GenCtx<'_>) -> TokenStream2 {
     if ctx.cases.is_empty() {
         tests.extend(emit(ctx.fn_name, None));
     } else {
-        for (i, case) in ctx.cases.iter().enumerate() {
-            let case_name = case_ident(ctx.fn_name, case, i);
+        for case in ctx.cases {
+            let case_name = case_ident(ctx.fn_name, case);
             tests.extend(emit(&case_name, Some(&case.values)));
         }
     }
@@ -183,8 +235,8 @@ fn generate_native_only(ctx: &GenCtx<'_>) -> TokenStream2 {
         let name = emitted_name(ctx.fn_name, ctx.args);
         emit_one(&name, None);
     } else {
-        for (i, case) in ctx.cases.iter().enumerate() {
-            let case_name = case_ident(ctx.fn_name, case, i);
+        for case in ctx.cases {
+            let case_name = case_ident(ctx.fn_name, case);
             let name = emitted_name(&case_name, ctx.args);
             emit_one(&name, Some(&case.values));
         }
@@ -227,8 +279,8 @@ fn generate_browser(ctx: &GenCtx<'_>) -> TokenStream2 {
     if ctx.cases.is_empty() {
         emit(ctx.fn_name, None);
     } else {
-        for (i, case) in ctx.cases.iter().enumerate() {
-            let case_name = case_ident(ctx.fn_name, case, i);
+        for case in ctx.cases {
+            let case_name = case_ident(ctx.fn_name, case);
             emit(&case_name, Some(&case.values));
         }
     }
@@ -258,8 +310,8 @@ fn generate_default(ctx: &GenCtx<'_>) -> TokenStream2 {
     if ctx.cases.is_empty() {
         emit(ctx.fn_name, None);
     } else {
-        for (i, case) in ctx.cases.iter().enumerate() {
-            let case_name = case_ident(ctx.fn_name, case, i);
+        for case in ctx.cases {
+            let case_name = case_ident(ctx.fn_name, case);
             emit(&case_name, Some(&case.values));
         }
     }
@@ -439,6 +491,127 @@ mod tests {
         let name = syn::parse_str("concurrent_contract")?;
 
         assert_eq!(emitted_name(&name, &args), "loom_model_concurrent_contract");
+        Ok(())
+    }
+
+    fn emitted_tests(attrs: &str, source: &str) -> syn::Result<Vec<(String, bool)>> {
+        let expanded = generate(syn::parse_str(attrs)?, syn::parse_str(source)?)?;
+        let file = syn::parse2::<syn::File>(expanded)?;
+        Ok(file
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Fn(function) => Some((
+                    function.sig.ident.to_string(),
+                    function.attrs.iter().any(|attr| {
+                        quote::quote!(#attr).to_string()
+                            == "# [cfg (any (target_os = \"macos\" , target_os = \"ios\"))]"
+                    }),
+                )),
+                _ => None,
+            })
+            .collect())
+    }
+
+    #[test]
+    fn declared_case_is_apple_only_and_carries_the_platform_segment() -> syn::Result<()> {
+        let source = "#[case::portable(1)]\n#[case::native(platform = apple, 2)]\n\
+                      #[case(platform = apple, 3)]\nfn contract(value: u8) {}";
+        for attrs in ["native", "tokio, native"] {
+            let tests = emitted_tests(attrs, source)?;
+            assert_eq!(
+                tests,
+                [
+                    ("contract_portable".to_owned(), false),
+                    ("platform_apple_contract_native".to_owned(), true),
+                    ("platform_apple_contract_case_3".to_owned(), true),
+                ],
+                "{attrs}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn declared_case_of_a_dual_target_test_keeps_only_its_native_entry() -> syn::Result<()> {
+        let source = "#[case::portable(1)]\n#[case::native(platform = apple, 2)]\n\
+                      async fn contract(value: u8) {}";
+        let tests = emitted_tests("tokio, browser", source)?;
+        assert!(
+            tests
+                .iter()
+                .filter(|(name, _)| name.starts_with("platform_apple_"))
+                .all(|(_, apple)| *apple),
+            "{tests:?}"
+        );
+        assert!(
+            tests
+                .iter()
+                .any(|(name, apple)| name == "contract_portable" && !apple),
+            "{tests:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn declared_test_applies_its_platform_to_every_case() -> syn::Result<()> {
+        assert_eq!(
+            emitted_tests("native, platform = apple", "fn contract() {}")?,
+            [("platform_apple_contract".to_owned(), true)]
+        );
+        assert_eq!(
+            emitted_tests(
+                "native, platform = apple",
+                "#[case(1)]\n#[case(2)]\nfn contract(value: u8) {}"
+            )?,
+            [
+                ("platform_apple_contract_case_1".to_owned(), true),
+                ("platform_apple_contract_case_2".to_owned(), true),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn platform_rejects_unknown_names_and_non_native_modes() -> syn::Result<()> {
+        let error = syn::parse_str::<TestArgs>("platform = linux")
+            .err()
+            .map(|error| error.to_string());
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|error| error.contains("apple")),
+            "{error:?}"
+        );
+        for attrs in [
+            "platform = apple, wasm",
+            "browser, platform = apple",
+            "loom, platform = apple",
+        ] {
+            assert!(
+                syn::parse_str::<TestArgs>(attrs).is_err(),
+                "accepted {attrs}"
+            );
+        }
+        for (attrs, source) in [
+            (
+                "native",
+                "#[case(platform = linux, 1)]\nfn contract(value: u8) {}",
+            ),
+            (
+                "wasm",
+                "#[case(platform = apple, 1)]\nasync fn contract(value: u8) {}",
+            ),
+            (
+                "loom",
+                "#[case(platform = apple, 1)]\nfn contract(value: u8) {}",
+            ),
+        ] {
+            assert!(
+                generate(syn::parse_str(attrs)?, syn::parse_str(source)?).is_err(),
+                "accepted `{attrs}` `{source}`"
+            );
+        }
         Ok(())
     }
 

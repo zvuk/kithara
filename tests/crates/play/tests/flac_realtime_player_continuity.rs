@@ -296,10 +296,7 @@ async fn run_case(
     flac_source().await,
     48_000
 ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::switch_to_flac_apple_resamp(Scenario::SwitchToFlac, DecoderBackend::Apple, flac_source().await, 48_000)
-)]
+#[case::switch_to_flac_apple_resamp(platform = apple, Scenario::SwitchToFlac, DecoderBackend::Apple, flac_source().await, 48_000)]
 async fn flac_realtime_player_continuity(
     #[case] scenario: Scenario,
     #[case] backend: DecoderBackend,

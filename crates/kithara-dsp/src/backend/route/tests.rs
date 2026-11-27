@@ -85,8 +85,7 @@ fn entry_executes_the_form_selected_by_its_cell() {
     );
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[kithara::test]
+#[kithara::test(platform = apple)]
 fn platform_cell_executes_the_accelerate_form() {
     let mut samples = [0.25, -0.5, 1.0];
     assert_eq!(platform_entry(&mut samples), Form::Platform);

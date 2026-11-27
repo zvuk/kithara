@@ -645,6 +645,11 @@ features = ["no-block"]
 default = false
 features = ["kithara-test-utils/load"]
 
+# `--platform=<name>` restricts a run to the tests declared for that platform.
+# The test attribute prefixes each declared test with `platform_<name>_`.
+[test.platforms.apple]
+filter = "test(/(^|::)platform_apple_/)"
+
 [test.net_backends.none]
 features = []
 
@@ -3171,6 +3176,7 @@ steps = [
     "test",
     "run",
     "--lane=apple",
+    "--platform=apple",
     "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
     "--flash=on",
     "--no-block=on",
@@ -3180,6 +3186,7 @@ steps = [
     "test",
     "run",
     "--lane=apple",
+    "--platform=apple",
     "--flash=on",
     "--no-block=on",
     "--profile",
@@ -3188,6 +3195,7 @@ steps = [
     "test",
     "run",
     "--lane=apple",
+    "--platform=apple",
     "--flash=on",
     "--no-block=on",
     "--profile",

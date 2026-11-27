@@ -77,10 +77,7 @@ mod consts {
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(40)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn abr_escapes_stalled_initial_variant(
     #[case] backend: DecoderBackend,
     #[future(awt)] stalled_hls: (TestServerHelper, Url),
