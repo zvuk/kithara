@@ -71,7 +71,6 @@ fn physical_memory() -> Option<usize> {
 ///
 /// Only [`Self::Eof`] leaves a complete measurement behind. The other two
 /// truncate it, and a truncated drain cannot say whether RSS settled.
-#[derive(Debug)]
 enum DrainEnd {
     Eof,
     Failed(AudioReadError),
@@ -81,8 +80,6 @@ enum DrainEnd {
 /// RSS along one read of a stream to its end, and how that read finished.
 struct Drain {
     samples: Vec<usize>,
-    reads: usize,
-    pending: usize,
     end: DrainEnd,
     elapsed: Duration,
 }
@@ -141,22 +138,16 @@ fn ladder_url(server: &TestServerHelper) -> Url {
 fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
     let mut buf = vec![0f32; consts::READ_FRAMES];
     let mut samples = Vec::new();
-    let mut reads = 0usize;
-    let mut pending = 0usize;
     let start = Instant::now();
 
     let end = loop {
         if start.elapsed() >= consts::DRAIN_LIMIT {
             break DrainEnd::Deadline;
         }
-        reads = reads.saturating_add(1);
         match audio.read(&mut buf) {
             Ok(ReadOutcome::Eof { .. }) => break DrainEnd::Eof,
             Ok(ReadOutcome::Frames { .. }) => {}
-            Ok(ReadOutcome::Pending { .. }) => {
-                pending = pending.saturating_add(1);
-                continue;
-            }
+            Ok(ReadOutcome::Pending { .. }) => continue,
             Err(error) => break DrainEnd::Failed(error),
         }
         if let Some(rss) = physical_memory() {
@@ -166,8 +157,6 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
 
     Drain {
         samples,
-        reads,
-        pending,
         end,
         elapsed: start.elapsed(),
     }
@@ -184,11 +173,9 @@ async fn test_hls_playback_rss_within_budget(
     let (_server, url) = rss_source;
 
     for run in 0..consts::BUDGET_RUNS {
-        eprintln!("rss budget run {run}: baseline begin");
         let baseline_rss = physical_memory().expect("RSS measurement unsupported");
-        eprintln!("rss budget run {run}: baseline complete={baseline_rss}");
+        eprintln!("rss budget run {run}: baseline={baseline_rss}");
 
-        eprintln!("rss budget run {run}: load begin");
         let pools = pools();
         let store = AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
@@ -207,18 +194,13 @@ async fn test_hls_playback_rss_within_budget(
             kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
                 .await
                 .expect("audio creation");
-        eprintln!("rss budget run {run}: load complete");
+        eprintln!("rss budget run {run}: audio ready");
 
-        eprintln!("rss budget run {run}: blocking-drain begin");
         let drain = spawn_blocking(move || {
-            eprintln!("rss budget run {run}: blocking-drain entered");
             let drain = drain_sampling_rss(&mut audio);
             eprintln!(
-                "rss budget run {run}: drain complete end={:?} samples={} reads={} pending={} elapsed={:?}",
-                drain.end,
+                "rss budget run {run}: drain returned reads={} elapsed={:?}",
                 drain.samples.len(),
-                drain.reads,
-                drain.pending,
                 drain.elapsed
             );
             drop(audio);
@@ -229,9 +211,8 @@ async fn test_hls_playback_rss_within_budget(
         .expect("spawn_blocking");
         eprintln!("rss budget run {run}: drain joined");
 
-        eprintln!("rss budget run {run}: complete_samples begin");
         let samples = drain.complete_samples();
-        eprintln!("rss budget run {run}: complete_samples complete");
+        eprintln!("rss budget run {run}: samples complete");
         let peak_rss = samples
             .iter()
             .copied()
@@ -248,13 +229,8 @@ async fn test_hls_playback_rss_within_budget(
             samples.len(),
             drain.elapsed,
         );
-        eprintln!("rss budget run {run}: owner drop begin");
-        drop(worker);
-        eprintln!("rss budget run {run}: owner drop complete");
-        eprintln!("rss budget run {run}: run complete");
     }
 
-    eprintln!("rss budget scoring begin");
     let min_delta = run_deltas.iter().copied().min().unwrap_or(0);
     let max_delta = run_deltas.iter().copied().max().unwrap_or(0);
     let mean_delta = run_deltas.iter().sum::<usize>() / run_deltas.len();
