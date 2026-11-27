@@ -1,6 +1,6 @@
 use std::{hint::black_box, num::NonZeroU32};
 
-use criterion::{BatchSize, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion};
 use kithara::{
     bufpool::SampleBuffer,
     effects::filter::{FilterEffect, FilterKnob, FilterSettings},
@@ -8,7 +8,7 @@ use kithara::{
 use kithara_test_utils::bufpool::{Pools, pools, sample_buffer};
 
 /// The deck filter held in its low-pass half, where every frame is filtered.
-fn prepared_filter(rate: NonZeroU32) -> FilterEffect {
+pub(crate) fn prepared_filter(rate: NonZeroU32) -> FilterEffect {
     let mut filter = FilterEffect::new(rate, FilterSettings::default());
     filter.configure(FilterKnob::checked(-0.5).expect("low-pass knob"));
     filter.reset();
@@ -16,7 +16,7 @@ fn prepared_filter(rate: NonZeroU32) -> FilterEffect {
 }
 
 /// The stereo planes of interleaved `input`.
-fn input_planes(pools: &Pools, input: &[f32]) -> [SampleBuffer; 2] {
+pub(crate) fn input_planes(pools: &Pools, input: &[f32]) -> [SampleBuffer; 2] {
     [0, 1].map(|channel| {
         sample_buffer(
             pools,
@@ -42,7 +42,7 @@ pub(crate) fn bench(c: &mut Criterion) {
     ] {
         let fixture = crate::make_pcm(frames, 2);
         let mut filter = prepared_filter(rate);
-        group.bench_function(name, |b| {
+        group.bench_function(BenchmarkId::new("case", name), |b| {
             b.iter_batched_ref(
                 || input_planes(&pools, &fixture),
                 |planes| {
@@ -58,24 +58,27 @@ pub(crate) fn bench(c: &mut Criterion) {
     let mut burst = vec![0.0; 514];
     burst[..64].fill(0.25);
     let silence = vec![0.0; 514];
-    group.bench_function("lowpass_burst_and_two_quiet_blocks_stereo_257", |b| {
-        b.iter_batched_ref(
-            || {
-                [
-                    input_planes(&pools, &burst),
-                    input_planes(&pools, &silence),
-                    input_planes(&pools, &silence),
-                ]
-            },
-            |inputs| {
-                for planes in inputs {
-                    filter
-                        .process(black_box(planes), 0..257)
-                        .expect("admitted planes");
-                }
-            },
-            BatchSize::LargeInput,
-        );
-    });
+    group.bench_function(
+        BenchmarkId::new("case", "lowpass_burst_and_two_quiet_blocks_stereo_257"),
+        |b| {
+            b.iter_batched_ref(
+                || {
+                    [
+                        input_planes(&pools, &burst),
+                        input_planes(&pools, &silence),
+                        input_planes(&pools, &silence),
+                    ]
+                },
+                |inputs| {
+                    for planes in inputs {
+                        filter
+                            .process(black_box(planes), 0..257)
+                            .expect("admitted planes");
+                    }
+                },
+                BatchSize::LargeInput,
+            );
+        },
+    );
     group.finish();
 }

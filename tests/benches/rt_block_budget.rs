@@ -2,12 +2,11 @@
 
 use std::{
     cell::LazyCell,
-    hint::black_box,
     num::{NonZeroU32, NonZeroUsize},
     task::{Context, Waker},
 };
 
-use criterion::{BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, SamplingMode};
 use firewheel::{
     StreamInfo,
     clock::InstantSamples,
@@ -419,7 +418,7 @@ fn render_block(mixer: &mut BenchMixer, out_l: &mut [f32], out_r: &mut [f32]) ->
         &mut mixer.extra,
     );
     let elapsed = start.elapsed();
-    black_box((outcome, limited));
+    std::hint::black_box((outcome, limited));
     out_l.copy_from_slice(&mixer.limited[0]);
     out_r.copy_from_slice(&mixer.limited[1]);
     mixer.frame = end;
@@ -567,7 +566,7 @@ fn measure(
     for _ in 0..blocks {
         elapsed += render_block(&mut processor, &mut out_l, &mut out_r);
         peak = peak.max(peak_of(&out_l));
-        black_box(&out_l);
+        std::hint::black_box(&out_l);
     }
     let after = processor.deck.snapshot.read().metrics;
     if lane == Lane::Crossfade {
@@ -606,7 +605,7 @@ fn measure(
         "master limiter must bound the audible mix"
     );
 
-    black_box(peak);
+    std::hint::black_box(peak);
     elapsed
 }
 
@@ -642,13 +641,15 @@ fn bench_blocks(c: &mut Criterion) {
             )
         })
     });
-    for (((lane, count), lookahead), frames) in [Lane::Settled, Lane::Gain, Lane::Crossfade]
-        .into_iter()
-        .flat_map(|lane| consts::TRACK_COUNTS.map(|count| (lane, count)))
-        .flat_map(|row| consts::LOOKAHEAD_MS.map(|ms| (row, ms)))
-        .chain(automation)
-        .map(|row| (row, consts::BLOCK_FRAMES))
-        .chain(three_band)
+    for (case_index, (((lane, count), lookahead), frames)) in
+        [Lane::Settled, Lane::Gain, Lane::Crossfade]
+            .into_iter()
+            .flat_map(|lane| consts::TRACK_COUNTS.map(|count| (lane, count)))
+            .flat_map(|row| consts::LOOKAHEAD_MS.map(|ms| (row, ms)))
+            .chain(automation)
+            .map(|row| (row, consts::BLOCK_FRAMES))
+            .chain(three_band)
+            .enumerate()
     {
         let limiter = LimiterConfig::builder()
             .lookahead_ms(LookaheadMs::try_from(lookahead).expect("bench lookahead in range"))
@@ -665,12 +666,9 @@ fn bench_blocks(c: &mut Criterion) {
                 })
                 .collect::<Vec<_>>()
         });
-        let label = if frames == consts::BLOCK_FRAMES {
-            format!("{count}tracks_L{latency}")
-        } else {
-            format!("{count}tracks_L{latency}_{frames}frames")
-        };
-        group.bench_function(BenchmarkId::new(lane.label(), label), |b| {
+        let _ = latency;
+        let label = native_id(case_index);
+        group.bench_function(BenchmarkId::new("block", label), |b| {
             b.iter_custom(|mut blocks| {
                 let mut elapsed = Duration::ZERO;
                 let limit = u64::try_from(consts::MEASURED_BLOCKS).expect("window blocks fit u64");
@@ -693,5 +691,168 @@ fn bench_blocks(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_blocks);
-criterion_main!(benches);
+struct NativePrepared {
+    runtime: tokio::runtime::Runtime,
+    processor: BenchMixer,
+    out_l: Vec<f32>,
+    out_r: Vec<f32>,
+    lane: Lane,
+    tracks: usize,
+    fading_before: bool,
+    before: kithara_render::bridge::RtMetricsSnapshot,
+}
+
+fn native_case(index: usize) -> (Lane, usize, f32, u32) {
+    if index < 18 {
+        let lane = [Lane::Settled, Lane::Gain, Lane::Crossfade][index / 6];
+        let count = consts::TRACK_COUNTS[(index % 6) / 2];
+        let lookahead = consts::LOOKAHEAD_MS[index % 2];
+        return (lane, count, lookahead, consts::BLOCK_FRAMES);
+    }
+    if index < 26 {
+        let (filter, eq) = [(0, 0), (1, 0), (0, 16), (1, 15)][(index - 18) / 2];
+        let lane = Lane::Automation {
+            filter,
+            eq,
+            bands: consts::EQ_BANDS,
+        };
+        return (
+            lane,
+            1,
+            consts::LOOKAHEAD_MS[index % 2],
+            consts::BLOCK_FRAMES,
+        );
+    }
+    let lane = Lane::Automation {
+        filter: 0,
+        eq: 3,
+        bands: 3,
+    };
+    let frames = [consts::BLOCK_FRAMES, 512][(index - 26) / 2];
+    (lane, 1, consts::LOOKAHEAD_MS[index % 2], frames)
+}
+
+fn native_id(index: usize) -> String {
+    let (lane, count, lookahead, frames) = native_case(index);
+    format!(
+        "case_{}_{}tracks_l{}_{}frames",
+        lane.label(),
+        count,
+        lookahead,
+        frames
+    )
+}
+
+fn native_prepare(index: usize) -> NativePrepared {
+    let (lane, count, lookahead, frames) = native_case(index);
+    let limiter = LimiterConfig::builder()
+        .lookahead_ms(LookaheadMs::try_from(lookahead).expect("bench lookahead in range"))
+        .build();
+    let sources: Vec<_> = (0..count)
+        .map(|_| {
+            PcmDeck::new(Box::new(TestPcmReader::with_pcm(
+                spec(),
+                consts::TRACK_SECONDS,
+                benchmark_half(),
+            )))
+        })
+        .collect();
+    let runtime = tokio::runtime::Runtime::new().expect("bench runtime");
+    let mut processor = runtime.block_on(processor(&sources, lane, limiter, frames));
+    let frames = block_frames(frames);
+    let mut out_l = vec![0.0_f32; frames];
+    let mut out_r = vec![0.0_f32; frames];
+    {
+        let _runtime = runtime.enter();
+        if let Lane::Automation { filter, eq, bands } = lane {
+            automate(&mut processor, filter, eq, bands, &mut out_l, &mut out_r);
+        }
+        for _ in 0..consts::WARMUP_BLOCKS {
+            render_block(&mut processor, &mut out_l, &mut out_r);
+        }
+    }
+    let fading_before = every_slot_fading(&mut processor);
+    let before = processor.deck.snapshot.read().metrics;
+    NativePrepared {
+        runtime,
+        processor,
+        out_l,
+        out_r,
+        lane,
+        tracks: count,
+        fading_before,
+        before,
+    }
+}
+
+fn native_action(mut prepared: NativePrepared) -> NativePrepared {
+    let _runtime = prepared.runtime.enter();
+    render_block(
+        &mut prepared.processor,
+        &mut prepared.out_l,
+        &mut prepared.out_r,
+    );
+    let peak = peak_of(&prepared.out_l);
+    std::hint::black_box(&prepared.out_l);
+    let after = prepared.processor.deck.snapshot.read().metrics;
+    if prepared.lane == Lane::Crossfade {
+        assert!(prepared.fading_before && every_slot_fading(&mut prepared.processor));
+    }
+    let live = prepared
+        .processor
+        .deck
+        .snapshot
+        .read()
+        .slots
+        .iter()
+        .filter(|slot| slot.state != SlotState::Empty)
+        .count();
+    assert_eq!(live, prepared.tracks);
+    assert_eq!(after.underruns(), prepared.before.underruns());
+    assert_eq!(after.decode_errors(), prepared.before.decode_errors());
+    assert!(peak > 0.0);
+    assert!(peak <= f32::from(LimiterConfig::default().ceiling()));
+    std::hint::black_box(peak);
+    prepared
+}
+
+#[metabench::benchmark(RT_BLOCK_BUDGET, "rt_block_budget", "block", gungraun_setup = native_prepare)]
+#[bench::case_settled_1tracks_l0_128frames(0_usize)]
+#[bench::case_settled_1tracks_l5_128frames(1_usize)]
+#[bench::case_settled_2tracks_l0_128frames(2_usize)]
+#[bench::case_settled_2tracks_l5_128frames(3_usize)]
+#[bench::case_settled_4tracks_l0_128frames(4_usize)]
+#[bench::case_settled_4tracks_l5_128frames(5_usize)]
+#[bench::case_settled_gain_1tracks_l0_128frames(6_usize)]
+#[bench::case_settled_gain_1tracks_l5_128frames(7_usize)]
+#[bench::case_settled_gain_2tracks_l0_128frames(8_usize)]
+#[bench::case_settled_gain_2tracks_l5_128frames(9_usize)]
+#[bench::case_settled_gain_4tracks_l0_128frames(10_usize)]
+#[bench::case_settled_gain_4tracks_l5_128frames(11_usize)]
+#[bench::case_active_crossfade_1tracks_l0_128frames(12_usize)]
+#[bench::case_active_crossfade_1tracks_l5_128frames(13_usize)]
+#[bench::case_active_crossfade_2tracks_l0_128frames(14_usize)]
+#[bench::case_active_crossfade_2tracks_l5_128frames(15_usize)]
+#[bench::case_active_crossfade_4tracks_l0_128frames(16_usize)]
+#[bench::case_active_crossfade_4tracks_l5_128frames(17_usize)]
+#[bench::case_filter_0_eq_0_1tracks_l0_128frames(18_usize)]
+#[bench::case_filter_0_eq_0_1tracks_l5_128frames(19_usize)]
+#[bench::case_filter_1_eq_0_1tracks_l0_128frames(20_usize)]
+#[bench::case_filter_1_eq_0_1tracks_l5_128frames(21_usize)]
+#[bench::case_filter_0_eq_16_1tracks_l0_128frames(22_usize)]
+#[bench::case_filter_0_eq_16_1tracks_l5_128frames(23_usize)]
+#[bench::case_filter_1_eq_15_1tracks_l0_128frames(24_usize)]
+#[bench::case_filter_1_eq_15_1tracks_l5_128frames(25_usize)]
+#[bench::case_3bands_filter_0_eq_3_1tracks_l0_128frames(26_usize)]
+#[bench::case_3bands_filter_0_eq_3_1tracks_l5_128frames(27_usize)]
+#[bench::case_3bands_filter_0_eq_3_1tracks_l0_512frames(28_usize)]
+#[bench::case_3bands_filter_0_eq_3_1tracks_l5_512frames(29_usize)]
+fn native_rt_block(prepared: NativePrepared) -> NativePrepared {
+    native_action(prepared)
+}
+
+metabench::main!(
+    criterion = bench_blocks,
+    benchmarks = [RT_BLOCK_BUDGET],
+    allocator = std::alloc::System,
+);
