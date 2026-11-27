@@ -118,7 +118,7 @@ impl PinsIndex {
                 }
             };
         if persisted_set_changed {
-            flush_sync(&*self.inner)?;
+            flush_sync(&self.inner, self.inner.hub())?;
         }
         Ok(newly_pinned)
     }
@@ -179,7 +179,7 @@ impl PinsIndex {
                 false
             };
         if persisted_set_changed {
-            flush_sync(&*self.inner)?;
+            flush_sync(&self.inner, self.inner.hub())?;
         }
         Ok(fully_unpinned)
     }
