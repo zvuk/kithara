@@ -31,6 +31,8 @@ async fn changing_a_current_source_preserves_identity_position_and_play_state(
     #[case] slots: Option<usize>,
 ) {
     let (_server, url) = served_mp3;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::ensure_apple_decoder_warm();
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let region = pools();

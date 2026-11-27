@@ -23,7 +23,7 @@ mod tests {
 
     #[test]
     fn timeout_accepts_every_named_tier() -> syn::Result<()> {
-        for tier in ["Quick", "Short", "Medium", "Long", "Network"] {
+        for tier in ["Quick", "Short", "Medium", "Long", "Heavy", "Network"] {
             let args = syn::parse_str::<TestArgs>(&format!("timeout({tier})"))?;
             assert_eq!(
                 args.timeout().as_ref().map(ToString::to_string).as_deref(),

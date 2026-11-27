@@ -75,8 +75,8 @@ is unchanged. `#[future]` injects an unpolled async fixture;
 until test teardown. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for per-flag semantics and the
 Flash/Loom debugging rules.
 
-`timeout(...)` accepts only `Quick`, `Short`, `Medium`, `Long`, or `Network`.
-Duration expressions are rejected.
+`timeout(...)` accepts only `Quick`, `Short`, `Medium`, `Long`, `Heavy`, or
+`Network`. Duration expressions are rejected.
 
 ### `#[kithara::probe(...)]` arguments
 
@@ -97,7 +97,7 @@ those wrappers does not establish browser execution.
 
 Hang helpers become no-ops when test-utils `hang` is disabled. The explicit
 `timeout(...)` accepts only a `TestBudget` tier name: `Quick`, `Short`, `Medium`,
-`Long` or `Network`. Duration expressions, aliases and qualified paths are
+`Long`, `Heavy` or `Network`. Duration expressions, aliases and qualified paths are
 compile errors. `Network` is only for tests against a live network or run by
 hand. Tests default to `Quick`. The body timeout
 works separately from watchdog progress checks;

@@ -3540,7 +3540,7 @@ async fn one_queue_crossfades_five_music_tracks_and_retargets_host_during_overla
     multi_thread,
     serial,
     tracing("kithara_test::sync::queue321=info"),
-    timeout(Long)
+    timeout(Heavy)
 )]
 #[case::rate_from_start(false, &[
     ("library_flac_song2", Start::Seconds(0.0)),

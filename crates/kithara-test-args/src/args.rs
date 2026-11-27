@@ -38,12 +38,12 @@ pub struct TestArgs {
 impl TestArgs {
     fn parse_timeout(input: ParseStream<'_>) -> syn::Result<Ident> {
         let expected =
-            "timeout requires a TestBudget tier name: Quick, Short, Medium, Long or Network";
+            "timeout requires a TestBudget tier name: Quick, Short, Medium, Long, Heavy or Network";
         let budget: Ident = input.parse().map_err(|_| input.error(expected))?;
         if !input.is_empty()
             || !matches!(
                 budget.to_string().as_str(),
-                "Quick" | "Short" | "Medium" | "Long" | "Network"
+                "Quick" | "Short" | "Medium" | "Long" | "Heavy" | "Network"
             )
         {
             return Err(Error::new(budget.span(), expected));
