@@ -34,5 +34,3 @@ pub(crate) const CROSSOVER_DAMPING: f64 = 1.0 / std::f64::consts::FRAC_1_SQRT_2;
 /// waits on the previous frame's result, so one section per pass is bound by
 /// FMA latency; running four in the same loop overlaps their chains.
 pub(crate) const WINDOW_FUSED_SECTIONS: usize = 4;
-/// Leading sections of a fused group that always run on all eight lanes.
-pub(crate) const WINDOW_HEAD_SECTIONS: usize = 2;

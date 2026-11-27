@@ -1,6 +1,6 @@
 use std::ops::Mul;
 
-use fearless_simd::{Level, dispatch, f32x4, f32x8, prelude::*};
+use fearless_simd::{Level, dispatch, f32x8, prelude::*};
 
 use crate::consts;
 
@@ -49,65 +49,69 @@ pub(in crate::backend) fn window_kernel<S: Simd, F: Fn(usize, usize) -> [f32; 5]
     sections: usize,
     coefficients: F,
 ) {
-    for first in (0..sections).step_by(consts::WINDOW_FUSED_SECTIONS) {
-        let group = |plane| {
-            std::array::from_fn::<_, { consts::WINDOW_FUSED_SECTIONS }, _>(|offset| {
-                let section = first.saturating_add(offset);
-                if section < sections {
-                    coefficients(plane, section)
+    let mut first: usize = 0;
+    while first.saturating_add(consts::WINDOW_FUSED_SECTIONS) <= sections {
+        run_channels::<_, _, { consts::WINDOW_FUSED_SECTIONS }>(simd, samples, channels, |plane| {
+            std::array::from_fn(|offset| coefficients(plane, first.saturating_add(offset)))
+        });
+        first = first.saturating_add(consts::WINDOW_FUSED_SECTIONS);
+    }
+    while first < sections {
+        run_channels::<_, _, 2>(simd, samples, channels, |plane| {
+            [
+                coefficients(plane, first),
+                if first.saturating_add(1) < sections {
+                    coefficients(plane, first.saturating_add(1))
                 } else {
                     consts::BIQUAD_IDENTITY
-                }
-            })
-        };
-        match channels {
-            8 if (0..4).all(|lane| {
-                group(lane)[consts::WINDOW_HEAD_SECTIONS..]
-                    .iter()
-                    .all(|section| *section == consts::BIQUAD_IDENTITY)
-            }) =>
-            {
-                run::<_, _, _, true>(
-                    simd,
-                    samples.as_chunks_mut::<8>().0.iter_mut(),
-                    &group,
-                    0,
-                    8,
-                );
-            }
-            8 => run::<_, _, _, false>(
-                simd,
-                samples.as_chunks_mut::<8>().0.iter_mut(),
-                &group,
-                0,
-                8,
-            ),
-            4 => run::<_, _, _, false>(
-                simd,
-                samples.as_chunks_mut::<4>().0.iter_mut(),
-                &group,
-                0,
-                4,
-            ),
-            _ => {
-                for offset in (0..channels).step_by(8) {
-                    let width = channels.saturating_sub(offset).min(8);
-                    let frames = samples.chunks_exact_mut(channels).map(|frame| {
-                        frame
-                            .get_mut(offset..offset.saturating_add(width))
-                            .expect("validated lane group")
-                    });
-                    run::<_, _, _, false>(simd, frames, &group, offset, width);
-                }
+                },
+            ]
+        });
+        first = first.saturating_add(2);
+    }
+}
+
+#[inline(always)]
+fn run_channels<S, F, const SECTIONS: usize>(
+    simd: S,
+    samples: &mut [f32],
+    channels: usize,
+    coefficients: F,
+) where
+    S: Simd,
+    F: Fn(usize) -> [[f32; 5]; SECTIONS],
+{
+    match channels {
+        8 => run::<_, _, _, SECTIONS>(
+            simd,
+            samples.as_chunks_mut::<8>().0.iter_mut(),
+            &coefficients,
+            0,
+            8,
+        ),
+        4 => run::<_, _, _, SECTIONS>(
+            simd,
+            samples.as_chunks_mut::<4>().0.iter_mut(),
+            &coefficients,
+            0,
+            4,
+        ),
+        _ => {
+            for offset in (0..channels).step_by(8) {
+                let width = channels.saturating_sub(offset).min(8);
+                let frames = samples.chunks_exact_mut(channels).map(|frame| {
+                    frame
+                        .get_mut(offset..offset.saturating_add(width))
+                        .expect("validated lane group")
+                });
+                run::<_, _, _, SECTIONS>(simd, frames, &coefficients, offset, width);
             }
         }
     }
 }
 
-/// With `UPPER_TAIL`, the sections after [`consts::WINDOW_HEAD_SECTIONS`] are identity on
-/// the lower four lanes and run on the upper half only.
 #[inline(always)]
-fn run<S, F, I, const UPPER_TAIL: bool>(
+fn run<S, F, I, const SECTIONS: usize>(
     simd: S,
     frames: I,
     coefficients: &F,
@@ -115,12 +119,12 @@ fn run<S, F, I, const UPPER_TAIL: bool>(
     width: usize,
 ) where
     S: Simd,
-    F: Fn(usize) -> [[f32; 5]; consts::WINDOW_FUSED_SECTIONS],
+    F: Fn(usize) -> [[f32; 5]; SECTIONS],
     I: Iterator,
     I::Item: AsMut<[f32]>,
 {
     let zero = f32x8::splat(simd, 0.0);
-    let mut designs = [[zero; 5]; consts::WINDOW_FUSED_SECTIONS];
+    let mut designs = [[zero; 5]; SECTIONS];
     for lane in 0..width {
         for (section, values) in designs
             .iter_mut()
@@ -132,17 +136,7 @@ fn run<S, F, I, const UPPER_TAIL: bool>(
             }
         }
     }
-    let full = if UPPER_TAIL {
-        consts::WINDOW_HEAD_SECTIONS
-    } else {
-        consts::WINDOW_FUSED_SECTIONS
-    };
-    let head = designs.get(..full).expect("fused head");
-    let [_, _, third, fourth] = designs;
-    let tail = [third, fourth].map(|design| design.map(|vector| vector.split().1));
-    let mut head_state = [[zero; 2]; consts::WINDOW_FUSED_SECTIONS];
-    let quarter = f32x4::splat(simd, 0.0);
-    let mut tail_state = [[quarter; 2]; consts::WINDOW_FUSED_SECTIONS];
+    let mut state = [[zero; 2]; SECTIONS];
     for mut frame in frames {
         let frame = frame.as_mut();
         let mut signal = zero;
@@ -150,15 +144,8 @@ fn run<S, F, I, const UPPER_TAIL: bool>(
             .get_mut(..width)
             .expect("lane width")
             .copy_from_slice(frame);
-        for (design, state) in head.iter().zip(&mut head_state) {
+        for (design, state) in designs.iter().zip(&mut state) {
             signal = section(design, state, signal);
-        }
-        if UPPER_TAIL {
-            let (low, mut high) = signal.split();
-            for (design, state) in tail.iter().zip(&mut tail_state) {
-                high = section(design, state, high);
-            }
-            signal = low.combine(high);
         }
         frame.copy_from_slice(signal.get(..width).expect("lane width"));
     }
