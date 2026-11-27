@@ -1660,6 +1660,15 @@ fn linux_lanes_run_on_the_native_pool_behind_its_switch() {
             Some(Value::String("kithara-ci:linux-latest".to_owned())),
             "`{job}` runs outside the CI image"
         );
+        assert_eq!(
+            config
+                .variables(&job)
+                .get("GIT_CLONE_PATH")
+                .and_then(Value::as_str),
+            Some("$CI_BUILDS_DIR/$CI_PROJECT_PATH"),
+            "`{job}` checks out under its worker's token, so a cached artifact names a path \
+             another worker does not have"
+        );
         let owner = config
             .rules_owner(&job)
             .unwrap_or_else(|| panic!("`{job}` has no effective rules"));

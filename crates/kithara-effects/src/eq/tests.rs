@@ -75,7 +75,7 @@ fn cross_over(eq: &mut StereoEq) {
 }
 
 fn bands(layout: Option<Box<EqLayout>>) -> Option<usize> {
-    layout.map(|layout| layout.left.band_count())
+    layout.map(|layout| layout.channels.band_count())
 }
 
 /// Every layout taken hands one back, the waiting one it displaces or the one the last
@@ -153,8 +153,8 @@ fn stereo_blocks_match_scalar_filters_through_gain_moves(#[case] count: usize) {
             let mut expected_left = left.clone();
             let mut expected_right = right.clone();
             for (left, right) in expected_left.iter_mut().zip(&mut expected_right) {
-                *left = scalar_left.process_sample(*left);
-                *right = scalar_right.process_sample(*right);
+                *left = scalar_left.process_frame([*left])[0];
+                *right = scalar_right.process_frame([*right])[0];
             }
             actual.process(&mut left, &mut right);
             assert!(

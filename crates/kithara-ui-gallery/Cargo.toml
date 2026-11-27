@@ -21,7 +21,6 @@ test = false
 masonry = ["kithara-ui/masonry"]
 # What the suites vary on the demo model that the gallery itself never does.
 mock = []
-perf = ["kithara-ui/perf"]
 
 [dependencies]
 kithara-key = { workspace = true }
@@ -83,10 +82,10 @@ required-features = ["masonry"]
 [[test]]
 name = "page_perf_oracle"
 path = "tests/page_perf_oracle.rs"
-required-features = ["perf", "masonry"]
+required-features = ["masonry"]
 
 [[bench]]
 name = "page_perf"
 path = "tests/page_perf/main.rs"
 harness = false
-required-features = ["perf", "masonry"]
+required-features = ["masonry"]

@@ -3,7 +3,6 @@ use std::num::NonZeroU32;
 use bungee_sys::InputChunk;
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioSpec, FrameCount, PlanarBuffer, SignalError};
-use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
 use super::ffi::{AnalysisInput, NativeStretcher};
@@ -96,7 +95,7 @@ impl InputBuffer {
         valid: bool,
         end_of_input: bool,
     ) -> Result<(), ElasticError> {
-        kithara::measure_block!("bungee::analysis::clear", {
+        ({
             self.analysis.as_samples_mut().fill(0.0);
         });
         if !valid {
@@ -186,7 +185,7 @@ impl InputBuffer {
         let source_begin = frames_between(self.begin, available_begin)?;
         let destination_begin = frames_between(self.requested.begin, available_begin)?;
         let channels = usize::from(self.audio.spec().channels);
-        kithara::measure_block!("bungee::analysis::copy", {
+        ({
             for channel in 0..channels {
                 let source = &self.audio.channel(channel).map_err(signal_error)?
                     [source_begin..source_begin + copied];

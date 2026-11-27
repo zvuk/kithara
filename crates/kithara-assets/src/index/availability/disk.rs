@@ -5,7 +5,6 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, ErrorKind},
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
 };
 
 use arc_swap::ArcSwap;
@@ -17,7 +16,7 @@ use super::core::{AssetTree, Availability, AvailabilityIndex, Entry, InnerIndex}
 use crate::{
     error::AssetsResult,
     index::persistence::{
-        FlushHub, Flushable, IndexFile, read_archived,
+        FlushHub, IndexFile, flush_source, read_archived,
         schema::{AssetAvailabilityFile, AvailabilityFile, ResourceAvailabilityFile},
         write_record,
     },
@@ -54,14 +53,7 @@ impl AvailabilityIndex {
         if let Some(hub) = self.inner.hub() {
             return hub.flush_now();
         }
-        if !self.inner.dirty.swap(false, Ordering::AcqRel) {
-            return Ok(());
-        }
-        let result = Flushable::flush(&*self.inner);
-        if result.is_err() {
-            self.inner.dirty.store(true, Ordering::Release);
-        }
-        result
+        flush_source(&*self.inner, false, false).map(|_| ())
     }
 
     /// Load the availability index from a persistent resource.
@@ -104,7 +96,7 @@ impl AvailabilityIndex {
     }
 
     /// Persist the aggregate index to a caller-supplied index file. Used by the cross-instance roundtrip tests; the
-    /// production flush path goes through [`super::Flushable::flush`].
+    /// production flush path goes through [`flush_source`].
     #[cfg(test)]
     pub(crate) fn persist_to(&self, file: &IndexFile) -> AssetsResult<()> {
         write_record(file, &snapshot_aggregate(&self.inner.state), false)

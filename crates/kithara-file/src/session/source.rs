@@ -12,7 +12,6 @@ use kithara_stream::{
     PlayheadWrite, ReadOutcome, SegmentDescriptor, SourceError as StreamSourceError, SourcePhase,
     SourceProbe, StreamError, StreamResult, WorkerWake,
 };
-use kithara_test_utils::kithara;
 use tracing::trace;
 
 use super::{
@@ -317,8 +316,6 @@ where
             inner: Arc::clone(&self.inner),
         })
     }
-
-    #[kithara::measure]
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         self.ensure_not_cancelled()?;
         let n = self
@@ -350,8 +347,6 @@ where
         );
         Some(Box::new(hooks))
     }
-
-    #[kithara::measure]
     fn wait_range(
         &mut self,
         range: Range<u64>,

@@ -22,8 +22,7 @@ pub struct GainShapeError {
 /// One band layout built for both channels of a stereo signal. It is built off the audio
 /// thread, so taking it in allocates nothing there.
 pub struct EqLayout {
-    pub(super) left: IsolatorEq,
-    right: IsolatorEq,
+    pub(super) channels: IsolatorEq<2>,
 }
 
 impl EqLayout {
@@ -42,54 +41,41 @@ impl EqLayout {
         S: HasPool<f32>,
     {
         Ok(Self {
-            left: IsolatorEq::new(config, bands, sample_rate.get())?,
-            right: IsolatorEq::new(config, bands, sample_rate.get())?,
+            channels: IsolatorEq::new(config, bands, sample_rate.get())?,
         })
-    }
-
-    fn set_gain(&mut self, band: usize, gain_db: GainDb) {
-        self.left.set_gain(band, gain_db);
-        self.right.set_gain(band, gain_db);
-    }
-
-    fn set_kill(&mut self, band: usize, on: bool) {
-        self.left.set_kill(band, on);
-        self.right.set_kill(band, on);
-    }
-
-    fn set_explicit(&mut self, band: usize, gain_db: GainDb) {
-        self.left.set_explicit(band, gain_db);
-        self.right.set_explicit(band, gain_db);
     }
 
     fn apply_gains(&mut self, gains: &[impl AsRef<[f64]>], frame: usize) {
         for (band, values) in gains.iter().enumerate() {
             if let Some(value) = values.as_ref().get(frame) {
-                self.set_explicit(band, GainDb::from(AsPrimitive::<f32>::as_(*value)));
+                self.channels
+                    .set_explicit(band, GainDb::from(AsPrimitive::<f32>::as_(*value)));
             }
         }
     }
 
     delegate::delegate! {
-        to self.left {
+        to self.channels {
             /// Number of bands prepared in this layout.
             #[must_use]
             pub fn band_count(&self) -> usize;
             fn killed(&self, band: usize) -> Option<bool>;
             fn target_gain(&self, band: usize) -> Option<GainDb>;
+            fn set_gain(&mut self, band: usize, gain_db: GainDb);
+            fn set_kill(&mut self, band: usize, on: bool);
+            fn clear_kills(&mut self);
         }
     }
 
     fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.left.update_sample_rate(sample_rate.get());
-        self.right.update_sample_rate(sample_rate.get());
+        self.channels.update_sample_rate(sample_rate.get());
     }
 }
 
 impl fmt::Debug for EqLayout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EqLayout")
-            .field("bands", &self.left.band_count())
+            .field("bands", &self.channels.band_count())
             .finish_non_exhaustive()
     }
 }
@@ -156,8 +142,7 @@ impl StereoEq {
     /// the last crossover retired. Nothing it held is freed here.
     pub fn take_layout(&mut self, mut layout: Box<EqLayout>) -> Option<Box<EqLayout>> {
         layout.update_sample_rate(self.sample_rate);
-        layout.left.clear_kills();
-        layout.right.clear_kills();
+        layout.clear_kills();
         self.update
             .replace(LayoutUpdate::Pending(layout))
             .map(LayoutUpdate::into_inner)
@@ -359,20 +344,16 @@ fn render_stereo(
         .chunks_mut(EQ_BLOCK_FRAMES)
         .zip(right.chunks_mut(EQ_BLOCK_FRAMES))
     {
-        let wet_left = active.left.process_block(left);
-        let wet_right = active.right.process_block(right);
+        let [wet_left, wet_right] = active.channels.process_block([&*left, &*right]);
         for ((left, right), (wet_left, wet_right)) in left
             .iter_mut()
             .zip(right.iter_mut())
             .zip(wet_left.iter_mut().zip(wet_right.iter_mut()))
         {
             if !crossover.has_settled() {
-                let (from_left, from_right) = match retiring.as_deref_mut() {
-                    Some(retiring) => (
-                        retiring.left.process_sample(*left),
-                        retiring.right.process_sample(*right),
-                    ),
-                    None => (*left, *right),
+                let [from_left, from_right] = match retiring.as_deref_mut() {
+                    Some(retiring) => retiring.channels.process_frame([*left, *right]),
+                    None => [*left, *right],
                 };
                 crossover.mix_dry_into_wet_stereo(
                     &[from_left],
@@ -396,15 +377,12 @@ fn render_frame(
     right: &mut f32,
 ) {
     let (dry_left, dry_right) = (*left, *right);
-    let mut wet_left = [active.left.process_sample(dry_left)];
-    let mut wet_right = [active.right.process_sample(dry_right)];
+    let [wet_left, wet_right] = active.channels.process_frame([dry_left, dry_right]);
+    let (mut wet_left, mut wet_right) = ([wet_left], [wet_right]);
     if !crossover.has_settled() {
-        let (from_left, from_right) = match retiring.as_deref_mut() {
-            Some(retiring) => (
-                retiring.left.process_sample(dry_left),
-                retiring.right.process_sample(dry_right),
-            ),
-            None => (dry_left, dry_right),
+        let [from_left, from_right] = match retiring.as_deref_mut() {
+            Some(retiring) => retiring.channels.process_frame([dry_left, dry_right]),
+            None => [dry_left, dry_right],
         };
         crossover.mix_dry_into_wet_stereo(
             &[from_left],

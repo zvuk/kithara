@@ -41,7 +41,7 @@ platforms = [
 # kithara-ui is the desktop/UI surface that no device closure (FFI for iOS,
 # Android, wasm) builds; traversed, its winit/iced/wgpu/vello stack landed in
 # the base dependencies and Android compiled android-activity with no backend.
-# Profiling belongs to each crate's perf/memprof features. Traversing hotpath
+# Profiling stays in the tests crate's perf feature. Traversing hotpath
 # unifies allocation instrumentation into timing-only builds and pulls its
 # profiling dependencies into device builds that never requested them.
 # Portable and Apple UI consumers must not inherit the application dependency union.

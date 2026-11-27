@@ -362,8 +362,6 @@ pub(super) fn park_after_outcome(
         }
     }
 }
-
-#[kithara::measure(label = "worker.backpressure.wait")]
 fn wait_for_backpressure(
     wake: &Wake,
     budgets: &DispatcherConfig,

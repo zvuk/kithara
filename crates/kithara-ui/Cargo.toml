@@ -39,7 +39,6 @@ masonry = [
 ]
 # Test doubles the integration suites share: a hand-filled endpoint registry.
 mock = []
-perf = []
 usdt = ["dep:kithara-test-utils", "kithara-test-utils/usdt"]
 # Hand the no-block gate the platform layer the toolkit draws through, so a
 # lane that runs this package under the gate detects a blocking call made
@@ -160,13 +159,13 @@ test = true
 [[test]]
 name = "frame_perf_oracle"
 path = "perf/frame/oracle.rs"
-required-features = ["perf", "iced", "masonry"]
+required-features = ["iced", "masonry"]
 
 [[bench]]
 name = "frame_perf"
 path = "perf/frame/main.rs"
 harness = false
-required-features = ["perf", "iced", "masonry"]
+required-features = ["iced", "masonry"]
 
 [[bench]]
 name = "ui"

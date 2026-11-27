@@ -12,10 +12,6 @@ use kithara_platform::{
 };
 use url::{Position, Url};
 
-mod kithara {
-    pub(crate) use kithara_test_macros::measure;
-}
-
 use crate::{
     HttpBody,
     backend::{
@@ -364,7 +360,6 @@ impl RetryClient<RawHttp> {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl RawNet for RawHttp {
-    #[kithara::measure]
     async fn get_bytes(
         &self,
         url: Url,
@@ -381,8 +376,6 @@ impl RawNet for RawHttp {
         let resp = self.send_checked(req, url, false, observer).await?;
         body_bytes(resp, self.options.inactivity_timeout).await
     }
-
-    #[kithara::measure]
     async fn get_range(
         &self,
         url: Url,
@@ -401,8 +394,6 @@ impl RawNet for RawHttp {
             .await?;
         Ok(self.wrap_resumable(first, url, range.start, range.end, headers, observer))
     }
-
-    #[kithara::measure]
     async fn head(
         &self,
         url: Url,
@@ -421,8 +412,6 @@ impl RawNet for RawHttp {
         body_bytes(resp, self.options.inactivity_timeout).await?;
         Ok(out)
     }
-
-    #[kithara::measure]
     async fn post_bytes(
         &self,
         url: Url,
@@ -442,7 +431,6 @@ impl RawNet for RawHttp {
     }
 
     /// Issues a full GET; a resume re-fetches `bytes=consumed-` from base offset 0.
-    #[kithara::measure]
     async fn stream(
         &self,
         url: Url,

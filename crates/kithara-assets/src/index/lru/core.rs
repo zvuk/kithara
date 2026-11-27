@@ -78,7 +78,7 @@ impl LruIndex {
             st.remove(asset_root)
         };
         if removed {
-            flush_sync(&*self.inner)?;
+            flush_sync(&self.inner)?;
         }
         Ok(())
     }
@@ -104,7 +104,7 @@ impl LruIndex {
             let mut st = self.inner.state.lock();
             st.touch(asset_root, bytes_hint)
         };
-        flush_sync(&*self.inner)?;
+        flush_sync(&self.inner)?;
         Ok(created)
     }
 
@@ -113,22 +113,21 @@ impl LruIndex {
     /// (e.g. segment commits add bytes to an already-tracked asset).
     ///
     /// Returns `true` if the entry existed and the byte total actually
-    /// changed; only that path triggers a flush. If no entry exists or
+    /// changed; only that path marks the index dirty. If no entry exists or
     /// the value is identical, this is a pure read.
     ///
-    /// # Errors
-    ///
-    /// Propagates [`AssetsError`](crate::error::AssetsError) when the
-    /// on-disk flush fails.
-    pub(crate) fn update_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<bool> {
+    /// Every segment commit reports here from the fetch path, and a byte
+    /// total carries no crash-safety duty the way recency and pins do, so
+    /// the write is left to the flush hub's debounced pass.
+    pub(crate) fn update_bytes(&self, asset_root: &str, bytes: u64) -> bool {
         let changed = {
             let mut st = self.inner.state.lock();
             st.update_bytes(asset_root, bytes)
         };
         if changed {
-            flush_sync(&*self.inner)?;
+            self.inner.mark_dirty();
         }
-        Ok(changed)
+        changed
     }
 }
 
@@ -145,7 +144,7 @@ mod tests {
         let lru = LruIndex::ephemeral();
         lru.touch("A", Some(100)).unwrap();
         lru.touch("B", Some(200)).unwrap();
-        lru.update_bytes("A", 999).unwrap();
+        lru.update_bytes("A", 999);
 
         let cfg = EvictConfig {
             max_assets: Some(1),
@@ -159,10 +158,55 @@ mod tests {
         );
     }
 
+    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    fn update_bytes_leaves_the_write_to_the_flush_hub() {
+        use std::{fs, num::NonZeroUsize};
+
+        use kithara_platform::CancelToken;
+
+        use crate::index::persistence::FlushPolicy;
+
+        let pools = crate::test_pools::pools();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("lru.bin");
+        let open =
+            || LruIndex::with_persist_at(path.clone(), crate::test_pools::byte_buffer(&pools));
+        let hub = FlushHub::new(
+            CancelToken::never(),
+            FlushPolicy {
+                debounce: Duration::from_secs(60),
+                force_every_n_ops: NonZeroUsize::new(8).unwrap(),
+            },
+        );
+        let lru = open();
+        lru.attach_to(&hub);
+        lru.touch("A", Some(100)).unwrap();
+        let persisted = fs::read(&path).unwrap();
+
+        assert!(lru.update_bytes("A", 200));
+
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            persisted,
+            "a segment commit reports its size on the fetch path, so the file write \
+             belongs to the flush hub rather than to the caller"
+        );
+
+        hub.flush_now().unwrap();
+        drop(lru);
+        drop(hub);
+
+        assert_eq!(
+            open().total_bytes_best_effort(),
+            200,
+            "checkpoint and reopen must observe the hub-persisted byte total"
+        );
+    }
+
     #[kithara::test(timeout(Duration::from_secs(1)))]
     fn update_bytes_unknown_root_is_noop() {
         let lru = LruIndex::ephemeral();
-        let changed = lru.update_bytes("ghost", 4096).unwrap();
+        let changed = lru.update_bytes("ghost", 4096);
         assert!(!changed, "no entry → no change");
         assert_eq!(lru.total_bytes_best_effort(), 0);
     }
@@ -172,10 +216,10 @@ mod tests {
         let lru = LruIndex::ephemeral();
         lru.touch("A", Some(100)).unwrap();
 
-        let changed = lru.update_bytes("A", 100).unwrap();
+        let changed = lru.update_bytes("A", 100);
         assert!(!changed, "same value → no flush, no change");
 
-        let changed = lru.update_bytes("A", 200).unwrap();
+        let changed = lru.update_bytes("A", 200);
         assert!(changed, "different value → change");
         assert_eq!(lru.total_bytes_best_effort(), 200);
     }

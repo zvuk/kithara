@@ -357,17 +357,6 @@ mock = [
     "kithara-test-utils/mock",
     "kithara-warp?/mock",
 ]
-perf = [
-    "kithara-audio?/perf",
-    "kithara-decode?/perf",
-    "kithara-play?/perf",
-    "kithara-storage?/perf",
-    "kithara-stream?/perf",
-    "kithara-bufpool?/perf",
-    "kithara-file?/perf",
-    "kithara-hls?/perf",
-    "kithara-net?/perf",
-]
 # Apple HW decoder. Does NOT include `fdk-aac` — Apple AudioToolbox
 # decodes HE-AAC v1/v2 natively via kAudioFormatMPEG4AAC_HE / _HE_V2
 # (handled by AppleCodec). fdk-aac stays
