@@ -2,7 +2,7 @@
 
 use std::{num::NonZeroU32, sync::OnceLock};
 
-use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
+use kithara_bufpool::{OverallBudget, Pool, PoolConfig, PoolRegion, PoolSlot};
 use kithara_encode::{EncodedTrack, EncoderFactory, PackagedEncodeRequest};
 use kithara_signal::rescale_frame_round;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
@@ -14,11 +14,10 @@ use crate::{
     signal::{Pcm, Wave},
 };
 
-pool_schema! {
-    pub(super) FixturePools {
-        bytes: u8,
-        samples: f32,
-    }
+#[derive(Pool)]
+pub(super) struct FixturePools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
 pub(super) fn pools() -> PoolRegion<FixturePools> {

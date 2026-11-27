@@ -5,67 +5,78 @@ use serde_yaml_ng::Value;
 use super::{GitlabConfig, mapping, workspace_root};
 
 #[test]
-fn quarantine_advisories_compare_dependency_inputs_to_their_base() {
+fn review_advisories_compare_dependency_inputs_to_their_verified_base() {
     let config = GitlabConfig::load(&workspace_root());
     let rules = config.definition("deps:advisories")["rules"]
         .as_sequence()
         .expect("advisory scheduling rules are a sequence");
-    assert_eq!(rules.len(), 2);
-
-    let weekly = rules[0].as_mapping().expect("the weekly rule is a mapping");
-    assert_eq!(
-        weekly.get("if").and_then(Value::as_str),
-        Some("$KITHARA_PIPELINE_KIND == \"weekly\"")
-    );
-    assert!(!weekly.contains_key("changes"));
-
-    let quarantine = rules[1]
-        .as_mapping()
-        .expect("the quarantine rule is a mapping");
-    assert_eq!(
-        quarantine.get("if").and_then(Value::as_str),
-        Some("$KITHARA_PIPELINE_KIND == \"quarantine\"")
-    );
-    let changes = mapping(
-        quarantine
-            .get("changes")
-            .expect("quarantine advisories are path-gated"),
-        "quarantine advisory changes",
-    );
-    assert_eq!(
-        changes.get("compare_to").and_then(Value::as_str),
-        Some("$KITHARA_QUARANTINE_BASE_SHA")
-    );
-    let paths = changes
-        .get("paths")
-        .and_then(Value::as_sequence)
-        .expect("dependency input paths are a sequence")
-        .iter()
-        .filter_map(Value::as_str)
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        paths,
-        BTreeSet::from([
-            "**/Cargo.toml",
-            ".cargo/config.toml",
-            "Cargo.lock",
-            "deny.toml",
-        ])
+    assert_eq!(rules.len(), 6);
+    assert!(
+        matches!(&rules[0], Value::Tagged(switch) if switch.value
+            == serde_yaml_ng::from_str::<Value>("[.linux-pool, rules]").unwrap()),
+        "the pool switch comes first"
     );
 
-    let static_rules = config.definition("deps:deny")["rules"]
+    for (rule, kind) in [(&rules[1], "weekly"), (&rules[2], "main")] {
+        let rule = rule.as_mapping().expect("a full-kind rule is a mapping");
+        assert_eq!(
+            rule.get("if").and_then(Value::as_str),
+            Some(format!("$KITHARA_PIPELINE_KIND == \"{kind}\"").as_str())
+        );
+        assert!(!rule.contains_key("changes"), "{kind} audits every run");
+    }
+
+    let unverified = rules[3].as_mapping().expect("the base guard is a mapping");
+    assert_eq!(
+        unverified.get("if").and_then(Value::as_str),
+        Some("$KITHARA_QUARANTINE_BASE_SHA == null")
+    );
+    assert_eq!(
+        unverified.get("when").and_then(Value::as_str),
+        Some("never")
+    );
+
+    for (rule, kind) in [(&rules[4], "quarantine"), (&rules[5], "branch")] {
+        let rule = rule.as_mapping().expect("a review rule is a mapping");
+        assert_eq!(
+            rule.get("if").and_then(Value::as_str),
+            Some(format!("$KITHARA_PIPELINE_KIND == \"{kind}\"").as_str())
+        );
+        let changes = mapping(
+            rule.get("changes")
+                .unwrap_or_else(|| panic!("{kind} advisories are path-gated")),
+            "review advisory changes",
+        );
+        assert_eq!(
+            changes.get("compare_to").and_then(Value::as_str),
+            Some("$KITHARA_QUARANTINE_BASE_SHA")
+        );
+        let paths = changes
+            .get("paths")
+            .and_then(Value::as_sequence)
+            .expect("dependency input paths are a sequence")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            paths,
+            BTreeSet::from([
+                "**/Cargo.toml",
+                ".cargo/config.toml",
+                "Cargo.lock",
+                "deny.toml",
+            ])
+        );
+    }
+
+    let static_rules = config.definition(".deps-review-job")["rules"]
         .as_sequence()
         .expect("static dependency checks keep their scheduling rules");
     assert!(
         static_rules
             .iter()
-            .filter_map(Value::as_mapping)
-            .filter(|rule| {
-                rule.get("if").and_then(Value::as_str)
-                    == Some("$KITHARA_PIPELINE_KIND == \"quarantine\"")
-            })
-            .all(|rule| !rule.contains_key("changes")),
-        "bans, licenses and sources stay unconditional on quarantine"
+            .all(|rule| matches!(rule, Value::Tagged(_))),
+        "bans, licenses and sources stay unconditional on every review"
     );
 }
 
@@ -79,7 +90,7 @@ fn dependency_audit_publishes_raw_evidence_on_every_job_outcome() {
         assert_eq!(
             config.effective_value(job, "script"),
             Some(Value::Sequence(vec![Value::String(format!(
-                "just ci run {lane}"
+                "just ci lane {lane} --kind \"$KITHARA_PIPELINE_KIND\""
             ))]))
         );
         let artifacts = config

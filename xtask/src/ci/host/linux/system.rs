@@ -1,3 +1,5 @@
+use std::{io::Write as _, path::Path};
+
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
@@ -11,7 +13,9 @@ use crate::{
 /// packages that cannot live in an image.
 pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
     require_linux()?;
+    require_devices(host)?;
     process.require_tools(&["docker"])?;
+    prepare_bridge_filtering(process)?;
 
     std::fs::create_dir_all(&host.cache_root)
         .with_context(|| format!("creating {}", host.cache_root.display()))?;
@@ -31,9 +35,9 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
         )?;
     }
 
-    let pins = CiPins::load(std::path::Path::new(consts::PINS_PATH))?;
+    let pins = CiPins::load(Path::new(consts::PINS_PATH))?;
     for (volume, image) in &job_mounts(host, &pins)? {
-        if std::path::Path::new(volume).is_absolute() {
+        if Path::new(volume).is_absolute() {
             std::fs::create_dir_all(volume)
                 .with_context(|| format!("creating runner cache directory {volume}"))?;
         } else {
@@ -49,15 +53,77 @@ pub(super) fn bootstrap(process: &Process, host: &LinuxHost) -> Result<()> {
     Ok(())
 }
 
-/// Install the host packages. GPU access needs the container toolkit and an
-/// emulator needs QEMU, and neither can be carried in the image that uses them.
-pub(super) fn install_tools(process: &Process) -> Result<()> {
+fn prepare_bridge_filtering(process: &Process) -> Result<()> {
+    process.require_tools(&["install", "modprobe", "sysctl"])?;
+    let module = "br_netfilter";
+    let sysctl = "/etc/sysctl.d/90-kithara-ci-bridge.conf";
+    for (path, contents) in [
+        ("/etc/modules-load.d/kithara-ci.conf", format!("{module}\n")),
+        (sysctl, format!("{}=1\n", consts::HOST_BRIDGE_IPV4_FILTER)),
+    ] {
+        install_configuration(process, Path::new(path), &contents)?;
+    }
+    process.run("modprobe", &[module], "load bridge netfilter")?;
+    process.run(
+        "sysctl",
+        &["--load", sysctl],
+        "enable IPv4 bridge filtering",
+    )?;
+    super::firewall::require_bridge_filtering(process)
+}
+
+pub(super) fn install_configuration(process: &Process, path: &Path, contents: &str) -> Result<()> {
+    let mut input = tempfile::NamedTempFile::new().context("stage native configuration")?;
+    input.write_all(contents.as_bytes())?;
+    let mut install = process.command("install");
+    install
+        .args(["-D", "-m", "0644"])
+        .arg(input.path())
+        .arg(path);
+    process.run_command(&mut install, "install native configuration")
+}
+
+pub(super) fn require_devices(host: &LinuxHost) -> Result<()> {
+    for runner in &host.runners {
+        for device in &runner.devices {
+            std::fs::metadata(device).with_context(|| {
+                format!(
+                    "runner {} requires unavailable device {}",
+                    runner.name,
+                    device.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// Install only packages required by the declared host resources.
+pub(super) fn install_tools(process: &Process, host: &LinuxHost) -> Result<()> {
     require_linux()?;
+
+    if host.runners.iter().any(|runner| {
+        runner
+            .devices
+            .iter()
+            .any(|path| path.to_string_lossy().starts_with("/dev/nvidia"))
+    }) {
+        let state = process.capture(
+            "dpkg-query",
+            &["-W", "-f=${Status}", "nvidia-container-toolkit"],
+            "read declared NVIDIA runtime state",
+        )?;
+        if !state.starts_with("install ok installed") {
+            bail!(
+                "declared NVIDIA devices require an operator-prepared runtime; provisioning never restarts Docker"
+            );
+        }
+    }
 
     // Only what is missing. Naming a package that is already installed invites
     // apt to upgrade it, and upgrading the GPU stack underneath a machine that
     // is serving other work is not this command's business.
-    let missing: Vec<&str> = consts::HOST_PACKAGES
+    let missing: Vec<&str> = required_packages(host)
         .into_iter()
         .filter(|package| {
             // A package dpkg cannot describe at all is missing just as surely
@@ -85,22 +151,15 @@ pub(super) fn install_tools(process: &Process) -> Result<()> {
         .args(&missing);
     process.run_command(&mut install, "install host packages")?;
 
-    // The toolkit ships the runtime but does not register it, and a GPU runner
-    // that starts without it fails on its first job rather than at setup.
-    //
-    // Only when it was this command that installed it: restarting Docker stops
-    // every container on the machine, including ones this repository does not
-    // own, and doing that to re-apply a configuration that is already in place
-    // would be a poor trade.
-    if missing.contains(&"nvidia-container-toolkit") {
-        process.run(
-            "nvidia-ctk",
-            &["runtime", "configure", "--runtime=docker"],
-            "register the GPU container runtime",
-        )?;
-        process.run("systemctl", &["restart", "docker"], "restart Docker")?;
-    }
     Ok(())
+}
+
+fn required_packages(host: &LinuxHost) -> Vec<&'static str> {
+    let mut packages = consts::HOST_PACKAGES.to_vec();
+    if host.windows.is_some() {
+        packages.extend(consts::HOST_VM_PACKAGES);
+    }
+    packages
 }
 
 /// Every cache mount the runners use, each named once with the image of a
@@ -120,7 +179,7 @@ fn job_mounts(host: &LinuxHost, pins: &CiPins) -> Result<Vec<(String, String)>> 
     Ok(mounts)
 }
 
-fn require_linux() -> Result<()> {
+pub(super) fn require_linux() -> Result<()> {
     if !cfg!(target_os = "linux") {
         bail!("this command provisions a Linux CI machine and must run on one");
     }
@@ -168,6 +227,51 @@ mod tests {
         config::fixture,
         host::linux::{container, profile::tests::host_fixture},
     };
+
+    #[test]
+    fn ordinary_gitlab_checks_need_no_virtual_machine_or_gpu_packages() {
+        let host = super::super::profile::tests::gitlab_fixture();
+        assert_eq!(required_packages(&host), vec!["iptables", "kmod", "procps"]);
+        let host = host_fixture();
+        assert!(required_packages(&host).contains(&"qemu-system-x86"));
+        assert!(!required_packages(&host).contains(&"nvidia-container-toolkit"));
+    }
+
+    #[test]
+    fn bootstrap_persists_bridge_filtering_before_loading_and_verifying_it() {
+        use crate::ci::process::Recording;
+
+        let process = Process::recording(
+            Path::new("."),
+            Recording::default()
+                .with_reply(&["sysctl", "-n", "net.bridge.bridge-nf-call-iptables"], "1"),
+        );
+        prepare_bridge_filtering(&process).unwrap();
+        let recorded = process.recorded().unwrap();
+        let steps: Vec<_> = recorded
+            .steps()
+            .iter()
+            .filter(|step| !step.program.starts_with('<'))
+            .collect();
+        for (step, destination) in steps.iter().zip([
+            "/etc/modules-load.d/kithara-ci.conf",
+            "/etc/sysctl.d/90-kithara-ci-bridge.conf",
+        ]) {
+            assert_eq!(step.program, "install");
+            assert_eq!(&step.args[..3], ["-D", "-m", "0644"]);
+            assert_eq!(step.args.last().unwrap(), destination);
+        }
+        assert_eq!(steps.len(), 5);
+        assert_eq!(steps[2].program, "modprobe");
+        assert_eq!(steps[2].args, ["br_netfilter"]);
+        assert_eq!(steps[3].program, "sysctl");
+        assert_eq!(
+            steps[3].args,
+            ["--load", "/etc/sysctl.d/90-kithara-ci-bridge.conf"]
+        );
+        assert_eq!(steps[4].program, "sysctl");
+        assert_eq!(steps[4].args, ["-n", "net.bridge.bridge-nf-call-iptables"]);
+    }
 
     /// A machine holds the images its units start from, under the tag the
     /// units name; a pin is what the next image build tags. Handing a mount

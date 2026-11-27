@@ -40,8 +40,27 @@
   tags:
     - kithara-release
 
-# Linux and browser checks run on the GitHub Linux fleet. GitLab uses native
-# Mac lanes; Android and Windows are opted into through KITHARA_PLATFORMS.
+# The native Linux pool: Docker workers whose own environment names the cache
+# roots, the build directory and the compiler-cache socket, so a job here sets
+# none of them and runs a lane with the command GitHub's `lane.yml` runs.
+.linux-pool-job:
+  image: kithara-ci:linux-latest
+  tags:
+    - kithara-cloud-linux
+
+# Every Linux pool job's rules start here. Setting the project variable
+# `KITHARA_LINUX_POOL` to `off` takes the pool out: its jobs are not created,
+# rather than left pending for a worker that is not there. The profile
+# `github-only` hands every Linux lane to GitHub, which then renders both
+# providers' lists, so the pool steps aside the same way.
+.linux-pool:
+  rules:
+    - if: $KITHARA_LINUX_POOL == "off" || $KITHARA_CI_PROFILE == "github-only"
+      when: never
+
+# Mac lanes run on the Mac host, the Linux lanes whose `kinds_gitlab` place
+# them on GitLab run on the Linux pool, and the Linux lanes GitHub keeps run on
+# its own fleet. Android and Windows are opted into through KITHARA_PLATFORMS.
 # A lane the verdict judges does not gate on its own: it reports, and the
 # verdict decides by comparing what failed here with what the default branch is
 # already failing. Gating on each lane means gating on a suite that is not

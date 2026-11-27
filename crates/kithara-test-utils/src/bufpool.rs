@@ -1,13 +1,12 @@
-use kithara_bufpool::PoolConfig;
+use kithara_bufpool::{Pool, PoolConfig, PoolSlot};
 
 use crate::consts;
 
-kithara_bufpool::pool_schema! {
-    /// Byte and sample pools available to one isolated test harness.
-    pub TestPools {
-        bytes: u8,
-        samples: f32,
-    }
+/// Byte and sample pools available to one isolated test harness.
+#[derive(Pool)]
+pub struct TestPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
 impl TestPools {

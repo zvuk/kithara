@@ -149,7 +149,7 @@ impl<S> fmt::Debug for PoolRegion<S> {
     }
 }
 
-/// Safe construction context used by `pool_schema!` expansions.
+/// Safe construction context used by `#[derive(Pool)]` expansions.
 #[doc(hidden)]
 pub struct BuildContext {
     reclaimers: RefCell<Vec<Weak<dyn IdleReclaimer>>>,
@@ -204,8 +204,10 @@ impl BuildContext {
     }
 }
 
-/// Opaque typed slot stored inside a generated schema.
-#[doc(hidden)]
+/// Opaque storage for one registered pool inside a `#[derive(Pool)]` schema.
+///
+/// A schema declares one private `PoolSlot<K>` field per key; only the derived
+/// builder creates slots, and only `PoolRegion` reads them.
 pub struct PoolSlot<K>
 where
     K: PoolKey,

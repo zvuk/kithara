@@ -89,8 +89,8 @@ Every fact below has one owner. Link to the owner; do not restate it.
 - Cancel-token hierarchy is typed and propagate-down. Hard-coded
   `CancelToken::root()` and `CancelToken::never()` are forbidden outside
   sanctioned owner sites. See `docs/guides/cancel-policy.md`.
-- No lint suppressions or baseline growth; STOP and fix the cause. Only
-  `kithara-abr` skips smoothing_primitive_sites. See
+- No lint suppressions or baseline growth. Fix verified false positives.
+  Only `kithara-abr` skips smoothing_primitive_sites; see
   `docs/guides/lint-policy.md`.
 - Optimize for performance in hot paths. See `docs/guides/performance.md`.
 - Use repo harnesses for acceptance and formatting: `just test` and `just fmt`.

@@ -1541,13 +1541,12 @@ fn local() -> u32 {
     #[test]
     fn component_pool_rule_rejects_non_owner_region_construction() {
         let source = r#"
-kithara_bufpool::pool_schema! {
-    pub LocalPools {
-        bytes: u8,
-        samples: f32,
-        commands: VecKey<DrawCmd, 1>,
-        text: StringKey<1>,
-    }
+#[derive(kithara_bufpool::Pool)]
+pub struct LocalPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
+    commands: PoolSlot<VecKey<DrawCmd, 1>>,
+    text: PoolSlot<StringKey<1>>,
 }
 
 impl HasPool<u8> for HandWrittenPools {
@@ -1587,19 +1586,27 @@ mod tests {
     #[test]
     fn local_test_pool_rule_requires_the_shared_schema() {
         let source = r#"
-pool_schema! {
-    pub(crate) TestPools {
-        bytes: u8,
-        samples: f32,
-    }
+#[derive(Pool)]
+pub(crate) struct TestPools {
+    bytes: PoolSlot<u8>,
+    samples: PoolSlot<f32>,
 }
 
-kithara_bufpool::pool_schema!(pub TestPools { bytes: u8 });
-pool_schema![TestPools { samples: f32 }];
-
-pool_schema! {
-    pub InlineTestPools { bytes: u8 }
+mod qualified {
+    #[derive(Debug, kithara_bufpool::Pool)]
+    pub struct TestPools { bytes: kithara_bufpool::PoolSlot<u8> }
 }
+
+mod renamed {
+    #[derive(Schema)]
+    struct TestPools { samples: PoolSlot<f32> }
+}
+
+#[derive(Pool)]
+pub struct InlineTestPools { bytes: PoolSlot<u8> }
+
+#[derive(Debug)]
+struct TestPools;
 
 mod test_pools;
 
@@ -1609,24 +1616,37 @@ fn local_region() {
 "#;
 
         assert_eq!(local_test_pool_hits(source), 5);
-        assert_eq!(
-            rule_hits_at(
-                "perf.no-local-test-pools.yml",
-                "crates/kithara-bufpool/src/testing.rs",
-                source,
-            ),
-            0
-        );
+        for owner in [
+            "crates/kithara-bufpool/src/testing.rs",
+            "crates/kithara-test-utils/src/bufpool.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.no-local-test-pools.yml", owner, source),
+                0,
+                "shared test pool owner {owner}"
+            );
+        }
     }
 
     #[test]
-    fn component_pool_rule_covers_aliases_hidden_constructor_and_macro_delimiters() {
+    fn component_pool_rule_covers_derive_spellings_aliases_and_hidden_constructor() {
         let source = r#"
-use kithara_bufpool::{pool_schema as schema, PoolRegion as Region};
+use kithara_bufpool::{Pool as Schema, PoolRegion as Region};
+use kithara_derive::Pool as Derived;
 
-pool_schema!(pub RoundPools { bytes: u8 });
-pool_schema![pub SquarePools { samples: f32 }];
-schema!(pub AliasedPools { bytes: u8 });
+#[derive(Clone, kithara_derive::Pool, Debug)]
+pub struct ListedPools { bytes: PoolSlot<u8> }
+
+/// Documented schema.
+#[derive(Pool)]
+#[doc(hidden)]
+pub struct AttributedPools { samples: PoolSlot<f32> }
+
+#[derive(Schema)]
+pub struct RenamedPools { bytes: kithara_bufpool::PoolSlot<u8> }
+
+#[derive(Debug, PoolConfigDefaults)]
+pub struct PoolSettings { config: PoolConfig, pool: Pool }
 
 fn component() {
     let direct = Region::__build(OverallBudget(64), |_| Ok(()));
@@ -1640,16 +1660,15 @@ fn component() {
 
         assert_eq!(
             rule_hits("perf.no-component-pool-construction.yml", source),
-            5
+            7
         );
     }
 
     #[test]
     fn component_pool_rule_allows_only_exact_owner_modules() {
         let source = r#"
-pool_schema! {
-    pub AppPools { bytes: u8 }
-}
+#[derive(Pool)]
+pub struct AppPools { bytes: PoolSlot<u8> }
 
 impl HasPool<u8> for HandWrittenPools {
     fn __slot(&self) -> &PoolSlot<u8> { todo!() }
@@ -1662,8 +1681,10 @@ fn build(overall_budget: OverallBudget) {
 "#;
 
         for owner in [
+            "crates/kithara-analyze/src/pools.rs",
             "crates/kithara-app/src/pools.rs",
             "crates/kithara-ffi/src/pools.rs",
+            "crates/kithara-ui-draw/src/draw/pool/buffers.rs",
         ] {
             assert_eq!(
                 rule_hits_at("perf.no-component-pool-construction.yml", owner, source),
@@ -1689,6 +1710,83 @@ fn build(overall_budget: OverallBudget) {
                 rule_hits_at("perf.no-manual-pool-registration.yml", non_owner, source),
                 1,
                 "manual registration at {non_owner}"
+            );
+        }
+    }
+
+    #[test]
+    fn component_pool_rule_matches_the_callee_not_the_whole_call_text() {
+        // The derive crate emits `PoolRegion::__build` inside `quote!`, so the
+        // enclosing `Ok(quote! { ... })` call's text contains `::__build(`.
+        // Matching on the whole call text flags that template as construction;
+        // matching the callee alone does not, while a real `__build` call nested
+        // in another real call is still rejected exactly once.
+        let quoted = r#"
+fn expand() -> ::proc_macro2::TokenStream {
+    ::core::result::Result::Ok(::quote::quote! {
+        ::kithara_bufpool::PoolRegion::__build(overall_budget, |context| {
+            ::core::result::Result::Ok(Self { bytes: context.slot::<u8>(bytes)? })
+        })
+    })
+}
+"#;
+
+        for path in [
+            "crates/kithara-derive/src/pool.rs",
+            "crates/kithara-app/src/fixture.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.no-component-pool-construction.yml", path, quoted),
+                0,
+                "quoted construction at {path}"
+            );
+        }
+
+        let real = r#"
+fn component(overall_budget: OverallBudget) {
+    let direct = PoolRegion::__build(overall_budget, |_| Ok(()));
+    let nested = Ok(PoolRegion::<LocalPools>::__build(overall_budget, |_| Ok(())));
+    let hidden = crate::RoundPools::__build_region(overall_budget, config);
+}
+"#;
+        for path in [
+            "crates/kithara-derive/src/pool.rs",
+            "crates/kithara-app/src/fixture.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.no-component-pool-construction.yml", path, real),
+                3,
+                "direct and nested construction still rejected at {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn primitive_pool_rule_allows_typed_non_primitive_collections() {
+        // A typed let over a non-primitive element (the derive's own style) is
+        // allowed; the primitive and inferred `Vec<_>` forms stay rejected.
+        let source = r#"
+struct Ident;
+struct Type;
+struct GenericArgument;
+
+fn collect_slots(fields: &[Ident], keys: &[Type], args: &[GenericArgument], values: &[f32]) {
+    let fields_typed: Vec<&Ident> = fields.iter().collect();
+    let keys_typed: Vec<&Type> = keys.iter().collect();
+    let args_typed: Vec<&GenericArgument> = args.iter().collect();
+    let pcm: Vec<f32> = values.iter().copied().collect();
+    let inferred = values.iter().copied().collect::<Vec<_>>();
+}
+"#;
+
+        for path in [
+            "crates/kithara-derive/src/pool.rs",
+            "crates/kithara-app/src/fixture.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.prefer-primitive-pool.yml", path, source),
+                2,
+                "typed collections allowed, primitive and inferred still rejected at {path}"
             );
         }
     }
@@ -1801,7 +1899,8 @@ impl HasPool<u8> for Fixture {
 }
 
 #[cfg(test)]
-pool_schema! { pub InlineTestPools { bytes: u8 } }
+#[derive(Pool)]
+pub struct InlineTestPools { bytes: PoolSlot<u8> }
 
 #[cfg(all(feature = "usdt", test))]
 impl HasPool<f32> for AllCfgFixture {
@@ -1809,7 +1908,8 @@ impl HasPool<f32> for AllCfgFixture {
 }
 
 #[cfg(all(feature = "usdt", test))]
-pool_schema!(pub AllCfgPools { samples: f32 });
+#[derive(Pool)]
+pub struct AllCfgPools { samples: PoolSlot<f32> }
 
 #[cfg(test)]
 fn fixture() {

@@ -520,6 +520,7 @@ plist = "1"
 png = "0.18"
 pollster = "1.0"
 portable-atomic = { version = "1.15.0", default-features = false, features = ["fallback", "float"] }
+proc-macro-crate = "3.5"
 proc-macro2 = "1"
 proptest = "1"
 quote = "1"
