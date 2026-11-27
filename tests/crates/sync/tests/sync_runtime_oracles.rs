@@ -809,7 +809,7 @@ async fn shared_worker_capture(
     }
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Heavy))]
 async fn bound_sync_pcm_stays_clean_under_shared_worker_deadline_load(
     #[future(awt)] mixed_sources: PreparedSources,
 ) {

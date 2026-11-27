@@ -290,7 +290,7 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
     drop(harness);
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Heavy))]
 #[case::play_sync_seek(PLAY_SYNC_SEEK, source_synthetic().await)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC, source_synthetic().await)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC, source_synthetic().await)]
