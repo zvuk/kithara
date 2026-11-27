@@ -91,6 +91,7 @@ crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 digest = { version = "0.10", features = ["mac", "std"] }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -100,6 +101,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -109,6 +112,7 @@ num-complex = { version = "0.4", features = ["bytemuck"] }
 num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
@@ -138,6 +142,7 @@ crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 digest = { version = "0.10", features = ["mac", "std"] }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -147,6 +152,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -156,6 +163,7 @@ num-complex = { version = "0.4", features = ["bytemuck"] }
 num-rational = { version = "0.4", features = ["num-bigint-std", "serde"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
@@ -184,6 +192,7 @@ crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 dispatch2 = { version = "0.3" }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -192,6 +201,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -201,6 +212,7 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
@@ -232,6 +244,7 @@ crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 dispatch2 = { version = "0.3" }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -240,6 +253,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -249,6 +264,7 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
@@ -278,6 +294,7 @@ crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 dispatch2 = { version = "0.3" }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -286,6 +303,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -295,6 +314,7 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
@@ -326,6 +346,7 @@ crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 dispatch2 = { version = "0.3" }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -334,6 +355,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
@@ -343,6 +366,7 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSAppleEventDescriptor", "NSArray", "NSAttributedString", "NSCoder", "NSData", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSException", "NSFileManager", "NSFormatter", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSNull", "NSObjCRuntime", "NSObject", "NSRange", "NSString", "NSThread", "NSURL", "NSUUID", "NSUndoManager", "NSUserActivity", "NSValue", "objc2-core-foundation", "std"] }
 parking_lot = { version = "0.12", features = ["send_guard"] }
 percent-encoding = { version = "2" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 regex = { version = "1" }
 regex-automata = { version = "0.4", default-features = false, features = ["dfa-build", "dfa-onepass", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "std", "unicode"] }
 rustc-hash = { version = "1" }
@@ -431,6 +455,7 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -439,6 +464,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 jni = { version = "0.22" }
@@ -473,6 +500,7 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -481,6 +509,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 jni = { version = "0.22" }
@@ -513,6 +543,7 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -521,6 +552,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 jni = { version = "0.22" }
@@ -555,6 +588,7 @@ clap_builder = { version = "4", default-features = false, features = ["color", "
 crc32fast = { version = "1" }
 dasp_sample = { version = "0.11" }
 form_urlencoded = { version = "1" }
+futures = { version = "0.3" }
 futures-channel = { version = "0.3" }
 futures-core = { version = "0.3" }
 futures-sink = { version = "0.3" }
@@ -563,6 +597,8 @@ half = { version = "2", features = ["num-traits"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "client-proxy", "http1", "server", "service"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 idna = { version = "1" }
 itertools = { version = "0.13" }
 jni = { version = "0.22" }
@@ -595,10 +631,13 @@ futures-util = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }
 half = { version = "2" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 js-sys = { version = "0.3" }
 libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 parking_lot = { version = "0.12" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 slab = { version = "0.4" }
 tracing-core = { version = "0.1" }
 wasm-bindgen = { version = "0.2" }
@@ -615,10 +654,13 @@ futures-util = { version = "0.3" }
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }
 half = { version = "2" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
+iced_core = { version = "0.14", default-features = false, features = ["advanced", "crisp"] }
+iced_futures = { version = "0.14", default-features = false, features = ["tokio"] }
 js-sys = { version = "0.3" }
 libc = { version = "0.2" }
 log = { version = "0.4", default-features = false, features = ["std"] }
 parking_lot = { version = "0.12" }
+raw-window-handle = { version = "0.6", default-features = false, features = ["std"] }
 slab = { version = "0.4" }
 tracing-core = { version = "0.1" }
 wasm-bindgen = { version = "0.2" }
