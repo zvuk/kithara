@@ -248,7 +248,11 @@ fn slot_key(ty: &Type) -> Result<&Type> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, process::Command};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        process::Command,
+    };
 
     use kithara_test_utils::{TestTempDir, kithara};
     use proc_macro_crate::{Error as ResolverError, FoundCrate};
@@ -379,13 +383,13 @@ pub struct ProbePools {
 }
 ";
 
-    fn manifest(dependencies: &str) -> String {
+    fn manifest(name: &str, dependencies: &str) -> String {
         let derive_path = env!("CARGO_MANIFEST_DIR");
         format!(
-            "[package]\nname = \"owner-probe\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
+            "[package]\nname = {name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
              {dependencies}\n\
              [dependencies.kithara-derive]\npath = {derive_path:?}\n\
-             default-features = false\nfeatures = [\"pool\"]\n\n[workspace]\n"
+             default-features = false\nfeatures = [\"pool\"]\n"
         )
     }
 
@@ -398,8 +402,21 @@ pub struct ProbePools {
             .to_path_buf()
     }
 
+    #[derive(serde::Deserialize)]
+    struct CargoMessage {
+        #[serde(default)]
+        manifest_path: PathBuf,
+        #[serde(default)]
+        message: Option<CargoDiagnostic>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct CargoDiagnostic {
+        rendered: String,
+    }
+
     /// Cargo builds the current derive source, never a cached dylib selected by age.
-    fn compile_probe(name: &str, manifest: &str) -> String {
+    fn assert_compile_failures(probes: &[(&str, &str, &str)]) {
         let temp = TestTempDir::new();
         for package in ["kithara", "kithara-bufpool"] {
             let root = temp.path().join(package);
@@ -411,95 +428,102 @@ pub struct ProbePools {
             .expect("stub package manifest");
             fs::write(root.join("src/lib.rs"), "").expect("stub package source");
         }
-        let dir = temp.path().join(name);
-        fs::create_dir_all(dir.join("src")).expect("probe directory");
-        fs::write(dir.join("Cargo.toml"), manifest).expect("probe manifest");
-        fs::write(dir.join("src/lib.rs"), PROBE_SOURCE).expect("probe source");
+        let members = probes
+            .iter()
+            .map(|(name, ..)| format!("{name:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        fs::write(
+            temp.path().join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers = [{members}]\n\
+                 exclude = [\"kithara\", \"kithara-bufpool\"]\nresolver = \"3\"\n"
+            ),
+        )
+        .expect("probe workspace manifest");
+        for (name, dependencies, _) in probes {
+            let dir = temp.path().join(name);
+            fs::create_dir_all(dir.join("src")).expect("probe directory");
+            fs::write(dir.join("Cargo.toml"), manifest(name, dependencies))
+                .expect("probe manifest");
+            fs::write(dir.join("src/lib.rs"), PROBE_SOURCE).expect("probe source");
+        }
 
         let output = Command::new(env!("CARGO"))
-            .current_dir(&dir)
-            .args(["check", "--offline", "--jobs=1", "--target-dir"])
+            .current_dir(temp.path())
+            .args([
+                "check",
+                "--workspace",
+                "--offline",
+                "--keep-going",
+                "--message-format=json",
+                "--target-dir",
+            ])
             .arg(deps_dir().join("pool-owner-probes"))
             .output()
             .expect("run cargo check");
-        let diagnostics = String::from_utf8_lossy(&output.stderr).into_owned();
-        assert!(!output.status.success(), "probe unexpectedly compiled");
-        diagnostics
+        assert!(!output.status.success(), "probes unexpectedly compiled");
+        let stdout = String::from_utf8(output.stdout).expect("Cargo JSON diagnostics are UTF-8");
+        let messages = stdout
+            .lines()
+            .map(|line| serde_json::from_str::<CargoMessage>(line).expect("Cargo JSON message"))
+            .collect::<Vec<_>>();
+        for (name, _, expected) in probes {
+            let manifest = Path::new(name).join("Cargo.toml");
+            let diagnostics = messages
+                .iter()
+                .filter(|message| message.manifest_path.ends_with(&manifest))
+                .filter_map(|message| {
+                    message
+                        .message
+                        .as_ref()
+                        .map(|diagnostic| diagnostic.rendered.as_str())
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(diagnostics.contains(expected), "{name}: {diagnostics}");
+        }
     }
 
     #[kithara::test(native, timeout(Heavy))]
-    fn a_manifest_with_both_owners_fails_to_compile() {
-        let diagnostics = compile_probe(
-            "both-owners",
-            &manifest(
+    fn pool_owner_manifests_fail_to_compile() {
+        assert_compile_failures(&[
+            (
+                "both-owners",
                 "[dependencies]\n\
                  kithara = { path = \"../kithara\" }\n\
                  kithara-bufpool = { path = \"../kithara-bufpool\" }\n",
+                "needs one pool owner",
             ),
-        );
-        assert!(
-            diagnostics.contains("needs one pool owner"),
-            "{diagnostics}"
-        );
-    }
-
-    #[kithara::test(native, timeout(Heavy))]
-    fn a_feature_off_facade_with_a_direct_pool_dependency_fails_to_compile() {
-        let diagnostics = compile_probe(
-            "feature-off-facade",
-            &manifest(
+            (
+                "feature-off-facade",
                 "[dependencies]\n\
                  kithara = { path = \"../kithara\", default-features = false }\n\
                  kithara-bufpool = { path = \"../kithara-bufpool\" }\n",
+                "needs one pool owner",
             ),
-        );
-        assert!(
-            diagnostics.contains("needs one pool owner"),
-            "{diagnostics}"
-        );
-    }
-
-    #[kithara::test(native, timeout(Heavy))]
-    fn a_dev_only_facade_with_a_direct_pool_dependency_fails_to_compile() {
-        let diagnostics = compile_probe(
-            "dev-only-facade",
-            &manifest(
+            (
+                "dev-only-facade",
                 "[dependencies]\n\
                  kithara-bufpool = { path = \"../kithara-bufpool\" }\n\n\
                  [dev-dependencies]\n\
                  kithara = { path = \"../kithara\" }\n",
+                "needs one pool owner",
             ),
-        );
-        assert!(
-            diagnostics.contains("needs one pool owner"),
-            "{diagnostics}"
-        );
-    }
-
-    #[kithara::test(native, timeout(Heavy))]
-    fn a_target_inactive_facade_with_a_direct_pool_dependency_fails_to_compile() {
-        let diagnostics = compile_probe(
-            "target-inactive-facade",
-            &manifest(
+            (
+                "target-inactive-facade",
                 "[dependencies]\n\
                  kithara-bufpool = { path = \"../kithara-bufpool\" }\n\n\
                  [target.'cfg(windows)'.dependencies]\n\
                  kithara = { path = \"../kithara\" }\n",
+                "needs one pool owner",
             ),
-        );
-        assert!(
-            diagnostics.contains("needs one pool owner"),
-            "{diagnostics}"
-        );
-    }
-
-    #[kithara::test(native, timeout(Heavy))]
-    fn a_manifest_without_a_pool_owner_fails_to_compile() {
-        let diagnostics = compile_probe("no-owner", &manifest(""));
-        assert!(
-            diagnostics.contains("needs the `kithara-bufpool` crate or the `kithara` facade"),
-            "{diagnostics}"
-        );
+            (
+                "no-owner",
+                "",
+                "needs the `kithara-bufpool` crate or the `kithara` facade",
+            ),
+        ]);
     }
 
     #[kithara::test(native)]
