@@ -3379,9 +3379,9 @@ role = "platforms"
 kinds_gitlab = ["branch", "quarantine", "nightly"]
 kinds_github = []
 path_globs = [
-  "tests/wasm-runner/**",
-  "tests/wasm-runner-fixture/**",
-  "xtask/src/wasm/**",
+  "tests/wasm-runner/**/*",
+  "tests/wasm-runner-fixture/**/*",
+  "xtask/src/wasm/**/*",
   ".cargo/config.toml",
 ]
 timeout_minutes = 60

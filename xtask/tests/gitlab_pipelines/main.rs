@@ -6,6 +6,7 @@ use std::{
 
 use serde_yaml_ng::{Mapping, Value};
 
+mod changes;
 mod deps_deny;
 mod throughput;
 

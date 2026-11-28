@@ -98,6 +98,9 @@ dispatch:main:
   variables:
     KITHARA_CACHE_TRUST: trusted
     KITHARA_PIPELINE_KIND: main
+    # The child sees no push, so a job gated on what this merge changed
+    # compares with the tip it replaced.
+    KITHARA_MAIN_BEFORE_SHA: $CI_COMMIT_BEFORE_SHA
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 

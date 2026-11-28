@@ -96,7 +96,11 @@ fn review_mac_jobs_wait_only_for_data() {
             continue;
         }
         checked += 1;
-        for need in needs(&config, job) {
+        // A job a review never creates cannot hold that review back.
+        for need in needs(&config, job)
+            .into_iter()
+            .filter(|need| in_review(&config, needed_job(need)))
+        {
             let downloads = need.get("artifacts").and_then(Value::as_bool) == Some(true);
             assert!(
                 downloads || need == draft_check,

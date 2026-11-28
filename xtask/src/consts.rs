@@ -1107,6 +1107,17 @@ pub(crate) const SERVICE_CLEANUP_UNIT: &str = "kithara-ci-cleanup.service";
 
 pub(crate) const SERVICE_CLEANUP_TIMER: &str = "kithara-ci-cleanup.timer";
 
+pub(crate) const SERVICE_HEALTH_UNIT: &str = "kithara-ci-health.service";
+
+pub(crate) const SERVICE_HEALTH_TIMER: &str = "kithara-ci-health.timer";
+
+/// Outside endpoints every lane reaches: the crate index and the forge.
+pub(crate) const EXTERNAL_ENDPOINTS: [&str; 2] = ["index.crates.io:443", "github.com:443"];
+
+/// How long one TCP connect to an outside endpoint may take before health
+/// reports it unreachable.
+pub(crate) const EXTERNAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub(crate) const SERVICE_RENEWAL_UNIT: &str = "kithara-ci-windows-renewal.service";
 
 pub(crate) const SERVICE_RENEWAL_TIMER: &str = "kithara-ci-windows-renewal.timer";

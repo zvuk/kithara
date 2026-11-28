@@ -17,10 +17,12 @@ host:provision:
     - just ci host provision
 
 # The CI executable control jobs and the periodic agents run is the default
-# branch's. A merge replaces it here, so verdict runs the code that was merged
-# instead of the code of the last provisioning pass. A merge request is judged
-# by the default branch's verdict; its own verdict code is covered by the unit
-# tests, not by a run.
+# branch's. A merge that changes what the executable is built from replaces it
+# here, so verdict runs the code that was merged instead of the code of the last
+# provisioning pass; a merge that does not spends no Mac slot on it. A merge
+# request is judged by the default branch's verdict; its own verdict code is
+# covered by the unit tests, not by a run. The paths are xtask and every
+# workspace crate it builds from.
 host:replace-binary:
   extends: .macos-job
   stage: apple
@@ -29,5 +31,18 @@ host:replace-binary:
   needs: []
   rules:
     - if: $KITHARA_PIPELINE_KIND == "main"
+      changes:
+        paths:
+          - .cargo/**/*
+          - Cargo.lock
+          - Cargo.toml
+          - crates/kithara-config/**/*
+          - crates/kithara-derive/**/*
+          - crates/kithara-devtools/**/*
+          - crates/kithara-devtools-trace-format/**/*
+          - crates/kithara-platform/**/*
+          - crates/kithara-test-args/**/*
+          - xtask/**/*
+        compare_to: $KITHARA_MAIN_BEFORE_SHA
   script:
     - just ci host mac replace-binary
