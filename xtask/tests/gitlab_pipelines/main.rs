@@ -1083,22 +1083,78 @@ fn apple_network_units_upload_their_own_verdict_evidence() {
     );
 }
 
+/// PR #1043 changed `tests/wasm-runner` to fix Safari, and its merge ran no
+/// Safari at all; the nightly after it hung in the runner. A change to what
+/// drives the browser now brings Safari into the review that judges it.
 #[test]
-fn safari_stays_out_of_merge_requests_and_runs_nightly() {
-    let config = GitlabConfig::load(&workspace_root());
-    assert_eq!(
-        config.rules_owner("apple:safari").as_deref(),
-        Some(".rules-nightly")
-    );
+fn a_change_to_the_browser_runner_brings_safari_into_review() {
+    let root = workspace_root();
+    let config = GitlabConfig::load(&root);
+    let lanes = lane_catalog(&root);
+    let globs = lanes["apple-safari"]["path_globs"]
+        .as_array()
+        .expect("Safari names the paths a review runs it for");
     assert!(
-        config
-            .decision_for_kind(".rules-nightly", MERGE_REQUEST_KIND)
-            .is_none()
+        globs.iter().filter_map(toml::Value::as_str).any(|glob| {
+            glob::Pattern::new(glob)
+                .expect("a valid path glob")
+                .matches("tests/wasm-runner/src/driver.rs")
+        }),
+        "a runner change does not schedule Safari"
     );
-    let nightly = config
-        .decision_for_kind(".rules-nightly", "nightly")
-        .expect("Safari runs nightly");
-    assert_automatic_when(nightly.when.as_deref(), "apple:safari");
+    let kinds = config.admitted_kinds_alone("apple:safari");
+    for kind in ["branch", "quarantine", "nightly"] {
+        assert!(kinds.contains(kind), "Safari does not run in {kind}");
+    }
+    assert!(!kinds.contains(MERGE_REQUEST_KIND));
+}
+
+/// A review job gated on changed paths names exactly its lane's
+/// `path_globs`, the paths the lane selection reads as well.
+#[test]
+fn a_path_gated_review_job_names_its_lanes_paths() {
+    let root = workspace_root();
+    let config = GitlabConfig::load(&root);
+    let lanes = lane_catalog(&root);
+    let mut checked = 0;
+    for (job, lane_name) in config.lane_jobs() {
+        let Some(globs) = lanes
+            .get(&lane_name)
+            .and_then(|lane| lane.get("path_globs"))
+            .and_then(toml::Value::as_array)
+        else {
+            continue;
+        };
+        let globs = globs
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<BTreeSet<_>>();
+        let owner = config
+            .rules_owner(&job)
+            .unwrap_or_else(|| panic!("`{job}` has no rules"));
+        let rules = config.definition(&owner)["rules"]
+            .as_sequence()
+            .expect("rules are a sequence");
+        for kind in ["branch", "quarantine"] {
+            let condition = format!("$KITHARA_PIPELINE_KIND == \"{kind}\"");
+            let rule = rules
+                .iter()
+                .filter_map(Value::as_mapping)
+                .find(|rule| rule.get("if").and_then(Value::as_str) == Some(condition.as_str()))
+                .unwrap_or_else(|| panic!("`{job}` has no {kind} rule"));
+            let paths = rule
+                .get("changes")
+                .and_then(|changes| changes.get("paths"))
+                .and_then(Value::as_sequence)
+                .unwrap_or_else(|| panic!("`{job}` runs every {kind} change"))
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(paths, globs, "`{job}` in {kind}");
+        }
+        checked += 1;
+    }
+    assert!(checked >= 2, "no path-gated review job was checked");
 }
 
 // The one deep lane a review may ask for by hand. Offered there, it must never

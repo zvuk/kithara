@@ -224,12 +224,30 @@ apple:swift-test:
       - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/
 
+# A review runs Safari only when the change reaches what drives the browser;
+# the paths are the lane's `path_globs`.
 apple:safari:
   extends:
     - .macos-job
-    - .rules-nightly
   stage: apple
   timeout: 60 minutes
+  interruptible: true
+  rules:
+    - !reference [.repeated-jobs, rules]
+    - if: $KITHARA_PIPELINE_KIND == "nightly"
+      interruptible: false
+    - if: $KITHARA_QUARANTINE_BASE_SHA == null
+      when: never
+    - if: $KITHARA_PIPELINE_KIND == "quarantine"
+      changes: &safari-inputs
+        paths:
+          - tests/wasm-runner/**
+          - tests/wasm-runner-fixture/**
+          - xtask/src/wasm/**
+          - .cargo/config.toml
+        compare_to: $KITHARA_QUARANTINE_BASE_SHA
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+      changes: *safari-inputs
   needs: []
   script:
     - just ci run apple-safari
