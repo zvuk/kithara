@@ -983,34 +983,35 @@ mod tests {
     }
 
     #[kithara::test(native)]
-    fn phase_oracle_uses_a_common_frame_despite_different_retained_markers() {
+    #[case::retained(false)]
+    #[case::shifted(true)]
+    fn phase_oracle_uses_a_common_frame_despite_different_retained_markers(#[case] shifted: bool) {
         let sample_rate = 44_100;
         let complete = pulse_train(sample_rate, 127.0);
         let mut retained = complete.clone();
         retained[..sample_rate as usize / 2].fill(0.0);
-        assert!(
-            synchronization_failures(
-                "retained markers",
-                &[&complete, &retained],
-                1,
-                sample_rate,
-                127.0
-            )
-            .is_empty()
-        );
-        let shifted = [vec![0.0], retained].concat();
-        assert_eq!(
-            synchronization_failures(
-                "shifted markers",
-                &[&complete, &shifted],
-                1,
-                sample_rate,
-                127.0
-            ),
-            [
+        let candidate = if shifted {
+            [vec![0.0], retained].concat()
+        } else {
+            retained
+        };
+        let label = if shifted {
+            "shifted markers"
+        } else {
+            "retained markers"
+        };
+        let expected: &[&str] = if shifted {
+            &[
                 "shifted markers: beat phase spread is 1 frame",
                 "shifted markers: tracks have no common downbeat phase reference",
             ]
+        } else {
+            &[]
+        };
+        assert_eq!(
+            synchronization_failures(label, &[&complete, &candidate], 1, sample_rate, 127.0)
+                .as_slice(),
+            expected
         );
     }
 
