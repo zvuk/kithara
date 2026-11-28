@@ -1,5 +1,6 @@
 mod cache;
 pub(crate) mod command;
+mod control;
 mod runner_guest;
 mod runner_images;
 mod runners;

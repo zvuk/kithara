@@ -241,9 +241,9 @@ apple:safari:
     - if: $KITHARA_PIPELINE_KIND == "quarantine"
       changes: &safari-inputs
         paths:
-          - tests/wasm-runner/**
-          - tests/wasm-runner-fixture/**
-          - xtask/src/wasm/**
+          - tests/wasm-runner/**/*
+          - tests/wasm-runner-fixture/**/*
+          - xtask/src/wasm/**/*
           - .cargo/config.toml
         compare_to: $KITHARA_QUARANTINE_BASE_SHA
     - if: $KITHARA_PIPELINE_KIND == "branch"

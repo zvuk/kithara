@@ -76,7 +76,14 @@ Linux Docker worker setup is in [Linux CI host provisioning](ci-linux-host.md).
 One `glrt-...` project runner token per file, mode `0600`, at
 `~/.config/kithara-ci/runner-<name>.token` for `macos-1`, `macos-2`, `android` and
 `release`, tagged to match each lane's `tags:`; keep the release runner
-protected. `configure-runners` writes native shell executors. Apple and
+protected. `configure-runners` writes native shell executors.
+
+The control registration (`kithara-macos-control`) runs in a separate runner
+process (`control.toml`, `concurrent = 1`) for jobs that build nothing.
+Provisioning issues `runner-macos-control.token` with `GITLAB_TOKEN` (scope
+`create_runner`) only when the file is absent. It and the periodic agents run
+`shared-bin/kithara-ci`, which `host:replace-binary` replaces when a `main`
+merge changes its code. Apple and
 dependency-audit lanes share the host filesystem and cache roots across jobs.
 Linux and browser placement is selected separately; the Mac has no
 Linux runner, Docker image builder or Colima launch agent.
@@ -388,7 +395,8 @@ the loaded service: a missing one looks like nothing from outside, its jobs
 sitting `pending` while the pipeline reads as hung.
 
 `ci host linux health` rejects stopped or failed services, accepting successful
-ephemeral transitions. GitHub registration needs a separate check.
+ephemeral transitions, and a host that cannot reach the crate index or GitHub;
+a timer runs it every two minutes. GitHub registration needs a separate check.
 
 Neither scheduler starts a second pass while one is alive, so a wedged pass
 silences cleanup: one hung for over a day inside `opendir` on a volume that had

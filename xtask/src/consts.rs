@@ -1107,6 +1107,17 @@ pub(crate) const SERVICE_CLEANUP_UNIT: &str = "kithara-ci-cleanup.service";
 
 pub(crate) const SERVICE_CLEANUP_TIMER: &str = "kithara-ci-cleanup.timer";
 
+pub(crate) const SERVICE_HEALTH_UNIT: &str = "kithara-ci-health.service";
+
+pub(crate) const SERVICE_HEALTH_TIMER: &str = "kithara-ci-health.timer";
+
+/// Outside endpoints every lane reaches: the crate index and the forge.
+pub(crate) const EXTERNAL_ENDPOINTS: [&str; 2] = ["index.crates.io:443", "github.com:443"];
+
+/// How long one TCP connect to an outside endpoint may take before health
+/// reports it unreachable.
+pub(crate) const EXTERNAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub(crate) const SERVICE_RENEWAL_UNIT: &str = "kithara-ci-windows-renewal.service";
 
 pub(crate) const SERVICE_RENEWAL_TIMER: &str = "kithara-ci-windows-renewal.timer";
@@ -1118,3 +1129,14 @@ pub(crate) const PROBE_MANIFEST: &str =
 
 /// How far back from a CI bootstrap unit's newest build to keep its other builds.
 pub(crate) const GARBAGE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The token file of the Mac control registration: `runner-<this>.token`.
+pub(crate) const MAC_CONTROL_RUNNER: &str = "macos-control";
+/// The tag control jobs select, and the only one the control registration carries.
+pub(crate) const MAC_CONTROL_TAG: &str = "kithara-macos-control";
+/// The name the Mac control registration is issued and configured under.
+pub(crate) const MAC_CONTROL_DESCRIPTION: &str = "kithara-mac-mini-control";
+/// The `GitLab` token scope that may issue a runner registration.
+pub(crate) const CREATE_RUNNER_SCOPE: &str = "create_runner";
+/// How long one `GitLab` REST call made while provisioning may take.
+pub(crate) const GITLAB_API_TIMEOUT: Duration = Duration::from_secs(60);

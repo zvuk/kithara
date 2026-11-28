@@ -121,14 +121,15 @@ fn inventory_classifies_every_native_entrypoint_and_existing_lane_owner() {
     let catalog = Catalog::load(&root(), &ext.ci).unwrap();
     assert_eq!(ext.ci.lanes.len(), 67);
     assert_eq!(ext.ci.planning.residuals.len(), 8);
-    assert_eq!(catalog.bindings.len(), 121);
-    assert_eq!(catalog.checks.len(), 90);
+    assert_eq!(catalog.bindings.len(), 122);
+    assert_eq!(catalog.checks.len(), 91);
     for id in [
         "network",
         "stress",
         "test-census",
         "windows-diagnostics",
         "host-provision",
+        "host-replace-binary",
         "release-publish",
         "verdict",
     ] {

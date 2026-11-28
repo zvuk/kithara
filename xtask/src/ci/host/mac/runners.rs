@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use tracing::info;
 
-use super::services::launchd;
+use super::{control, services::launchd};
 use crate::{
     ci::{cache::client_environment, config::CiConfig, kache, process::Process},
     consts,
@@ -29,6 +29,13 @@ enum LaunchdServiceState {
 
 impl<'a> RunnerManager<'a> {
     const LEGACY_MACOS_RUNNER_LABEL: &'static str = "com.zvuk.kithara-ci.macos-runner";
+    /// Every CI user agent `activate` (re)loads, by the name in its label.
+    const AGENTS: [&'static str; 4] = [
+        "cleanup",
+        "health",
+        "gitlab-runner",
+        "gitlab-runner-control",
+    ];
 
     /// Cargo workers one admitted job may occupy.
     ///
@@ -59,6 +66,7 @@ impl<'a> RunnerManager<'a> {
         let config_root = home.join(".config/kithara-ci");
         let runner_root = home.join(".gitlab-runner");
         let tokens = Tokens::load(&config_root, self.config.host.job_concurrency)?;
+        let control = read_token(&config_root, consts::MAC_CONTROL_RUNNER)?;
         for path in [
             &config_root,
             &runner_root,
@@ -106,16 +114,18 @@ impl<'a> RunnerManager<'a> {
             &runner_root.join("config.toml"),
             &self.runner_config(&tokens)?,
         )?;
-        self.install_runner_agents(&home)?;
-        self.process.run(
-            path_text(&self.config.host.brew_tool("gitlab-runner"))?,
-            &[
-                "verify",
-                "--config",
-                path_text(&runner_root.join("config.toml"))?,
-            ],
-            "verify GitLab runners",
+        write_secure(
+            &runner_root.join("control.toml"),
+            &self.control_config(&control),
         )?;
+        self.install_runner_agents(&home)?;
+        for config in ["config.toml", "control.toml"] {
+            self.process.run(
+                path_text(&self.config.host.brew_tool("gitlab-runner"))?,
+                &["verify", "--config", path_text(&runner_root.join(config))?],
+                "verify GitLab runners",
+            )?;
+        }
         let uid = self.process.capture("/usr/bin/id", &["-u"], "CI user id")?;
         self.retire_legacy_macos_runner(&format!("gui/{uid}"), Path::new("/bin/launchctl"))?;
         info!("GitLab runner configuration installed");
@@ -191,7 +201,7 @@ impl<'a> RunnerManager<'a> {
                 self.config.host.ci_user
             );
         }
-        for name in ["cleanup", "health", "gitlab-runner"] {
+        for name in Self::AGENTS {
             let label = format!("com.zvuk.kithara-ci.{name}");
             let plist = self.agent_root().join(format!("{label}.plist"));
             if !plist.is_file() {
@@ -324,6 +334,42 @@ impl<'a> RunnerManager<'a> {
         ))
     }
 
+    /// The control registration takes one job at a time, in a runner process
+    /// of its own so the build registrations' `concurrent` never holds it. It
+    /// carries no compiler cache and no host preflight: a control job compiles
+    /// nothing and claims no room, and runs the host's installed CI executable
+    /// rather than building one.
+    fn control_config(&self, token: &str) -> String {
+        let root = self.config.host.host_root.display();
+        let builds = self.config.host.build_root().display();
+        let url = self.config.host.gitlab_origin();
+        let lane_config = consts::MAC_CONFIG_PATH;
+        let cargo_home = consts::CARGO_HOME_DIR;
+        let name = consts::MAC_CONTROL_DESCRIPTION;
+        format!(
+            "concurrent = 1\ncheck_interval = 3\nshutdown_timeout = 30\n\n\
+             [[runners]]\n  name = \"{name}\"\n  url = \"{url}\"\n  token = \"{token}\"\n  limit = 1\n  executor = \"shell\"\n  shell = \"bash\"\n  builds_dir = \"{builds}/workspaces/gitlab\"\n  output_limit = 16384\n  environment = [\"CARGO_HOME={builds}/{cargo_home}\", \"KITHARA_CI_CACHE_ROOT={root}/cache\", \"KITHARA_CI_HOST_CONFIG={lane_config}\", \"KITHARA_CI_PINS={root}/services/pins.toml\", \"KITHARA_CI_HOST_BINARY={root}/toolchains/shared-bin/kithara-ci\"]\n"
+        )
+    }
+
+    /// Issues the control registration when it has no token yet, before
+    /// provisioning changes anything else on the host.
+    pub(super) fn enrol_control(&self) -> Result<()> {
+        require_macos()?;
+        self.require_ci_user()?;
+        let api = format!("{}/api/v4", self.config.host.gitlab_origin());
+        let project = std::env::var("CI_PROJECT_ID").ok();
+        let token = std::env::var("GITLAB_TOKEN").ok();
+        control::enrol(
+            &self.ci_home().join(".config/kithara-ci"),
+            &control::Gitlab {
+                api: &api,
+                project: project.as_deref(),
+                token: token.as_deref(),
+            },
+        )
+    }
+
     fn install_runner_agents(&self, home: &Path) -> Result<()> {
         let logs = self.config.host.host_root.join("logs");
         let gitlab_runner = self
@@ -333,34 +379,42 @@ impl<'a> RunnerManager<'a> {
             .display()
             .to_string();
         let agent_path = self.config.host.agent_path(home);
-        let agents = [(
-            "gitlab-runner",
-            launchd(
-                "com.zvuk.kithara-ci.gitlab-runner",
-                &[
-                    &gitlab_runner,
-                    "run",
-                    "--config",
-                    &home
-                        .join(".gitlab-runner/config.toml")
-                        .display()
-                        .to_string(),
-                    "--working-directory",
-                    &self
-                        .config
-                        .host
-                        .build_root()
-                        .join("workspaces/gitlab")
-                        .display()
-                        .to_string(),
-                ],
-                &logs.join("gitlab-runner.log"),
-                &agent_path,
-                "<key>KeepAlive</key><true/><key>ProcessType</key><string>Interactive</string>\
-                     <key>SoftResourceLimits</key><dict>\
-                     <key>NumberOfFiles</key><integer>65536</integer></dict>",
-            ),
-        )];
+        let working_directory = self
+            .config
+            .host
+            .build_root()
+            .join("workspaces/gitlab")
+            .display()
+            .to_string();
+        let agents = [
+            ("gitlab-runner", "config.toml"),
+            ("gitlab-runner-control", "control.toml"),
+        ]
+        .map(|(name, config)| {
+            (
+                name,
+                launchd(
+                    &format!("com.zvuk.kithara-ci.{name}"),
+                    &[
+                        &gitlab_runner,
+                        "run",
+                        "--config",
+                        &home
+                            .join(".gitlab-runner")
+                            .join(config)
+                            .display()
+                            .to_string(),
+                        "--working-directory",
+                        &working_directory,
+                    ],
+                    &logs.join(format!("{name}.log")),
+                    &agent_path,
+                    "<key>KeepAlive</key><true/><key>ProcessType</key><string>Interactive</string>\
+                         <key>SoftResourceLimits</key><dict>\
+                         <key>NumberOfFiles</key><integer>65536</integer></dict>",
+                ),
+            )
+        });
         fs::create_dir_all(self.agent_root())?;
         for (name, contents) in agents {
             let path = self
@@ -471,7 +525,7 @@ impl Tokens {
     }
 }
 
-fn read_token(root: &Path, name: &str) -> Result<String> {
+pub(super) fn read_token(root: &Path, name: &str) -> Result<String> {
     let path = root.join(format!("runner-{name}.token"));
     let token = read_secret(&path)?;
     if !token.starts_with("glrt-") || token.chars().any(char::is_whitespace) {
@@ -879,6 +933,99 @@ mod tests {
             .to_string();
         assert!(runner.contains(&selected));
         assert!(!runner.contains(&stale));
+    }
+
+    /// Provisioning loads every agent it installs: a runner process whose agent
+    /// is written but never loaded serves nothing, and its jobs sit `pending`.
+    /// The control registration runs in its own process, so the build
+    /// registrations' `concurrent` never holds a control job.
+    #[test]
+    fn provisioning_loads_a_control_runner_of_its_own() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut config = fixture();
+        config.host.host_root = directory.path().join("ci");
+        let process = Process::new(directory.path(), BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+
+        manager
+            .install_runner_agents(&manager.ci_home())
+            .expect("render runner agents");
+
+        let installed: BTreeSet<String> = fs::read_dir(manager.agent_root())
+            .expect("read launch agents")
+            .map(|entry| {
+                let name = entry.expect("launch agent entry").file_name();
+                name.to_string_lossy()
+                    .trim_start_matches("com.zvuk.kithara-ci.")
+                    .trim_end_matches(".plist")
+                    .to_owned()
+            })
+            .collect();
+        for agent in &installed {
+            assert!(
+                RunnerManager::AGENTS.contains(&agent.as_str()),
+                "`{agent}` is installed but provisioning never loads it"
+            );
+        }
+        let runner_root = manager.ci_home().join(".gitlab-runner");
+        for (agent, config) in [
+            ("gitlab-runner", "config.toml"),
+            ("gitlab-runner-control", "control.toml"),
+        ] {
+            assert!(installed.contains(agent), "`{agent}` is not installed");
+            let plist = fs::read_to_string(
+                manager
+                    .agent_root()
+                    .join(format!("com.zvuk.kithara-ci.{agent}.plist")),
+            )
+            .expect("read runner agent");
+            assert!(
+                plist.contains(&runner_root.join(config).display().to_string()),
+                "`{agent}` does not run {config}"
+            );
+        }
+    }
+
+    /// A control job takes no build slot and builds nothing: one job at a
+    /// time, under a limit of its own, with no compiler cache, no Cargo job
+    /// budget and no host preflight, and with the host's installed CI
+    /// executable to run.
+    #[test]
+    fn the_control_runner_takes_one_job_and_compiles_nothing() {
+        let root = crate::testing::workspace::root();
+        let config = fixture();
+        let process = Process::new(&root, BTreeMap::new());
+        let manager = RunnerManager::new(&config, &process);
+
+        let rendered: toml::Value =
+            toml::from_str(&manager.control_config("glrt-control")).expect("valid TOML");
+
+        assert_eq!(rendered["concurrent"].as_integer(), Some(1));
+        let runners = rendered["runners"].as_array().expect("runners");
+        assert_eq!(runners.len(), 1, "one control registration");
+        let runner = &runners[0];
+        assert_eq!(runner["token"].as_str(), Some("glrt-control"));
+        assert_eq!(runner["limit"].as_integer(), Some(1));
+        assert_eq!(runner["executor"].as_str(), Some("shell"));
+        assert!(runner.get("pre_get_sources_script").is_none());
+        let environment: Vec<&str> = runner["environment"]
+            .as_array()
+            .expect("environment")
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        for compiler in ["SCCACHE_", "KACHE_", "CARGO_BUILD_JOBS="] {
+            assert!(
+                !environment.iter().any(|entry| entry.starts_with(compiler)),
+                "the control runner configures {compiler}: {environment:?}"
+            );
+        }
+        assert!(
+            environment
+                .iter()
+                .any(|entry| entry.starts_with("KITHARA_CI_HOST_BINARY=")),
+            "{environment:?}"
+        );
     }
 
     /// Every token gets a runner, and macOS runs on the host. A tag with no

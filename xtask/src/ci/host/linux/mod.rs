@@ -8,6 +8,7 @@ mod firewall;
 mod gitlab;
 mod permissions;
 mod profile;
+mod reach;
 mod registration;
 mod services;
 mod system;

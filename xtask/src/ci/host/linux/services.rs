@@ -66,6 +66,7 @@ pub(super) fn install(
         );
     }
     install_cleanup_timer(host, &keep, &deployment)?;
+    install_health_timer(&deployment)?;
     if host.windows.is_some() {
         install_renewal_timer(root, &deployment)?;
     }
@@ -91,6 +92,11 @@ pub(super) fn install(
         "systemctl",
         &["enable", "--now", consts::SERVICE_CLEANUP_TIMER],
         "enable the cleanup timer",
+    )?;
+    process.run(
+        "systemctl",
+        &["enable", "--now", consts::SERVICE_HEALTH_TIMER],
+        "enable the health timer",
     )?;
     if host.windows.is_some() {
         process.run(
@@ -273,6 +279,33 @@ fn cleanup_timer() -> &'static str {
      WantedBy=timers.target\n"
 }
 
+/// Health on a timer, so its journal carries when a service stopped or the
+/// machine lost the outside world, not only what an operator asked for.
+fn health_unit(deployment: &Deployment) -> String {
+    format!(
+        "[Unit]\n\
+         Description=Kithara CI health\n\n\
+         [Service]\n\
+         Type=oneshot\n\
+         TimeoutStartSec=120\n\
+         ExecStart={executable} ci host linux --config {config} --pins {pins} health\n",
+        executable = deployment.binary.display(),
+        config = deployment.profile.display(),
+        pins = deployment.pins.display(),
+    )
+}
+
+/// Often enough that an outage of a few minutes lands between two passes.
+fn health_timer() -> &'static str {
+    "[Unit]\n\
+     Description=Kithara CI health\n\n\
+     [Timer]\n\
+     OnCalendar=*-*-* *:00/2:00\n\
+     Persistent=true\n\n\
+     [Install]\n\
+     WantedBy=timers.target\n"
+}
+
 /// The guest is built from the answers, the provisioning script and the pins
 /// the repository tracks, so the unit runs in the checkout it was installed
 /// from. The command itself decides whether the guest needs rebuilding; the
@@ -380,6 +413,19 @@ fn install_cleanup_timer(host: &LinuxHost, keep: &[String], deployment: &Deploym
         let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(name);
         std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
         info!(unit = name, "cleanup unit installed");
+    }
+    Ok(())
+}
+
+fn install_health_timer(deployment: &Deployment) -> Result<()> {
+    let service = health_unit(deployment);
+    for (name, body) in [
+        (consts::SERVICE_HEALTH_UNIT, service.as_str()),
+        (consts::SERVICE_HEALTH_TIMER, health_timer()),
+    ] {
+        let path = PathBuf::from(consts::SERVICE_SYSTEMD_ROOT).join(name);
+        std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        info!(unit = name, "health unit installed");
     }
     Ok(())
 }
@@ -502,7 +548,8 @@ pub(super) fn env_file(runner: &LinuxRunner) -> String {
 
 /// Report local runner services and reject stopped or failed lifecycles.
 /// Successful ephemeral transitions remain healthy between jobs. Service
-/// health alone does not establish GitHub registration readiness.
+/// health alone does not establish GitHub registration readiness. A machine
+/// that cannot reach the crate index or the forge is not healthy either.
 pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
     process.require_tools(&["systemctl"])?;
     let mut unavailable = Vec::new();
@@ -554,11 +601,12 @@ pub(super) fn health(process: &Process, host: &LinuxHost) -> Result<()> {
             unavailable.push(format!("{} ({state}, {result})", manager.service));
         }
     }
+    unavailable.extend(super::reach::unreachable(
+        &consts::EXTERNAL_ENDPOINTS,
+        consts::EXTERNAL_CONNECT_TIMEOUT,
+    ));
     if !unavailable.is_empty() {
-        bail!(
-            "CI runner services are unavailable: {}",
-            unavailable.join(", ")
-        );
+        bail!("CI runner is unavailable: {}", unavailable.join(", "));
     }
     Ok(())
 }
@@ -760,6 +808,29 @@ mod tests {
             !cleanup_timer().contains("OnCalendar=daily"),
             "{}",
             cleanup_timer()
+        );
+    }
+
+    /// Health runs on its own every two minutes against the deployed binary
+    /// and profile, bounded so a hung probe cannot pile up passes.
+    #[test]
+    fn health_records_itself_often_enough_to_date_a_short_outage() {
+        let deployment = deployment_fixture();
+        let unit = health_unit(&deployment);
+        assert!(
+            unit.contains(&format!(
+                "ExecStart={} ci host linux --config {} --pins {} health\n",
+                deployment.binary.display(),
+                deployment.profile.display(),
+                deployment.pins.display(),
+            )),
+            "{unit}"
+        );
+        assert!(unit.contains("TimeoutStartSec=120\n"), "{unit}");
+        assert!(
+            health_timer().contains("OnCalendar=*-*-* *:00/2:00\n"),
+            "{}",
+            health_timer()
         );
     }
 

@@ -6,6 +6,7 @@ use std::{
 
 use serde_yaml_ng::{Mapping, Value};
 
+mod changes;
 mod deps_deny;
 mod throughput;
 
@@ -21,6 +22,8 @@ const MERGE_REQUEST_KIND: &str = "merge-request";
 const JUST_LANE: &str = "just ci run ";
 /// How the Windows guest, which carries no `just`, runs one.
 const CARGO_LANE: &str = "cargo run --locked -p xtask -- ci run ";
+/// The tags of the Mac registrations that build.
+const MAC_BUILD_TAGS: [&str; 3] = ["kithara-macos", "kithara-macos-1", "kithara-macos-2"];
 /// How a Linux pool job runs one: the command GitHub's `lane.yml` runs.
 const POOL_LANE: &str = "just ci lane ";
 /// The tag every Linux pool worker registers under.
@@ -924,6 +927,76 @@ fn macos_review_jobs_can_use_either_native_registration() {
             );
         }
     }
+}
+
+/// The tags a job takes, following `extends`.
+fn job_tags(config: &GitlabConfig, job: &str) -> Vec<String> {
+    config
+        .effective_value(job, "tags")
+        .and_then(|tags| tags.as_sequence().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The host's executable is what its periodic agents and the control
+/// registration run, so only reviewed default-branch code replaces it, and it
+/// is built on a build registration.
+#[test]
+fn only_a_merge_replaces_the_host_executable_and_a_build_slot_builds_it() {
+    let config = GitlabConfig::load(&workspace_root());
+    let job = "host:replace-binary";
+    assert_eq!(
+        config.admitted_kinds(job),
+        BTreeSet::from(["main".to_owned()]),
+        "only reviewed default-branch code replaces the host's executable"
+    );
+    let tags = job_tags(&config, job);
+    assert!(
+        tags.iter()
+            .all(|tag| MAC_BUILD_TAGS.contains(&tag.as_str())),
+        "`{job}` builds the executable, so it takes a build registration: {tags:?}"
+    );
+    let script = config
+        .effective_value(job, "script")
+        .and_then(|lines| lines.as_sequence().cloned())
+        .unwrap_or_default();
+    assert_eq!(
+        script.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
+        ["just ci host mac replace-binary"]
+    );
+}
+
+/// A Mac build slot is spent only on work the lane catalog places on macOS.
+#[test]
+fn mac_build_registrations_run_only_lanes_the_catalog_places_on_macos() {
+    let config = GitlabConfig::load(&workspace_root());
+    let lanes = lane_catalog(&workspace_root());
+    let mut checked = 0;
+    for (job, lane) in config.lane_jobs() {
+        if !job_tags(&config, &job)
+            .iter()
+            .any(|tag| MAC_BUILD_TAGS.contains(&tag.as_str()))
+        {
+            continue;
+        }
+        let Some(declared) = lanes.get(&lane) else {
+            continue;
+        };
+        let os = match declared.get("os") {
+            Some(toml::Value::String(os)) => vec![os.as_str()],
+            Some(toml::Value::Array(os)) => os.iter().filter_map(toml::Value::as_str).collect(),
+            _ => panic!("ext.ci.lanes.{lane} declares no os"),
+        };
+        assert!(
+            os.contains(&"macos"),
+            "`{job}` spends a Mac build slot on `{lane}`, which runs on {os:?}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "no Mac build job runs a catalog lane");
 }
 
 #[test]

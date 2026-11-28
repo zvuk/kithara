@@ -15,3 +15,32 @@ host:provision:
     - if: $KITHARA_PIPELINE_KIND == "provision"
   script:
     - just ci host provision
+
+# The CI executable the control registration and the periodic agents run is
+# the default branch's. A merge that changes what the executable is built from
+# replaces it here, so the host runs the code that was merged instead of the
+# code of the last provisioning pass; a merge that does not spends no Mac slot
+# on it. The paths are xtask and every workspace crate it builds from.
+host:replace-binary:
+  extends: .macos-job
+  stage: apple
+  timeout: 30 minutes
+  interruptible: false
+  needs: []
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "main"
+      changes:
+        paths:
+          - .cargo/**/*
+          - Cargo.lock
+          - Cargo.toml
+          - crates/kithara-config/**/*
+          - crates/kithara-derive/**/*
+          - crates/kithara-devtools/**/*
+          - crates/kithara-devtools-trace-format/**/*
+          - crates/kithara-platform/**/*
+          - crates/kithara-test-args/**/*
+          - xtask/**/*
+        compare_to: $KITHARA_MAIN_BEFORE_SHA
+  script:
+    - just ci host mac replace-binary
