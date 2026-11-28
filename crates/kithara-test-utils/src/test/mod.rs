@@ -12,7 +12,7 @@ mod wall;
 
 #[cfg(target_arch = "wasm32")]
 pub use browser_output::OutputStartupProbe;
-pub use budget::TestBudget;
+pub use budget::{TestBudget, timeout_for_clock};
 pub use clock_measurement::ClockMeasurement;
 #[cfg(all(target_os = "linux", not(miri)))]
 pub use resident::make_binary_resident;

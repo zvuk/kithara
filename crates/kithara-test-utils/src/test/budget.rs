@@ -37,9 +37,19 @@ impl TestBudget {
     }
 }
 
+/// Select the named allowance for the test's requested and compiled clock mode.
+#[must_use]
+pub const fn timeout_for_clock(real: Duration, flash: Duration, requested: bool) -> Duration {
+    if requested && cfg!(feature = "flash") {
+        flash
+    } else {
+        real
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Duration, TestBudget};
+    use super::{Duration, TestBudget, timeout_for_clock};
     use crate::kithara;
 
     #[kithara::test]
@@ -64,5 +74,16 @@ mod tests {
             assert_eq!(budget.timeout(), Duration::from_secs(expected));
         }
         assert_eq!(TestBudget::default(), TestBudget::Quick);
+    }
+
+    #[kithara::test]
+    fn clock_timeout_requires_requested_and_compiled_flash() {
+        let real = TestBudget::Heavy.timeout();
+        let flash = TestBudget::Quick.timeout();
+        assert_eq!(
+            timeout_for_clock(real, flash, true),
+            if cfg!(feature = "flash") { flash } else { real }
+        );
+        assert_eq!(timeout_for_clock(real, flash, false), real);
     }
 }

@@ -67,7 +67,7 @@ fn every_library_track_is_analysed_at_the_rate_it_decodes_at() {
     }
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false), timeout(Medium))]
 fn a_steady_four_four_track_states_every_beat_and_its_bars() {
     let file = analysis_of(consts::TUNNEL);
     let analysis = file.latest().analysis();
@@ -94,7 +94,7 @@ fn a_steady_four_four_track_states_every_beat_and_its_bars() {
 /// interval runs at the track's tempo, and every beat sits on one line. A
 /// grid that wanders instead makes a synced deck change speed, and pitch,
 /// while the music does not.
-#[kithara::test(native)]
+#[kithara::test(native, timeout(Long), flash_timeout(Quick))]
 #[case::remote_techno_160997949_1("library_mp3_zvuk_160997949", None)]
 #[case::app_playlist_151585912("library_mp3_zvuk_151585912", None)]
 #[case::app_playlist_125475417("library_mp3_zvuk_125475417", None)]

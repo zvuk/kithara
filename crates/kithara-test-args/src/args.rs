@@ -31,6 +31,8 @@ pub struct TestArgs {
     hang_timeout_secs: Option<u64>,
     #[field(get(option_borrow_inner = false))]
     timeout: Option<Ident>,
+    #[field(get(option_borrow_inner = false))]
+    flash_timeout: Option<Ident>,
     tracing_filter: Option<String>,
     soft_fail_patterns: Vec<String>,
 }
@@ -165,6 +167,11 @@ impl Parse for TestArgs {
                     let content;
                     syn::parenthesized!(content in input);
                     args.set_timeout(Some(Self::parse_timeout(&content)?));
+                }
+                "flash_timeout" => {
+                    let content;
+                    syn::parenthesized!(content in input);
+                    args.set_flash_timeout(Some(Self::parse_timeout(&content)?));
                 }
                 "flash" => {
                     let content;

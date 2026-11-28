@@ -62,7 +62,7 @@ Derive macros:
 
 A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
 (e.g. `#[kithara::test(native, tokio, timeout(Medium))]`). Flags
-include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
+include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`, `flash_timeout(...)`,
 `hang_timeout_secs(N)`,
 `tracing(...)`, `soft_fail(...)`, `serial`, `multi_thread`, `selenium`, and
 `loom`, and `flash(true|false)`. `loom` is a synchronous, unit-returning,
@@ -76,7 +76,10 @@ until test teardown. See [crate contracts](https://github.com/zvuk/kithara/wiki/
 Flash/Loom debugging rules.
 
 `timeout(...)` accepts only `Quick`, `Short`, `Medium`, `Long`, `Heavy`, or
-`Network`. Duration expressions are rejected.
+`Network`. Duration expressions are rejected. `flash_timeout(...)` accepts the
+same tiers and overrides the allowance when Flash is requested and compiled;
+`timeout(...)` remains the real-clock allowance. Without the override both modes
+use the same tier.
 
 ### `#[kithara::probe(...)]` arguments
 
