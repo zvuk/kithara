@@ -8,6 +8,17 @@ pub(crate) use xtask::ci::cache_report::INPUT_LIMIT as CACHE_EVIDENCE_INPUT_LIMI
 pub(crate) const INPUT_BYTES: usize = 32 * 1024 * 1024;
 
 pub(crate) const DRAFT_FLAG: &str = "--draft";
+pub(crate) const REST_OF_DRAFT_FLAG: &str = "--rest-of-draft";
+
+/// Set on a ready verification that follows its draft's passed run of the
+/// same merge: it runs only what that draft left.
+pub(crate) const QUARANTINE_REUSED_ENV: &str = "KITHARA_QUARANTINE_REUSED";
+/// Set on a verification that repeats the jobs a rejected run of the same
+/// head failed: a GitLab regular expression naming them.
+pub(crate) const QUARANTINE_JOBS_ENV: &str = "KITHARA_QUARANTINE_JOBS";
+/// The GitLab job that judges the lanes reporting to it, which fail without
+/// gating on their own.
+pub(crate) const VERDICT_JOB: &str = "verdict";
 
 pub(crate) const WINDOWS_DIAGNOSTIC_REPORTS: usize = 64;
 pub(crate) const WINDOWS_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -288,6 +299,13 @@ pub(crate) const CONTROL_PATHS: &[&str] = &[
     "justfile",
     "xtask/",
 ];
+
+/// Files outside every workspace member that every member builds with. A
+/// change to one reaches every member, whichever side of a merge made it.
+pub(crate) const WORKSPACE_INPUTS: &[&str] = &["Cargo.toml", "Cargo.lock", ".cargo/"];
+
+/// The file name of a package manifest.
+pub(crate) const CARGO_MANIFEST: &str = "Cargo.toml";
 
 #[cfg(test)]
 pub(crate) const CURRENT_BASE: &str = "04fcb5a0a1978c3d1f0e2b3a4c5d6e7f80910111";
@@ -839,6 +857,10 @@ pub(crate) const PIPELINE_KINDS: [&str; 9] = [
     "weekly",
     "release",
 ];
+
+/// The kinds that verify a change under review. Each provider owns a lane's
+/// run of one of them alone, so one change is never verified twice.
+pub(crate) const REVIEW_KINDS: [&str; 3] = ["branch", "merge-request", "quarantine"];
 
 pub(crate) const LANE_ROLES: [&str; 6] =
     ["gate", "platforms", "deep", "mutants", "quality", "release"];
