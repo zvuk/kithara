@@ -20,6 +20,15 @@ const MERGE_REQUEST_KIND: &str = "merge-request";
 const JUST_LANE: &str = "just ci run ";
 /// How the Windows guest, which carries no `just`, runs one.
 const CARGO_LANE: &str = "cargo run --locked -p xtask -- ci run ";
+/// How a control job, which builds nothing, runs one: through the CI
+/// executable the host installed when it was provisioned.
+const HOST_LANE: &str = "\"$KITHARA_CI_HOST_BINARY\" ci run ";
+/// The tag of the registration control jobs run on.
+const CONTROL_TAG: &str = "kithara-macos-control";
+/// The jobs that may take the control registration.
+const CONTROL_JOBS: [&str; 1] = ["verdict"];
+/// The tags of the Mac registrations that build.
+const MAC_BUILD_TAGS: [&str; 3] = ["kithara-macos", "kithara-macos-1", "kithara-macos-2"];
 /// How a Linux pool job runs one: the command GitHub's `lane.yml` runs.
 const POOL_LANE: &str = "just ci lane ";
 /// The tag every Linux pool worker registers under.
@@ -59,11 +68,12 @@ impl GitlabConfig {
     }
 
     /// Every job that runs a declared lane, as (job name, lane name). The
-    /// Windows host carries no `just`, so it reaches xtask through cargo, and
-    /// the Linux pool runs the command GitHub runs; every spelling names the
-    /// same lane, and the lane name is the first word after the subcommand.
+    /// Windows host carries no `just`, so it reaches xtask through cargo, the
+    /// Linux pool runs the command GitHub runs, and a control job runs the
+    /// host's installed executable; every spelling names the same lane, and
+    /// the lane name is the first word after the subcommand.
     fn lane_jobs(&self) -> Vec<(String, String)> {
-        const INVOCATIONS: [&str; 3] = [JUST_LANE, CARGO_LANE, POOL_LANE];
+        const INVOCATIONS: [&str; 4] = [JUST_LANE, CARGO_LANE, POOL_LANE, HOST_LANE];
 
         let mut jobs = Vec::new();
         for document in &self.documents {
@@ -909,7 +919,6 @@ fn macos_review_jobs_can_use_either_native_registration() {
         "apple:net-units",
         "apple:test",
         "apple:xcframework",
-        "verdict",
     ] {
         let tags = config.effective_value(job, "tags").expect("job has tags");
         let tags = tags.as_sequence().expect("job tags are a sequence");
@@ -922,6 +931,107 @@ fn macos_review_jobs_can_use_either_native_registration() {
             );
         }
     }
+}
+
+/// The tags a job takes, following `extends`.
+fn job_tags(config: &GitlabConfig, job: &str) -> Vec<String> {
+    config
+        .effective_value(job, "tags")
+        .and_then(|tags| tags.as_sequence().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The control registration runs one job at a time beside the build
+/// registrations, so nothing heavier than reading the journal and calling an
+/// API may reach it: only the named control jobs, never a build tag beside the
+/// control one, and no command that compiles.
+#[test]
+fn control_jobs_alone_take_the_control_registration_and_build_nothing() {
+    let config = GitlabConfig::load(&workspace_root());
+    let control: BTreeSet<&str> = config
+        .job_names()
+        .filter(|job| !job.starts_with('.'))
+        .filter(|job| !["default", "include", "stages", "variables", "workflow"].contains(job))
+        .filter(|job| job_tags(&config, job).iter().any(|tag| tag == CONTROL_TAG))
+        .collect();
+    assert_eq!(
+        control,
+        CONTROL_JOBS.into_iter().collect(),
+        "only the named control jobs take {CONTROL_TAG}"
+    );
+    for job in CONTROL_JOBS {
+        assert_eq!(
+            job_tags(&config, job),
+            [CONTROL_TAG],
+            "`{job}` must take the control registration alone, never a build one"
+        );
+        let mut lines = 0;
+        for key in ["before_script", "script", "after_script"] {
+            for line in config
+                .effective_value(job, key)
+                .and_then(|lines| lines.as_sequence().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(Value::as_str)
+            {
+                lines += 1;
+                let line = line.trim();
+                assert!(
+                    line.starts_with(HOST_LANE),
+                    "`{job}` runs `{line}` instead of the host's installed executable"
+                );
+                for builder in ["just ", "cargo "] {
+                    assert!(!line.contains(builder), "`{job}` builds through `{line}`");
+                }
+            }
+        }
+        assert!(lines > 0, "`{job}` runs nothing");
+        let variables = config.variables(job);
+        for compiler in [
+            "CARGO_TARGET_DIR",
+            "KITHARA_XTASK_TARGET",
+            "SCCACHE_SERVER_UDS",
+        ] {
+            assert!(
+                !variables.contains_key(compiler),
+                "`{job}` names {compiler}, a build input the control registration has no use for"
+            );
+        }
+    }
+}
+
+/// A Mac build slot is spent only on work the lane catalog places on macOS.
+#[test]
+fn mac_build_registrations_run_only_lanes_the_catalog_places_on_macos() {
+    let config = GitlabConfig::load(&workspace_root());
+    let lanes = lane_catalog(&workspace_root());
+    let mut checked = 0;
+    for (job, lane) in config.lane_jobs() {
+        if !job_tags(&config, &job)
+            .iter()
+            .any(|tag| MAC_BUILD_TAGS.contains(&tag.as_str()))
+        {
+            continue;
+        }
+        let Some(declared) = lanes.get(&lane) else {
+            continue;
+        };
+        let os = match declared.get("os") {
+            Some(toml::Value::String(os)) => vec![os.as_str()],
+            Some(toml::Value::Array(os)) => os.iter().filter_map(toml::Value::as_str).collect(),
+            _ => panic!("ext.ci.lanes.{lane} declares no os"),
+        };
+        assert!(
+            os.contains(&"macos"),
+            "`{job}` spends a Mac build slot on `{lane}`, which runs on {os:?}"
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "no Mac build job runs a catalog lane");
 }
 
 #[test]

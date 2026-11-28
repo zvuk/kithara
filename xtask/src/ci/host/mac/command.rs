@@ -74,9 +74,10 @@ enum MacCommand {
 ///
 /// Every step is one this host already owns and every one of them is
 /// idempotent: runner configuration is rewritten from the same profile and
-/// agents are loaded from the installed definitions.
+/// agents are loaded from the installed definitions. The control registration
+/// is issued first, so a token that may not issue it stops the pass before
+/// anything on the host has changed.
 pub(in crate::ci::host) fn provision(provision: &Provision<'_>) -> Result<()> {
-    provision.as_root("mac", "install-services")?;
     let config = CiConfig::load(provision.config, provision.pins)?;
     config.validate_macos_layout()?;
     let mut vars = BTreeMap::new();
@@ -86,6 +87,8 @@ pub(in crate::ci::host) fn provision(provision: &Provision<'_>) -> Result<()> {
     );
     let process = Process::new(&std::env::current_dir()?, vars);
     let runners = RunnerManager::new(&config, &process);
+    runners.enrol_control()?;
+    provision.as_root("mac", "install-services")?;
     runners.configure()?;
     runners.activate()?;
     info!(platform = "mac", "host provisioned from this commit");

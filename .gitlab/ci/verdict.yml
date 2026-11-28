@@ -3,14 +3,14 @@
 # but nothing may be red here that the default branch has not already been
 # failing.
 #
-# It runs on macOS because the journal has to outlive the job that writes it and
-# that lane is the host itself, so its cache directory is the host's. It used to
-# run on Linux for that reason, back when a macOS job meant a throwaway guest —
-# and the Linux guest is no longer up between nightly runs. It carries no
-# platform rule for the same reason a lint gate carries none.
+# It runs on the Mac host because the journal has to outlive the job that
+# writes it, so it lives in the host's cache directory. It takes the control
+# registration rather than a build slot, which it used to wait minutes for
+# behind builds it does not need. It carries no platform rule for the same
+# reason a lint gate carries none.
 verdict:
   extends:
-    - .macos-job
+    - .macos-control-job
     - .rules-verify-and-branch
   stage: verdict
   interruptible: true
@@ -39,7 +39,7 @@ verdict:
   # after a failure rather than instead of one.
   when: always
   script:
-    - just ci run verdict
+    - '"$KITHARA_CI_HOST_BINARY" ci run verdict'
   artifacts:
     when: always
     paths:

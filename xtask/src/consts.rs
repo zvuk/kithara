@@ -1096,3 +1096,14 @@ pub(crate) const PROBE_MANIFEST: &str =
 
 /// How far back from a CI bootstrap unit's newest build to keep its other builds.
 pub(crate) const GARBAGE_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The token file of the Mac control registration: `runner-<this>.token`.
+pub(crate) const MAC_CONTROL_RUNNER: &str = "macos-control";
+/// The tag control jobs select, and the only one the control registration carries.
+pub(crate) const MAC_CONTROL_TAG: &str = "kithara-macos-control";
+/// The name the Mac control registration is issued and configured under.
+pub(crate) const MAC_CONTROL_DESCRIPTION: &str = "kithara-mac-mini-control";
+/// The `GitLab` token scope that may issue a runner registration.
+pub(crate) const CREATE_RUNNER_SCOPE: &str = "create_runner";
+/// How long one `GitLab` REST call made while provisioning may take.
+pub(crate) const GITLAB_API_TIMEOUT: Duration = Duration::from_secs(60);

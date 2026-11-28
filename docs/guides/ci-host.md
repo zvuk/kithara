@@ -76,7 +76,11 @@ Linux Docker worker setup is in [Linux CI host provisioning](ci-linux-host.md).
 One `glrt-...` project runner token per file, mode `0600`, at
 `~/.config/kithara-ci/runner-<name>.token` for `macos-1`, `macos-2`, `android` and
 `release`, tagged to match each lane's `tags:`; keep the release runner
-protected. `configure-runners` writes native shell executors. Apple and
+protected. `configure-runners` writes native shell executors.
+
+Control jobs (`kithara-macos-control`) run in a separate runner process
+(`control.toml`, `concurrent = 1`). Provisioning issues `runner-macos-control.token`
+with `GITLAB_TOKEN` (scope `create_runner`) only when the file is absent. Apple and
 dependency-audit lanes share the host filesystem and cache roots across jobs.
 Linux and browser placement is selected separately; the Mac has no
 Linux runner, Docker image builder or Colima launch agent.
