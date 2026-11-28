@@ -153,13 +153,6 @@ impl Lane {
             Self::Declared { cache_group, .. } => *cache_group,
         }
     }
-
-    /// Whether the compiler cache is started around the lane. The verdict
-    /// reads reports and the journal and compiles nothing, and the registration
-    /// it runs on carries no compiler cache.
-    pub(crate) const fn compiles(&self) -> bool {
-        !matches!(self, Self::Verdict)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
@@ -540,7 +533,7 @@ fn execute(args: &RunArgs, ctx: &Ctx) -> Result<()> {
         execute_lane(
             &process,
             &ctx.config.tools,
-            lane.compiles().then(|| environment.kache()),
+            Some(environment.kache()),
             &args.lane,
             || match lane {
                 Lane::ReleaseXcframework => super::release::xcframework(
@@ -1213,8 +1206,7 @@ mod tests {
                     text.split(invocation)
                         .skip(1)
                         .filter_map(|rest| rest.split_whitespace().next())
-                        // A quoted script line ends the lane name with its quote.
-                        .map(|lane| lane.trim_end_matches(['\'', '"']).to_string()),
+                        .map(str::to_string),
                 );
             }
         }
@@ -1422,15 +1414,6 @@ mod tests {
     #[test]
     fn verdict_uses_the_macos_cache_group() {
         assert_eq!(Lane::Verdict.cache_group(), CacheGroup::Macos);
-    }
-
-    /// The verdict runs on the control registration, which carries no
-    /// compiler cache; starting one there fails before the verdict is read.
-    #[test]
-    fn only_the_verdict_runs_without_the_compiler_cache() {
-        for lane in Lane::RESIDUAL {
-            assert_eq!(lane.compiles(), lane != Lane::Verdict, "{lane:?}");
-        }
     }
 
     #[test]

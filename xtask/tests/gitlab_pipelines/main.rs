@@ -22,13 +22,6 @@ const MERGE_REQUEST_KIND: &str = "merge-request";
 const JUST_LANE: &str = "just ci run ";
 /// How the Windows guest, which carries no `just`, runs one.
 const CARGO_LANE: &str = "cargo run --locked -p xtask -- ci run ";
-/// How a control job, which builds nothing, runs one: through the CI
-/// executable the host installed when it was provisioned.
-const HOST_LANE: &str = "\"$KITHARA_CI_HOST_BINARY\" ci run ";
-/// The tag of the registration control jobs run on.
-const CONTROL_TAG: &str = "kithara-macos-control";
-/// The jobs that may take the control registration.
-const CONTROL_JOBS: [&str; 1] = ["verdict"];
 /// The tags of the Mac registrations that build.
 const MAC_BUILD_TAGS: [&str; 3] = ["kithara-macos", "kithara-macos-1", "kithara-macos-2"];
 /// How a Linux pool job runs one: the command GitHub's `lane.yml` runs.
@@ -70,12 +63,11 @@ impl GitlabConfig {
     }
 
     /// Every job that runs a declared lane, as (job name, lane name). The
-    /// Windows host carries no `just`, so it reaches xtask through cargo, the
-    /// Linux pool runs the command GitHub runs, and a control job runs the
-    /// host's installed executable; every spelling names the same lane, and
-    /// the lane name is the first word after the subcommand.
+    /// Windows host carries no `just`, so it reaches xtask through cargo, and
+    /// the Linux pool runs the command GitHub runs; every spelling names the
+    /// same lane, and the lane name is the first word after the subcommand.
     fn lane_jobs(&self) -> Vec<(String, String)> {
-        const INVOCATIONS: [&str; 4] = [JUST_LANE, CARGO_LANE, POOL_LANE, HOST_LANE];
+        const INVOCATIONS: [&str; 3] = [JUST_LANE, CARGO_LANE, POOL_LANE];
 
         let mut jobs = Vec::new();
         for document in &self.documents {
@@ -922,6 +914,7 @@ fn macos_review_jobs_can_use_either_native_registration() {
         "apple:net-units",
         "apple:test",
         "apple:xcframework",
+        "verdict",
     ] {
         let tags = config.effective_value(job, "tags").expect("job has tags");
         let tags = tags.as_sequence().expect("job tags are a sequence");
@@ -948,70 +941,11 @@ fn job_tags(config: &GitlabConfig, job: &str) -> Vec<String> {
         .collect()
 }
 
-/// The control registration runs one job at a time beside the build
-/// registrations, so nothing heavier than reading the journal and calling an
-/// API may reach it: only the named control jobs, never a build tag beside the
-/// control one, and no command that compiles.
+/// The host's executable is what its periodic agents and the control
+/// registration run, so only reviewed default-branch code replaces it, and it
+/// is built on a build registration.
 #[test]
-fn control_jobs_alone_take_the_control_registration_and_build_nothing() {
-    let config = GitlabConfig::load(&workspace_root());
-    let control: BTreeSet<&str> = config
-        .job_names()
-        .filter(|job| !job.starts_with('.'))
-        .filter(|job| !["default", "include", "stages", "variables", "workflow"].contains(job))
-        .filter(|job| job_tags(&config, job).iter().any(|tag| tag == CONTROL_TAG))
-        .collect();
-    assert_eq!(
-        control,
-        CONTROL_JOBS.into_iter().collect(),
-        "only the named control jobs take {CONTROL_TAG}"
-    );
-    for job in CONTROL_JOBS {
-        assert_eq!(
-            job_tags(&config, job),
-            [CONTROL_TAG],
-            "`{job}` must take the control registration alone, never a build one"
-        );
-        let mut lines = 0;
-        for key in ["before_script", "script", "after_script"] {
-            for line in config
-                .effective_value(job, key)
-                .and_then(|lines| lines.as_sequence().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(Value::as_str)
-            {
-                lines += 1;
-                let line = line.trim();
-                assert!(
-                    line.starts_with(HOST_LANE),
-                    "`{job}` runs `{line}` instead of the host's installed executable"
-                );
-                for builder in ["just ", "cargo "] {
-                    assert!(!line.contains(builder), "`{job}` builds through `{line}`");
-                }
-            }
-        }
-        assert!(lines > 0, "`{job}` runs nothing");
-        let variables = config.variables(job);
-        for compiler in [
-            "CARGO_TARGET_DIR",
-            "KITHARA_XTASK_TARGET",
-            "SCCACHE_SERVER_UDS",
-        ] {
-            assert!(
-                !variables.contains_key(compiler),
-                "`{job}` names {compiler}, a build input the control registration has no use for"
-            );
-        }
-    }
-}
-
-/// Control jobs run the host's executable, so a merge has to put the merged
-/// code there, on a build registration and before that merge's own verdict.
-/// Otherwise verdict keeps the code of whichever provisioning pass ran last.
-#[test]
-fn a_merge_replaces_the_executable_control_jobs_run_before_its_verdict() {
+fn only_a_merge_replaces_the_host_executable_and_a_build_slot_builds_it() {
     let config = GitlabConfig::load(&workspace_root());
     let job = "host:replace-binary";
     assert_eq!(
@@ -1033,16 +967,6 @@ fn a_merge_replaces_the_executable_control_jobs_run_before_its_verdict() {
         script.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
         ["just ci host mac replace-binary"]
     );
-    for control in CONTROL_JOBS {
-        let needs = config
-            .effective_value(control, "needs")
-            .and_then(|needs| needs.as_sequence().cloned())
-            .unwrap_or_default();
-        assert!(
-            needs.iter().any(|need| need["job"].as_str() == Some(job)),
-            "`{control}` on the default branch must wait for `{job}`"
-        );
-    }
 }
 
 /// A Mac build slot is spent only on work the lane catalog places on macOS.
@@ -1140,10 +1064,8 @@ fn verdict_downloads_every_judged_apple_report() {
         .and_then(Value::as_sequence)
         .expect("the verdict declares judged jobs")
         .iter()
-        .map(|need| mapping(need, "a verdict dependency"))
-        // The executable the verdict runs, not a report it judges.
-        .filter(|need| need.get("job").and_then(Value::as_str) != Some("host:replace-binary"))
         .map(|need| {
+            let need = mapping(need, "a verdict dependency");
             assert_eq!(need.get("artifacts").and_then(Value::as_bool), Some(true));
             assert_eq!(need.get("optional").and_then(Value::as_bool), Some(true));
             need.get("job")

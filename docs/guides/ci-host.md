@@ -78,11 +78,12 @@ One `glrt-...` project runner token per file, mode `0600`, at
 `release`, tagged to match each lane's `tags:`; keep the release runner
 protected. `configure-runners` writes native shell executors.
 
-Control jobs (`kithara-macos-control`) run in a separate runner process
-(`control.toml`, `concurrent = 1`). Provisioning issues `runner-macos-control.token`
-with `GITLAB_TOKEN` (scope `create_runner`) only when the file is absent. They run
+The control registration (`kithara-macos-control`) runs in a separate runner
+process (`control.toml`, `concurrent = 1`) for jobs that build nothing.
+Provisioning issues `runner-macos-control.token` with `GITLAB_TOKEN` (scope
+`create_runner`) only when the file is absent. It and the periodic agents run
 `shared-bin/kithara-ci`, which `host:replace-binary` replaces when a `main`
-merge changes its code; a PR's verdict changes are proven by unit tests. Apple and
+merge changes its code. Apple and
 dependency-audit lanes share the host filesystem and cache roots across jobs.
 Linux and browser placement is selected separately; the Mac has no
 Linux runner, Docker image builder or Colima launch agent.

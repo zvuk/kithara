@@ -17,15 +17,6 @@
   tags:
     - kithara-macos
 
-# Control jobs read and write the host's journal and call APIs; they build
-# nothing. Their registration runs in a runner process of its own, one job at
-# a time, so a control job never waits for a build slot. It runs the host's
-# installed CI executable: there is no `just`, no Cargo build and no compiler
-# cache behind this tag.
-.macos-control-job:
-  tags:
-    - kithara-macos-control
-
 .apple-device-job:
   extends: .builds-beside-checkout
   tags:
