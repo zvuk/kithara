@@ -99,6 +99,13 @@ impl PcmProducer {
         self.forward.is_full() || !self.lead.admits_quantum(self.forward.occupied_len())
     }
 
+    /// Whether this lane blocks the offline renderer on underrun, so a
+    /// backpressured worker may recheck coarsely instead of at the realtime
+    /// packet rate.
+    pub(in crate::worker) fn waits_offline(&self) -> bool {
+        self.ready.0.is_some()
+    }
+
     pub(in crate::worker) fn signal(&mut self) {
         self.output_pending = true;
         if let Some(ready) = &self.ready.0 {

@@ -16,7 +16,7 @@ use super::{
     super::{EngineLoad, PcmPacket, reader::PcmProducer},
     pending::PendingPacket,
 };
-use crate::{LoadRefusal, ServiceClass, WarpSource, dispatcher::LaneTask};
+use crate::{LoadRefusal, ServiceClass, WarpSource, consts, dispatcher::LaneTask};
 
 /// Worker-owned source, rendering, ring producer and transport publisher.
 pub struct DecoderNode<T, S> {
@@ -288,7 +288,15 @@ where
     /// faster than real time, so the recheck never outgrows the packet it
     /// refills; a one-quantum lead has none to spare and keeps the configured
     /// poll.
+    ///
+    /// An offline lane need not poll that fast: its reader waits on the ring
+    /// rather than a device, and the ring holds many quanta, so a coarser
+    /// recheck still refills it before it drains while leaving the CPU to the
+    /// renderer the backpressure is waiting on.
     fn backpressure_recheck(&self) -> Option<Duration> {
+        if self.port.waits_offline() {
+            return Some(consts::OFFLINE_BACKPRESSURE_RECHECK);
+        }
         let packet = self
             .last_output
             .spec
@@ -476,6 +484,20 @@ mod tests {
                 "{chunks} quanta of 480 frames at 48 kHz hold 10 ms each"
             );
         }
+    }
+
+    /// An offline lane's reader waits on the ring rather than a device, and the
+    /// ring holds many quanta, so a backpressured lane rechecks at the coarse
+    /// offline interval instead of half a packet, leaving the CPU to the
+    /// renderer the backpressure is waiting on.
+    #[kithara::test(tokio)]
+    async fn an_offline_lane_rechecks_backpressure_at_the_offline_interval() {
+        let fixture = NodeFixture::offline(4).await;
+        assert_eq!(
+            fixture.node.backpressure_recheck(),
+            Some(crate::consts::OFFLINE_BACKPRESSURE_RECHECK),
+            "an offline lane rechecks at the offline interval, not half a packet"
+        );
     }
 
     /// A one-quantum lane leads the reader's packet by one quantum of frames. A

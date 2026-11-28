@@ -40,6 +40,11 @@ impl NodeFixture {
         Self::over(PcmFixture::new(capacity, false).await, steps)
     }
 
+    /// A node whose lane blocks the offline renderer on underrun.
+    pub(in crate::worker::node) async fn offline(capacity: usize) -> Self {
+        Self::over(PcmFixture::new(capacity, true).await, [])
+    }
+
     fn over(
         mut fixture: PcmFixture,
         steps: impl IntoIterator<Item = TrackStep<AudioChunk>>,

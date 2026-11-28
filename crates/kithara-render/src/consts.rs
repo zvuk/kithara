@@ -27,6 +27,11 @@ pub(crate) const DEFAULT_EVICT_FADE: FrameCount = FrameCount::new(512);
 pub(crate) const ACTIVE_WAIT_TIMEOUT: Duration = Duration::from_millis(1);
 pub(crate) const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_micros(250);
 
+/// Recheck interval for a backpressured offline lane. The reader defers its
+/// wake and the ring holds many quanta, so the worker need not poll at the
+/// realtime packet rate; a coarser recheck leaves the CPU to the starved
+/// renderer while still refilling the ring before it drains.
+pub(crate) const OFFLINE_BACKPRESSURE_RECHECK: Duration = Duration::from_millis(10);
 pub(crate) const CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
     Some(value) => value,
     None => unreachable!(),
