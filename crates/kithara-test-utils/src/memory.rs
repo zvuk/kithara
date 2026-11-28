@@ -14,6 +14,7 @@
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
+    cell::Cell,
     sync::atomic::{AtomicIsize, Ordering},
 };
 
@@ -28,6 +29,34 @@ use std::{
 static LIVE_BYTES: AtomicIsize = AtomicIsize::new(0);
 /// Highest [`LIVE_BYTES`] since the last [`reset_peak`].
 static PEAK_BYTES: AtomicIsize = AtomicIsize::new(0);
+
+thread_local! {
+    static EXCLUDED: Cell<bool> = const { Cell::new(false) };
+}
+
+#[doc(hidden)]
+#[must_use]
+#[derive(Debug)]
+pub struct ThreadExclusion {
+    previous: bool,
+}
+
+impl Drop for ThreadExclusion {
+    fn drop(&mut self) {
+        let previous = self.previous;
+        let _ = EXCLUDED.try_with(|excluded| excluded.set(previous));
+    }
+}
+
+#[doc(hidden)]
+pub fn exclude_current_thread() -> ThreadExclusion {
+    let previous = EXCLUDED.with(|excluded| excluded.replace(true));
+    ThreadExclusion { previous }
+}
+
+fn excluded() -> bool {
+    EXCLUDED.try_with(Cell::get).unwrap_or(false)
+}
 
 /// Live heap bytes this process currently holds, and zero while the balance
 /// stands below where it started.
@@ -132,6 +161,9 @@ unsafe impl GlobalAlloc for Counting {
 
 /// Add `bytes` to the live total and raise the peak when that is a new high.
 fn charge(bytes: usize) {
+    if excluded() {
+        return;
+    }
     let bytes = bytes as isize;
     let live = LIVE_BYTES
         .fetch_add(bytes, Ordering::Relaxed)
@@ -141,5 +173,8 @@ fn charge(bytes: usize) {
 
 /// Take `bytes` off the live total.
 fn release(bytes: usize) {
+    if excluded() {
+        return;
+    }
     LIVE_BYTES.fetch_sub(bytes as isize, Ordering::Relaxed);
 }

@@ -335,6 +335,8 @@ pub(crate) fn make_hard_timeout_watchdog(fn_name: &str) -> TokenStream2 {
             let __done_w = __done.clone();
             let __fn = #fn_name;
             ::std::thread::spawn(move || {
+                let _exclusion =
+                    ::kithara_test_utils::memory::exclude_current_thread();
                 ::std::thread::sleep(
                     __timeout_dur + ::std::time::Duration::from_secs(3),
                 );
