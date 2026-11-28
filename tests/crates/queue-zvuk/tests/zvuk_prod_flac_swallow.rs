@@ -82,7 +82,7 @@ const COMMIT_DEADLINE: Duration = Duration::from_secs(10);
 ///     cargo nextest run -E 'test(zvuk_prod_flac_no_swallow)' --run-ignored=only
 /// ```
 // flash(false): real-time paced on purpose (see doc) — sleep paces render at 1x wall clock vs prod CDN.
-#[kithara::test(tokio, timeout(Long))]
+#[kithara::test(tokio, timeout(Network))]
 #[case::symphonia(DecoderBackend::Symphonia)]
 #[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {

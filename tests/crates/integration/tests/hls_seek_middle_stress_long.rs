@@ -379,7 +379,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Long), hang_timeout_secs(10))]
+#[kithara::test(tokio, multi_thread, timeout(Network), hang_timeout_secs(10))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]

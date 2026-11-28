@@ -31,7 +31,7 @@ const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
 const RENDER_BLOCK_BUDGET: usize = 512;
 
-#[kithara::test(tokio, multi_thread, timeout(Long))]
+#[kithara::test(tokio, multi_thread, timeout(Network))]
 #[ignore = "run through just arch viz --scenario queue-playback"]
 #[serial]
 async fn queue_playback_architecture(#[future(awt)] served_mp3: (TestServerHelper, Url)) {

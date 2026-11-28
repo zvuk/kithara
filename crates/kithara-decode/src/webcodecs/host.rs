@@ -677,7 +677,7 @@ mod tests {
         (cmd, out)
     }
 
-    #[kithara::test(wasm, timeout(Long))]
+    #[kithara::test(wasm, timeout(Network))]
     async fn composed_mp3_reaches_eof_with_pcm(tone_mp3: &'static [u8]) {
         use symphonia::{
             core::{

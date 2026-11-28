@@ -211,7 +211,7 @@ async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized(#[case] case
     run_real_media_matrix(false, sources, cases).await;
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Network))]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
 async fn record_no_sync_real_media_artifacts() {
     let sources = real_media_sources(CASES).await;
