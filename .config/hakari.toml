@@ -82,6 +82,7 @@ workspace-members = [
   "kithara-ring",
   "kithara-stream-tests",
   "kithara-sync-tests",
+  "kithara-sync-oracle-tests",
   "kithara-test-args",
   "kithara-test-dylib",
   "kithara-test-fixtures",

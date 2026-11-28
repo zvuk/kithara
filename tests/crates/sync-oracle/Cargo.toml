@@ -1,0 +1,40 @@
+[package]
+name = "kithara-sync-oracle-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[features]
+default = ["client-reqwest", "tls-rustls", "usdt"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
+flash = ["kithara/flash", "kithara-integration-tests/flash"]
+load = ["kithara-integration-tests/load"]
+no-block = ["kithara/no-block", "kithara-integration-tests/no-block"]
+usdt = ["kithara/usdt", "kithara-integration-tests/usdt"]
+apple-fused-src = ["kithara/apple-fused-src"]
+
+[dependencies]
+kithara = { workspace = true, features = ["test", "link", "usdt", "backend-cpal", "download", "dsp", "mock", "offline", "queue", "resample-rubato", "signal", "stretch-glide", "stretch-signalsmith", "tokio-net", "tokio-rt-multi-thread"] }
+kithara-integration-tests = { workspace = true, features = ["all", "analysis", "link"] }
+kithara-test-dylib = { workspace = true }
+kithara-test-fixtures = { workspace = true, default-features = false, features = ["encoded", "library", "packaged", "rhythm", "signal"] }
+kithara-test-utils = { workspace = true, features = ["test", "usdt", "hang", "mock"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+kithara = { workspace = true, features = ["test", "download", "apple", "client-wreq"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+kithara = { workspace = true, features = ["test", "full", "symphonia", "fdk-aac"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "sync"
+path = "tests/suite.rs"

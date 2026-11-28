@@ -91,6 +91,7 @@ members = [
     "tests/crates/queue-zvuk",
     "tests/crates/stream",
     "tests/crates/sync",
+    "tests/crates/sync-oracle",
     "tests/crates/warp",
     "tests/fuzz",
     "tests/wasm-runner",
@@ -827,6 +828,9 @@ opt-level = 1
 opt-level = 1
 
 [profile.test-release.package.kithara-sync-tests]
+opt-level = 1
+
+[profile.test-release.package.kithara-sync-oracle-tests]
 opt-level = 1
 
 [profile.test-release.package.kithara-warp-tests]
