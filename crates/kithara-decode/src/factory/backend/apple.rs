@@ -373,7 +373,7 @@ mod apple_factory_tests {
             .sum()
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_aac_lc_metadata_probe_is_not_rejected_as_unsupported_codec(
         aac_one: (Vec<u8>, FakeSegmented),
     ) {
@@ -404,7 +404,7 @@ mod apple_factory_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_gapless_scaling_is_identity_without_fused_src() {
         let source_gapless = Some(GaplessInfo {
             leading_frames: 1024,
@@ -427,7 +427,7 @@ mod apple_factory_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_gapless_scaling_rounds_source_counts_to_output_rate() {
         let source_gapless = Some(GaplessInfo {
             leading_frames: 1024,
@@ -447,7 +447,7 @@ mod apple_factory_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     #[case::upsampled(48_000)]
     #[case::downsampled(24_000)]
     fn apple_codec_preserves_factory_output_domain_gapless(
@@ -473,7 +473,7 @@ mod apple_factory_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_scaled_gapless_trims_composed_resampled_output_domain(
         trim_silence: Vec<f32>,
         one_packet: &'static [u8],
@@ -564,7 +564,7 @@ mod apple_headerless_cbr_mp3_tests {
         test_pools::{TestPools, pools},
     };
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn factory_gives_the_mpeg_demuxer_the_length_behind_a_headerless_cbr_mp3() {
         let bytes = without_xing_frame(signal_mp3_track_sine440_187s().bytes());
         let total = u64::try_from(bytes.len()).expect("fixture length fits u64");
@@ -639,7 +639,7 @@ mod apple_container_identity_tests {
         test_pools::{TestPools, pools},
     };
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     #[case::file_metadata(true)]
     #[case::extension(false)]
     fn alac_in_mp4_decodes_through_both_factory_entries(#[case] metadata: bool) {
@@ -719,7 +719,7 @@ mod apple_output_clock_tests {
         .expect("open native Apple MPEG fixture")
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_past_eof_seek_latches_the_next_chunk_at_eof() {
         let media = MediaInfo::builder()
             .codec(AudioCodec::AacLc)
@@ -784,7 +784,7 @@ mod apple_output_clock_tests {
         (metadata, pcm)
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     #[case::pcm_upsample(signal_wav_saw_1s().bytes(), AudioCodec::Pcm, ContainerFormat::Wav, 1, 48_000)]
     #[case::pcm_downsample(signal_wav_saw_1s().bytes(), AudioCodec::Pcm, ContainerFormat::Wav, 1, 32_000)]
     #[case::flac_upsample(signal_flac_saw_1s().bytes(), AudioCodec::Flac, ContainerFormat::Flac, 1, 48_000)]
@@ -883,7 +883,7 @@ mod apple_output_clock_tests {
         frames
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_mpeg_buffered_head_and_eof_share_one_raw_clock() {
         let mut decoder = decoder();
         let gapless = decoder
@@ -904,7 +904,7 @@ mod apple_output_clock_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_mpeg_seek_preserves_original_origin_and_exact_sought_suffix() {
         let mut decoder = decoder();
         let (original, _) = drain(decoder.as_mut());
@@ -924,7 +924,7 @@ mod apple_output_clock_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_mpeg_rewind_reanchors_the_codec_from_the_first_input() {
         let mut decoder = decoder();
         let (original, original_pcm) = drain(decoder.as_mut());

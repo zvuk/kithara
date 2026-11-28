@@ -107,7 +107,7 @@ mod tests {
         b
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn parses_streaminfo_fields_from_packed_layout() {
         // small block keeps the verbatim worst case below the declared
         // max_frame_size, so the declared value is the one that wins.
@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(info.max_frame_bytes(), 17_000);
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn max_frame_bytes_falls_back_to_verbatim_when_unset() {
         // max_frame_size = 0 (streaming encoder): bound = block*ch*bps + hdr.
         let raw = streaminfo(4608, 0, 44_100, 2, 16, 0);
@@ -129,7 +129,7 @@ mod tests {
         assert_eq!(info.max_frame_bytes(), 4608 * 2 * 2 + 1024);
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn streaminfo_body_slices_dfla_box() {
         let body = streaminfo(4096, 100, 44_100, 2, 16, 1);
         let mut dfla = Vec::new();

@@ -16,6 +16,9 @@ pub(super) struct TestRequest {
     /// passed-through `-E` is a union member, so it could widen a selection;
     /// this one only takes tests away.
     pub(super) narrow: Option<String>,
+    /// A configured platform the run is restricted to: only the tests
+    /// declared for it, intersected with every other selection.
+    pub(super) platform: Option<String>,
     pub(super) expected_tests: Option<PathBuf>,
     pub(super) selection_output: Option<PathBuf>,
     pub(super) passthrough: Vec<String>,
@@ -33,6 +36,7 @@ impl TestRequest {
             load: None,
             loom: None,
             narrow: None,
+            platform: None,
             expected_tests: None,
             selection_output: None,
             passthrough: Vec::new(),
@@ -84,6 +88,7 @@ impl TestRequest {
                 "--narrow" => {
                     request.narrow = Some(filterset(iter.next().map(String::as_str))?);
                 }
+                "--platform" => request.restrict_to(iter.next().map(String::as_str))?,
                 "--expected-tests" => {
                     request.expect_tests(iter.next().map(String::as_str))?;
                 }
@@ -119,6 +124,9 @@ impl TestRequest {
                 _ if arg.starts_with("--narrow=") => {
                     request.narrow = Some(filterset(arg.strip_prefix("--narrow="))?);
                 }
+                _ if arg.starts_with("--platform=") => {
+                    request.restrict_to(arg.strip_prefix("--platform="))?;
+                }
                 _ if arg.starts_with("--expected-tests=") => {
                     request.expect_tests(arg.strip_prefix("--expected-tests="))?;
                 }
@@ -136,6 +144,17 @@ impl TestRequest {
             request.validate_expected_selection()?;
         }
         Ok(request)
+    }
+
+    fn restrict_to(&mut self, value: Option<&str>) -> Result<()> {
+        if self.platform.is_some() {
+            bail!("--platform may be supplied only once");
+        }
+        let platform = value
+            .filter(|platform| !platform.trim().is_empty() && !platform.starts_with('-'))
+            .context("--platform needs a platform name")?;
+        self.platform = Some(platform.to_owned());
+        Ok(())
     }
 
     fn select_to(&mut self, value: Option<&str>) -> Result<()> {

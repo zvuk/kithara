@@ -76,7 +76,7 @@ fn apple_mp3_decoder(
 /// A host rate that differs from the source rate must therefore be served by
 /// the codec itself, which is what a route change asks for at runtime.
 #[cfg(feature = "apple-codec-embedded-resampler")]
-#[kithara::test]
+#[kithara::test(platform = apple)]
 fn apple_fused_src_decodes_at_the_requested_host_rate(tone_mp3: &'static [u8]) {
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Mp3))

@@ -483,14 +483,8 @@ async fn wait_for_post_seek_advance(
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_no_sidx(DecoderBackend::Symphonia, plain_hls().await))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_with_sidx(DecoderBackend::Symphonia, sidx_hls().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_no_sidx(DecoderBackend::Apple, plain_hls().await)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_with_sidx(DecoderBackend::Apple, sidx_hls().await)
-)]
+#[case::apple_no_sidx(platform = apple, DecoderBackend::Apple, plain_hls().await)]
+#[case::apple_with_sidx(platform = apple, DecoderBackend::Apple, sidx_hls().await)]
 #[cfg_attr(
     target_os = "android",
     case::android_no_sidx(DecoderBackend::Android, plain_hls().await)

@@ -46,10 +46,7 @@ static CTX: LazyAppQueueFixture = LazyAppQueueFixture::const_new();
 /// rot.
 #[kithara::test(tokio)]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn zvuk_prod_drm_track_plays(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]

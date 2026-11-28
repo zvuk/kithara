@@ -581,12 +581,12 @@ mod algo_delay_tests {
 
     use super::apple_decoder_algo_delay;
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_decoder_algo_delay_mp3_is_529() {
         assert_eq!(apple_decoder_algo_delay(AudioCodec::Mp3), 529);
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_decoder_algo_delay_non_mp3_codecs_zero() {
         assert_eq!(apple_decoder_algo_delay(AudioCodec::AacLc), 0);
         assert_eq!(apple_decoder_algo_delay(AudioCodec::AacHe), 0);
@@ -604,7 +604,7 @@ mod priming_table_tests {
     use super::apple_codec_priming;
     use crate::codec::CodecPriming;
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_priming_aac_he_v2() {
         assert_eq!(
             apple_codec_priming(AudioCodec::AacHeV2),
@@ -616,7 +616,7 @@ mod priming_table_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_priming_aac_he() {
         assert_eq!(
             apple_codec_priming(AudioCodec::AacHe),
@@ -628,7 +628,7 @@ mod priming_table_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_priming_aac_lc() {
         assert_eq!(
             apple_codec_priming(AudioCodec::AacLc),
@@ -640,7 +640,7 @@ mod priming_table_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_priming_mp3() {
         assert_eq!(
             apple_codec_priming(AudioCodec::Mp3),
@@ -652,7 +652,7 @@ mod priming_table_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_priming_flac_is_default() {
         assert_eq!(
             apple_codec_priming(AudioCodec::Flac),
@@ -688,14 +688,14 @@ mod output_rate_tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn pcm_output_format_uses_source_rate_without_target() {
         let asbd = build_pcm_output_format(consts::SOURCE_RATE, consts::TEST_CHANNELS, None);
 
         assert_eq!(asbd.sample_rate, f64::from(consts::SOURCE_RATE));
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn pcm_output_format_uses_source_rate_when_target_matches() {
         let asbd = build_pcm_output_format(
             consts::SOURCE_RATE,
@@ -706,7 +706,7 @@ mod output_rate_tests {
         assert_eq!(asbd.sample_rate, f64::from(consts::SOURCE_RATE));
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn pcm_output_format_uses_target_rate_when_different() {
         let asbd = build_pcm_output_format(
             consts::SOURCE_RATE,
@@ -717,7 +717,7 @@ mod output_rate_tests {
         assert_eq!(asbd.sample_rate, f64::from(consts::ALT_RATE));
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn output_frame_capacity_preserves_equal_rate_passthrough() {
         let capacity = output_frame_capacity(
             consts::INPUT_FRAMES,
@@ -729,7 +729,7 @@ mod output_rate_tests {
         assert_eq!(capacity, consts::INPUT_FRAMES);
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn output_frame_capacity_covers_upsample_ratio() {
         let capacity =
             output_frame_capacity(consts::INPUT_FRAMES, consts::SOURCE_RATE, consts::ALT_RATE)
@@ -738,7 +738,7 @@ mod output_rate_tests {
         assert_eq!(capacity, consts::UPSAMPLE_CAPACITY);
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn output_frame_capacity_covers_downsample_ratio() {
         let capacity =
             output_frame_capacity(consts::INPUT_FRAMES, consts::ALT_RATE, consts::SOURCE_RATE)
@@ -747,7 +747,7 @@ mod output_rate_tests {
         assert_eq!(capacity, consts::DOWNSAMPLE_CAPACITY);
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_codec_spec_uses_resolved_output_rate(aac_init: Vec<u8>) {
         let track = aac_lc_track(&aac_init);
         let target_rate = if track.sample_rate == consts::ALT_RATE {
@@ -892,7 +892,7 @@ mod aac_lc_decode_tests {
     /// — the exact decode path the size-reduced iOS framework exercises.
     /// The module already lives under the `apple` + macOS/iOS gate, so no
     /// per-item `cfg` is needed.
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_aac_lc_decode_produces_finite_pcm(aac_init: Vec<u8>, aac_segment: Vec<u8>) {
         let init_bytes = aac_init;
         let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
@@ -935,7 +935,7 @@ mod aac_lc_decode_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_aac_lc_resampled_decode_produces_ratio_sized_frames(
         aac_init: Vec<u8>,
         aac_segment: Vec<u8>,
@@ -1018,7 +1018,7 @@ mod aac_lc_decode_tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_aac_lc_src_eof_flush_total_output_within_one_frame(
         aac_init: Vec<u8>,
         aac_segment: Vec<u8>,
@@ -1091,7 +1091,7 @@ mod aac_lc_decode_tests {
         assert_eq!(drain_eof(&mut src_codec, &pools), drained);
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn apple_aac_lc_passthrough_eof_drain_preserves_length(
         aac_init: Vec<u8>,
         aac_segment: Vec<u8>,
@@ -1135,7 +1135,7 @@ mod flac_decode_tests {
         test_pools::pools,
     };
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     #[case::native_cookie(false, false)]
     #[case::raw_streaminfo(true, false)]
     #[case::id3_prefix(false, true)]
