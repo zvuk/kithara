@@ -214,19 +214,27 @@ impl Bridge {
         let mut workspace = None;
         let live = judge_each(
             &pulls,
-            |pull| {
-                self.base_for(&ledger, &mut workspace, pull, base_sha)
-                    .inspect_err(|error| {
-                        warn!(
-                            pull_number = pull.number,
-                            head_sha = %pull.head_sha,
-                            %error,
-                            "GitLab verification tick failed without changing its verdict"
-                        );
-                    })
-                    .ok()
-            },
+            |pull| self.base_for(&ledger, &mut workspace, pull, base_sha),
             |pull, verified_base| self.judge_pull(&ledger, pull, verified_base, base_sha),
+            |pull, error, (state, detail)| {
+                warn!(
+                    pull_number = pull.number,
+                    head_sha = %pull.head_sha,
+                    %error,
+                    "GitLab verification tick failed without changing its verdict"
+                );
+                if let Err(error) = self
+                    .github
+                    .report_status(&pull.head_sha, state, &detail, None)
+                {
+                    warn!(
+                        pull_number = pull.number,
+                        head_sha = %pull.head_sha,
+                        %error,
+                        "an unweighed head's verification status could not be published"
+                    );
+                }
+            },
         )?;
         let Some(live) = live else {
             return Ok(());
@@ -774,23 +782,35 @@ fn moved_base(
 }
 
 /// Judges every pull request on the base its verdict moves to. A pull whose
-/// base could not be weighed is neither judged nor reported this tick, so its
-/// published status stays; what is live is then unknown, so no verification
+/// base could not be weighed is not judged this tick, and its verification
+/// status turns pending so an old pass does not read as one for the new tree;
+/// its ledger verdict stays. What is live is then unknown, so no verification
 /// branch can be swept and the answer is `None`.
 fn judge_each<P>(
     pulls: &[P],
-    mut base_for: impl FnMut(&P) -> Option<String>,
+    mut base_for: impl FnMut(&P) -> Result<String>,
     mut judge: impl FnMut(&P, String) -> Result<LiveVerification>,
+    mut hold: impl FnMut(&P, &anyhow::Error, (&'static str, String)),
 ) -> Result<Option<Vec<LiveVerification>>> {
     let mut live = Vec::with_capacity(pulls.len());
     let mut weighed = true;
     for pull in pulls {
         match base_for(pull) {
-            Some(base) => live.push(judge(pull, base)?),
-            None => weighed = false,
+            Ok(base) => live.push(judge(pull, base)?),
+            Err(error) => {
+                weighed = false;
+                let status = unweighed(&error);
+                hold(pull, &error, status);
+            }
         }
     }
     Ok(weighed.then_some(live))
+}
+
+/// The status of a head whose base move could not be weighed.
+fn unweighed(error: &anyhow::Error) -> (&'static str, String) {
+    let detail = format!("Main moved and the move was not weighed: {error}");
+    ("pending", detail.chars().take(140).collect())
 }
 
 /// A status description, marked when it speaks for a draft's narrower run.
@@ -2813,9 +2833,16 @@ mod tests {
     #[test]
     fn an_unweighed_move_of_main_judges_and_sweeps_nothing_for_that_head() {
         let judged = RefCell::new(Vec::new());
+        let held = RefCell::new(Vec::new());
         let live = judge_each(
             &[consts::PULL_HEAD, consts::RETIRED_HEAD],
-            |head| (*head == consts::RETIRED_HEAD).then(|| consts::CURRENT_BASE.to_owned()),
+            |head| {
+                if *head == consts::RETIRED_HEAD {
+                    Ok(consts::CURRENT_BASE.to_owned())
+                } else {
+                    bail!("cargo metadata failed")
+                }
+            },
             |head, base| {
                 judged.borrow_mut().push(*head);
                 Ok(LiveVerification {
@@ -2824,9 +2851,20 @@ mod tests {
                     scope: Scope::Full,
                 })
             },
+            |head, _, status| held.borrow_mut().push((*head, status)),
         )
         .unwrap();
         assert_eq!(judged.into_inner(), [consts::RETIRED_HEAD]);
+        let held = held.into_inner();
+        assert_eq!(held.len(), 1);
+        let (head, (state, detail)) = &held[0];
+        assert_eq!(*head, consts::PULL_HEAD);
+        assert_eq!(
+            *state, "pending",
+            "an old pass must not stand for the new tree"
+        );
+        assert!(detail.contains("not weighed") && detail.contains("cargo metadata failed"));
+        assert!(detail.chars().count() <= 140);
         assert!(live.is_none(), "an unknown live set sweeps no branch");
     }
 
