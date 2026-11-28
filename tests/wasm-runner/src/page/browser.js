@@ -104,6 +104,9 @@ window.on_console_warn = __wbgtest_console_warn;
 window.on_console_error = __wbgtest_console_error;
 cx.include_ignored(__INCLUDE_IGNORED__);
 cx.filtered_count(__FILTERED__);
+const button = document.getElementById("kithara-run-tests");
+button.addEventListener("click", () => {
+    button.remove();
+    cx.run(__TESTS__.map(name => wasm[name]));
+}, { once: true });
 window.__kithara_tests_ready = true;
-await window.__kithara_user_activation;
-await cx.run(__TESTS__.map(name => wasm[name]));

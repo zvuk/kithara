@@ -10,13 +10,6 @@
     <script>
      const nocapture = __NOCAPTURE__;
      window.__kithara_tests_ready = false;
-     window.__kithara_user_activation = new Promise(resolve => {
-         const button = document.getElementById("kithara-run-tests");
-         button.addEventListener("click", () => {
-             button.remove();
-             resolve();
-         }, { once: true });
-     });
      const append = id => (...args) => {
          const logs = document.getElementById(id);
          for (const msg of args) {
