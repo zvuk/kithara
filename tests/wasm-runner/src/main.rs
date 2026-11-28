@@ -120,7 +120,7 @@ async fn run(cli: Cli, watchdog: Duration) -> Result<bool> {
     .await??;
     let url = server.url("/").to_string();
     eprintln!("Running headless tests in {browser:?} at {url}");
-    let outcome = within(deadline, watchdog, drive(&session, &url))
+    let outcome = within(deadline, watchdog, drive(&session, &url, deadline))
         .await
         .and_then(convert::identity);
     session.close().await;
@@ -139,10 +139,15 @@ async fn within<F: Future>(deadline: Instant, watchdog: Duration, future: F) -> 
 }
 
 /// Opens the page and reports its results.
-async fn drive(session: &Session, url: &str) -> Result<bool> {
+async fn drive(session: &Session, url: &str, watchdog: Instant) -> Result<bool> {
     session.visit(url).await?;
     activate(session).await?;
-    report(session, seconds("WASM_BINDGEN_TEST_TIMEOUT", 20)).await
+    let limit = seconds("WASM_BINDGEN_TEST_TIMEOUT", 20).min(
+        watchdog
+            .saturating_duration_since(Instant::now())
+            .saturating_sub(POLL),
+    );
+    report(session, limit).await
 }
 
 async fn activate(session: &Session) -> Result<()> {
@@ -162,7 +167,7 @@ async fn report(session: &Session, limit: Duration) -> Result<bool> {
     let mut output = String::new();
     let mut offset = 0;
     loop {
-        let (chunk, next) = session.text_since("output", offset).await?;
+        let (chunk, next) = session.text_since("output", offset, deadline).await?;
         offset = next;
         io::stdout().write_all(chunk.as_bytes())?;
         output.push_str(&chunk);
@@ -179,7 +184,7 @@ async fn report(session: &Session, limit: Duration) -> Result<bool> {
             "Failed to detect test as having been run. It might have timed out after {limit:?}."
         );
     }
-    let (console, _) = session.text_since("console_output", 0).await?;
+    let (console, _) = session.text_since("console_output", 0, deadline).await?;
     if !console.is_empty() {
         println!("console output:");
         for line in console.lines() {
