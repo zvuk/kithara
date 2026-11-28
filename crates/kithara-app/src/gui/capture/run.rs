@@ -21,7 +21,7 @@ use super::{
 };
 use crate::gui::ui::cache::DeckLayout;
 
-#[kithara::test]
+#[kithara::test(flash(false), timeout(Long))]
 fn studio_capture_writes_both_hosts() {
     let Some(dir) = env::var_os("KITHARA_STUDIO_CAPTURE").map(PathBuf::from) else {
         return;

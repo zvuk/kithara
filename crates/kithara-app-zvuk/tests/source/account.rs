@@ -451,7 +451,7 @@ async fn signing_out_revokes_the_session_before_the_store_forgets_the_token() {
     linked.press("account_disconnect");
     gate.reached().await;
     wait_until(
-        kithara_test_utils::TestBudget::Quick.timeout(),
+        kithara_test_utils::TestBudget::Quick.timeout(false),
         "the logout is sent",
         || linked.net.paths().contains(&paths::LOGOUT.to_owned()),
     )

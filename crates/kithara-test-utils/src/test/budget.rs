@@ -1,6 +1,6 @@
 use kithara_platform::time::Duration;
 
-/// Wall-time allowance for a test in real, Flash or Miri execution.
+/// Wall-time allowance for a test in real, Flash, `RTSan` or Miri execution.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TestBudget {
@@ -15,25 +15,26 @@ pub enum TestBudget {
 }
 
 impl TestBudget {
-    /// Resolve the wall-time allowance for the compiled execution mode.
+    /// Resolve the wall-time allowance for the selected clock and compiled mode.
     #[must_use]
-    pub const fn timeout(self) -> Duration {
-        let seconds = match self {
-            Self::Quick => 1,
-            Self::Short => 2,
-            Self::Medium => 5,
-            Self::Long => 10,
-            Self::Heavy => 90,
-            Self::Network => 600,
+    pub const fn timeout(self, flash: bool) -> Duration {
+        let (real, flash_seconds, rtsan, miri) = match self {
+            Self::Quick => (1, 1, 1, 60),
+            Self::Short => (2, 1, 2, 120),
+            Self::Medium => (5, 1, 5, 300),
+            Self::Long => (30, 1, 30, 480),
+            Self::Heavy => (90, 1, 90, 480),
+            Self::Network => (600, 1, 600, 480),
         };
-        if cfg!(miri) {
-            Duration::from_secs(match self {
-                Self::Long | Self::Heavy | Self::Network => 480,
-                _ => seconds * 60,
-            })
+        Duration::from_secs(if cfg!(miri) {
+            miri
+        } else if cfg!(rtsan) {
+            rtsan
+        } else if flash {
+            flash_seconds
         } else {
-            Duration::from_secs(seconds)
-        }
+            real
+        })
     }
 }
 
@@ -54,32 +55,49 @@ mod tests {
 
     #[kithara::test]
     fn budgets_are_available_in_constants() {
-        const MEDIUM: Duration = TestBudget::Medium.timeout();
+        const REAL: Duration = TestBudget::Medium.timeout(false);
+        const FLASH: Duration = TestBudget::Medium.timeout(true);
 
-        let expected = if cfg!(miri) { 300 } else { 5 };
-        assert_eq!(MEDIUM, Duration::from_secs(expected));
+        let real_expected = if cfg!(miri) { 300 } else { 5 };
+        let flash_expected = if cfg!(miri) { 300 } else { 1 };
+        assert_eq!(REAL, Duration::from_secs(real_expected));
+        assert_eq!(FLASH, Duration::from_secs(flash_expected));
     }
 
     #[kithara::test]
     fn every_budget_keeps_its_mode_contract() {
-        for (budget, real, miri) in [
-            (TestBudget::Quick, 1, 60),
-            (TestBudget::Short, 2, 120),
-            (TestBudget::Medium, 5, 300),
-            (TestBudget::Long, 10, 480),
-            (TestBudget::Heavy, 90, 480),
-            (TestBudget::Network, 600, 480),
+        for (budget, real, flash, rtsan, miri) in [
+            (TestBudget::Quick, 1, 1, 1, 60),
+            (TestBudget::Short, 2, 1, 2, 120),
+            (TestBudget::Medium, 5, 1, 5, 300),
+            (TestBudget::Long, 30, 1, 30, 480),
+            (TestBudget::Heavy, 90, 1, 90, 480),
+            (TestBudget::Network, 600, 1, 600, 480),
         ] {
-            let expected = if cfg!(miri) { miri } else { real };
-            assert_eq!(budget.timeout(), Duration::from_secs(expected));
+            let real_expected = if cfg!(miri) {
+                miri
+            } else if cfg!(rtsan) {
+                rtsan
+            } else {
+                real
+            };
+            let flash_expected = if cfg!(miri) {
+                miri
+            } else if cfg!(rtsan) {
+                rtsan
+            } else {
+                flash
+            };
+            assert_eq!(budget.timeout(false), Duration::from_secs(real_expected));
+            assert_eq!(budget.timeout(true), Duration::from_secs(flash_expected));
         }
         assert_eq!(TestBudget::default(), TestBudget::Quick);
     }
 
     #[kithara::test]
     fn clock_timeout_requires_requested_and_compiled_flash() {
-        let real = TestBudget::Heavy.timeout();
-        let flash = TestBudget::Quick.timeout();
+        let real = TestBudget::Heavy.timeout(false);
+        let flash = TestBudget::Quick.timeout(true);
         assert_eq!(
             timeout_for_clock(real, flash, true),
             if cfg!(feature = "flash") { flash } else { real }

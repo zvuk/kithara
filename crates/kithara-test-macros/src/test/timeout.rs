@@ -15,9 +15,9 @@ pub(crate) fn resolve(args: &TestArgs) -> Expr {
     let flash = args.flash().unwrap_or(true);
     parse_quote!({
         const __TIMEOUT: ::std::time::Duration =
-            ::kithara_test_utils::TestBudget::#budget.timeout();
+            ::kithara_test_utils::TestBudget::#budget.timeout(false);
         const __FLASH_TIMEOUT: ::std::time::Duration =
-            ::kithara_test_utils::TestBudget::#flash_budget.timeout();
+            ::kithara_test_utils::TestBudget::#flash_budget.timeout(true);
         ::kithara_test_utils::test::timeout_for_clock(__TIMEOUT, __FLASH_TIMEOUT, #flash)
     })
 }
@@ -77,7 +77,8 @@ mod tests {
         let args = syn::parse_str::<TestArgs>("")?;
         let expanded = resolve(&args).to_token_stream().to_string();
         assert!(expanded.contains("const __TIMEOUT"));
-        assert!(expanded.contains("TestBudget :: Quick . timeout ()"));
+        assert!(expanded.contains("TestBudget :: Quick . timeout (false)"));
+        assert!(expanded.contains("TestBudget :: Quick . timeout (true)"));
         Ok(())
     }
 
@@ -86,7 +87,8 @@ mod tests {
         let real = syn::parse_str::<TestArgs>("flash(false), timeout(Medium)")?;
         let flash = syn::parse_str::<TestArgs>("timeout(Medium)")?;
         let real = resolve(&real).to_token_stream().to_string();
-        assert!(real.contains("TestBudget :: Medium . timeout ()"));
+        assert!(real.contains("TestBudget :: Medium . timeout (false)"));
+        assert!(real.contains("TestBudget :: Medium . timeout (true)"));
         assert!(real.contains("timeout_for_clock"));
         assert_ne!(real, resolve(&flash).to_token_stream().to_string());
         Ok(())
@@ -96,8 +98,8 @@ mod tests {
     fn flash_timeout_can_be_tighter_than_the_real_budget() -> syn::Result<()> {
         let args = syn::parse_str::<TestArgs>("timeout(Heavy), flash_timeout(Quick)")?;
         let expanded = resolve(&args).to_token_stream().to_string();
-        assert!(expanded.contains("TestBudget :: Heavy . timeout ()"));
-        assert!(expanded.contains("TestBudget :: Quick . timeout ()"));
+        assert!(expanded.contains("TestBudget :: Heavy . timeout (false)"));
+        assert!(expanded.contains("TestBudget :: Quick . timeout (true)"));
         assert!(expanded.contains("timeout_for_clock"));
         Ok(())
     }

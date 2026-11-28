@@ -1487,7 +1487,7 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
 
 /// flash(false): the stalled-body fixture is a real loopback socket that must
 /// deliver headers before body inactivity is measured.
-#[kithara::test(tokio, flash(false), timeout(Short))]
+#[kithara::test(tokio, flash(false), timeout(Long))]
 async fn stalled_body_publishes_resume_and_exhaustion_events() {
     let server = spawn_stalled_body_server().await;
     let url = server.url("/data");

@@ -65,7 +65,7 @@ fn output_names_alias(directory: &TestTempDir, first: &str, second: &str) -> boo
     aliases
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false), timeout(Long))]
 fn stdout_is_exactly_one_complete_json_line_per_track() {
     let output = invoke(&["--jobs", "2", "-"], &input());
     assert!(

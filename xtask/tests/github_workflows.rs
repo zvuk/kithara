@@ -2059,7 +2059,7 @@ fn timeout_source_audit_resolves_named_budgets_from_their_owner() {
         let expression = syn::parse_str(name).expect("budget identifier");
         assert_eq!(
             timeout_seconds(&expression),
-            Some(budget.timeout().as_secs()),
+            Some(budget.timeout(false).as_secs()),
             "{name}"
         );
     }
@@ -2133,7 +2133,7 @@ fn timeout_source_audit_includes_default_budgets() {
     for expression in expressions {
         assert_eq!(
             timeout_seconds(&expression),
-            Some(TestBudget::default().timeout().as_secs())
+            Some(TestBudget::default().timeout(false).as_secs())
         );
     }
 }
@@ -2154,7 +2154,7 @@ fn timeout_seconds(expression: &Expr) -> Option<u64> {
         "Network" => TestBudget::Network,
         _ => return None,
     };
-    Some(budget.timeout().as_secs())
+    Some(budget.timeout(false).as_secs())
 }
 
 fn call_name(call: &syn::ExprCall) -> Option<String> {
