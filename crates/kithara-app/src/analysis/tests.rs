@@ -42,7 +42,7 @@ use crate::{
     pools::{
         self, AppHost, AppPools, AppQueueControl, AppStore, AppTrackSource, AppWorker, PoolsSection,
     },
-    wave_cache::{AnalysisTarget, token_for},
+    wave_cache::{AnalysisTarget, TrackAnalysisCache, token_for},
 };
 
 fn owner_in(cancel: &CancelToken, store: AppStore) -> Owner {
@@ -207,6 +207,48 @@ async fn a_cached_key_is_a_track_fact_after_the_deck_lets_go(tone_mp3: String) {
         Some(a_minor),
         "the key stays on the row once the deck lets go"
     );
+    cancel.cancel();
+    host.close().await;
+}
+
+#[kithara::test(native, tokio)]
+#[case::v1("wave:native:max524288:v1")]
+#[case::v2("wave:fold1:v2")]
+async fn an_earlier_waveform_cache_miss_starts_a_native_column_pass(
+    #[case] old_tag: &str,
+    tone_mp3: String,
+) {
+    let cancel = CancelToken::root();
+    let mut owner = owner(&cancel);
+    assert_eq!(owner.config.waveform_fold, NonZeroU32::MIN);
+    let fingerprint = owner.runner.fingerprint();
+    assert_eq!(fingerprint.waveform(), Some("wave:fold1:v3"));
+    let (host, queue) = queue_off().await;
+    let (track_id, source) = track(&host, 1, &tone_mp3).await;
+    let target = target_of(&owner, &source);
+    let old = AnalysisFingerprint::builder()
+        .maybe_beat(fingerprint.beat())
+        .maybe_key(fingerprint.key())
+        .waveform(old_tag)
+        .build();
+    let cached = snapshot("test-track".into(), 7, 1_000, old.clone(), Some(grid()));
+    owner
+        .persistence
+        .store(target.clone(), progress(cached))
+        .await
+        .expect("earlier tag committed");
+    let mut old_cache =
+        TrackAnalysisCache::new(old, &test_pools(), owner.config.analysis_chunk_seconds);
+    assert!(
+        old_cache.get(&target, axis()).is_some(),
+        "earlier entry is readable under its tag"
+    );
+    let rx = owner.subscribe(queue, track_id, source, axis());
+    assert!(
+        rx.borrow().is_none(),
+        "earlier tag is not served as a v3 hit"
+    );
+    assert_eq!(running_track(&owner), Some(track_id));
     cancel.cancel();
     host.close().await;
 }
@@ -1582,8 +1624,8 @@ async fn a_supplied_waveform_over_cached_beats_opens_no_pass(tone_mp3: String) {
     let held = rx.borrow().clone().expect("the deck is served at once");
     assert!(held.grid().is_some(), "the cached beats are published");
     assert_eq!(
-        held.waveform().map(Waveform::buckets),
-        Some(served_waveform().buckets()),
+        held.waveform(),
+        Some(&served_waveform()),
         "and the waveform is the one the caller handed over, bucket for bucket"
     );
     cancel.cancel();

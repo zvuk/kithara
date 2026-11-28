@@ -55,7 +55,8 @@ impl Kithara {
     /// Boot function for `iced::daemon()`. Opens the app window.
     pub(crate) fn new(boot: Boot) -> (Self, Task<Message>) {
         let (window_id, open) = window::open(window_settings(boot.ui.window_min()));
-        (Self::mounted(boot, window_id), open.discard())
+        let open = open.discard().chain(window::gain_focus(window_id));
+        (Self::mounted(boot, window_id), open)
     }
 
     /// The same state without a window of iced's: a host that owns its own
@@ -141,5 +142,51 @@ impl Kithara {
     /// Window title.
     pub(crate) fn title(_state: &Self, _window: window::Id) -> String {
         "Kithara".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ::kithara::{platform::tokio::sync::mpsc, ui::source::UiConfig};
+    use futures::StreamExt;
+    use iced_runtime::{Action, task, window};
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{gui::test_fixture, theme::Palette};
+
+    #[kithara::test]
+    fn opening_the_app_also_requests_window_focus() {
+        let runtime = test_fixture::runtime();
+        runtime.block_on(async {
+            let snapshots = Arc::new(ArcSwap::from_pointee(EngineSnapshot::unpublished()));
+            let (commands, _) = mpsc::unbounded_channel();
+            let boot = Boot::builder()
+                .settings(&UiConfig::default())
+                .tracks(Vec::new())
+                .palette(Palette::default())
+                .snapshots(snapshots)
+                .commands(commands)
+                .runtime(runtime.handle().clone())
+                .build()
+                .unwrap();
+
+            let (state, open) = Kithara::new(boot);
+            let expected = state.window_id;
+            let mut actions = task::into_stream(open).expect("window open is an effectful task");
+
+            let opened = actions.next().await.expect("open action");
+            let Action::Window(window::Action::Open(id, _, completion)) = opened else {
+                panic!("expected window open before focus");
+            };
+            assert_eq!(id, expected);
+            completion.send(id).expect("open completion is accepted");
+
+            let focused = actions.next().await.expect("focus action");
+            let Action::Window(window::Action::GainFocus(id)) = focused else {
+                panic!("expected gain focus after window open");
+            };
+            assert_eq!(id, expected);
+        });
     }
 }

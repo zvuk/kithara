@@ -173,7 +173,7 @@ fn settled(result: Result<AnalysisOutcome, super::OpenError>) -> serde_json::Val
         "coverage": analysis.coverage().iter().map(|range| [range.start, range.end]).collect::<Vec<_>>(),
         "fingerprint": [analysis.fingerprint().waveform(), analysis.fingerprint().beat(), analysis.fingerprint().key()],
         "key": analysis.key().map(|estimate| (estimate.key(), estimate.strength())),
-        "waveform": analysis.waveform().map(|wave| (wave.span_frames().get(), wave.buckets().iter().map(|bucket| [bucket.low(), bucket.mid(), bucket.high()]).collect::<Vec<_>>())),
+        "waveform": analysis.waveform().map(|wave| (wave.span_frames().get(), wave.buckets().map(|bucket| [bucket.left(), bucket.right()]).collect::<Vec<_>>())),
         "beat": analysis.beat().map(|beat| (beat.artifact().bpm(), beat.artifact().beats(), beat.artifact().beat_confidence(), beat.artifact().downbeats(), beat.artifact().downbeat_confidence(), beat.confidence())),
     })
 }
@@ -224,8 +224,9 @@ async fn selection_and_fold_preserve_the_requested_density() {
                 .to_owned(),
         ));
     }
-    assert_eq!(waves[0].2, "wave:fold1:v2");
-    assert_eq!(waves[1].2, "wave:fold10:v2");
+    assert_eq!(waves[0].2, "wave:fold1:v3");
+    assert_eq!(waves[1].2, "wave:fold10:v3");
+    assert_eq!(waves[0].1, 64);
     assert_eq!(waves[1].0, waves[0].0.div_ceil(10));
     assert_eq!(waves[1].1, waves[0].1 * 10);
 }

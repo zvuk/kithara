@@ -25,16 +25,9 @@ fn design(plane: usize) -> Coefficients<f64> {
     .expect("valid band design")
 }
 
-struct Prepared {
-    together: Biquad,
-    individual: Vec<Biquad>,
-    template: Vec<Vec<f32>>,
-    planes: Vec<Vec<f32>>,
-}
-
-fn prepare(frames: usize) -> Prepared {
+fn filters() -> (Biquad, Vec<Biquad>) {
     let mut together = Biquad::new(PLANES, SECTIONS).expect("eight planes");
-    let mut individual: Vec<_> = (0..PLANES.get())
+    let individual = (0..PLANES.get())
         .map(|plane| {
             let mut single = Biquad::new(NonZeroUsize::MIN, SECTIONS).expect("one plane");
             for section in 0..SECTIONS.get() {
@@ -47,6 +40,18 @@ fn prepare(frames: usize) -> Prepared {
             single
         })
         .collect();
+    (together, individual)
+}
+
+struct Prepared {
+    together: Biquad,
+    individual: Vec<Biquad>,
+    template: Vec<Vec<f32>>,
+    planes: Vec<Vec<f32>>,
+}
+
+fn prepare(frames: usize) -> Prepared {
+    let (mut together, mut individual) = filters();
     let tone: Vec<_> = (0..frames)
         .map(|frame| (frame.to_f32().expect("bounded frame") * 0.0625).sin() * 0.5)
         .collect();
@@ -117,7 +122,7 @@ fn together_case(mut prepared: Prepared) -> Prepared {
     prepared
 }
 
-fn criterion_benchmarks(c: &mut Criterion) {
+fn bench_planes(c: &mut Criterion) {
     let mut group = c.benchmark_group("biquad_planes");
     for frames in [128, 512, 4_096] {
         let Prepared {
@@ -151,6 +156,71 @@ fn criterion_benchmarks(c: &mut Criterion) {
         );
     }
     group.finish();
+}
+
+fn bench_windows(c: &mut Criterion) {
+    let (mut together, mut individual) = filters();
+    let mut group = c.benchmark_group("biquad_windows");
+    for frames in [128, 512, 4_096] {
+        let tone: Vec<_> = (0..frames)
+            .map(|frame| (frame.to_f32().expect("bounded frame") * 0.0625).sin() * 0.5)
+            .collect();
+        let packed: Vec<_> = tone.iter().flat_map(|sample| [*sample; 8]).collect();
+        let template = vec![tone; PLANES.get()];
+        let mut expected = template.clone();
+        let mut actual = packed.clone();
+        for (filter, plane) in individual.iter_mut().zip(&mut expected) {
+            filter
+                .process_window(std::hint::black_box(plane.as_mut_slice()), 0..frames)
+                .expect("finite plane");
+        }
+        together
+            .process_window(&mut actual, 0..frames)
+            .expect("finite window");
+        for (frame, lanes) in actual.as_chunks::<8>().0.iter().enumerate() {
+            assert!(
+                lanes
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, plane)| (a - plane[frame]).abs() <= 0.000_05)
+            );
+        }
+        group.throughput(Throughput::Elements(
+            u64::try_from(frames * PLANES.get()).expect("bounded samples"),
+        ));
+        group.bench_function(BenchmarkId::new("eight_individual", frames), |b| {
+            b.iter_batched_ref(
+                || template.clone(),
+                |planes| {
+                    for (filter, plane) in individual.iter_mut().zip(&mut *planes) {
+                        filter
+                            .process_window(std::hint::black_box(plane.as_mut_slice()), 0..frames)
+                            .expect("finite plane");
+                    }
+                    std::hint::black_box(planes);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_function(BenchmarkId::new("eight_together", frames), |b| {
+            b.iter_batched_ref(
+                || packed.clone(),
+                |samples| {
+                    together
+                        .process_window(std::hint::black_box(samples.as_mut_slice()), 0..frames)
+                        .expect("finite window");
+                    std::hint::black_box(samples);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+fn criterion_benchmarks(c: &mut Criterion) {
+    bench_planes(c);
+    bench_windows(c);
 }
 
 metabench::main!(

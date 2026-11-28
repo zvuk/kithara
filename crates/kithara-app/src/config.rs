@@ -163,7 +163,7 @@ pub struct AppConfig {
     /// spelling of those knobs.
     #[config(skip = "transferred to the broadcast owner", patch(skip))]
     pub broadcast: Option<AppBroadcastConfig>,
-    /// Native analysis windows folded into each waveform bucket.
+    /// Native peak columns folded into each waveform bucket.
     #[config(builder(default = NonZeroU32::MIN))]
     pub waveform_fold: NonZeroU32,
     /// Band count of the EQ layout every deck's player graph is built with.

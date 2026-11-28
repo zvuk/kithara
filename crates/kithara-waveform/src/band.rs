@@ -1,22 +1,18 @@
-/// The three concentric envelopes one waveform column carries. The
-/// discriminants are the indices into every `[T; Band::COUNT]` band array in
-/// this module, and the order is the wire order: low, mid, high.
-#[derive(Clone, Copy, Debug)]
+/// Frequency order shared by each side of a waveform column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(usize)]
-pub(crate) enum Band {
+pub enum Band {
     Low = 0,
-    Mid = 1,
-    High = 2,
+    LowMid = 1,
+    HighMid = 2,
+    High = 3,
 }
 
 impl Band {
-    /// Every band, in index order.
-    pub(crate) const ALL: [Self; Self::COUNT] = [Self::Low, Self::Mid, Self::High];
-    /// Length of a band array.
-    pub(crate) const COUNT: usize = 3;
+    pub const COUNT: usize = 4;
 
-    /// Index of this band in a `[T; Band::COUNT]` array.
-    pub(crate) const fn idx(self) -> usize {
+    #[must_use]
+    pub const fn idx(self) -> usize {
         self as usize
     }
 }

@@ -1,30 +1,40 @@
 #![cfg(all(feature = "dsp", not(target_arch = "wasm32")))]
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::{array, num::NonZeroU32, path::PathBuf};
 
 #[cfg(all(test, target_os = "android"))]
 use kithara_test_dylib as _;
 use kithara_test_fixtures::analysis_fixtures::{analysis_pcm, waveform_mix};
 use kithara_test_utils::{bufpool::pools, kithara};
-use kithara_waveform::{AnalysisParams, WaveformAnalyzer};
+use kithara_waveform::{
+    AnalysisParams, Bucket, WAVEFORM_BYTES_VERSION, Waveform, WaveformAnalyzer,
+};
+use num_traits::ToPrimitive;
 
 mod consts {
-    use std::num::NonZeroU32;
-
     pub(super) const REFERENCE_COLUMNS: usize = 512;
-    /// Native analysis windows per bucket.
-    pub(super) const FOLD: NonZeroU32 = NonZeroU32::MIN;
-    /// Rate the analysis fixtures are rendered at.
+    /// Header the frozen reference files were cut with; their bodies are the
+    /// quantized display columns, independent of the waveform codec version.
+    pub(super) const REFERENCE_VERSION: u32 = 2;
     pub(super) const RATE: u32 = 44_100;
-    /// How far a band height may move and still match its reference.
-    pub(super) const TOLERANCE: f32 = 1e-4;
-    /// Set to record the references instead of checking them.
     pub(super) const UPDATE_REFERENCE: &str = "KITHARA_WAVEFORM_UPDATE_REFERENCE";
 }
 
-/// Per-band maxima of native heights over the reference's equal-duration ranges.
-fn heights(pcm: &[f32], channels: usize) -> Vec<[f32; 3]> {
+fn quantized(bucket: Bucket) -> [u8; 8] {
+    let (left, right) = (bucket.left(), bucket.right());
+    array::from_fn(|band| {
+        let height = if band < 4 {
+            left[band]
+        } else {
+            right[band - 4]
+        };
+        (255.0 * height).round().to_u8().expect("normalized height")
+    })
+}
+
+/// Per-side band peaks of native columns over the reference's equal-duration ranges.
+fn columns(pcm: &[f32], channels: usize) -> Vec<[u8; 8]> {
     let pools = pools();
     let mut analyzer = WaveformAnalyzer::new(consts::RATE, AnalysisParams::default(), &pools)
         .expect("the analyzer builds");
@@ -32,22 +42,18 @@ fn heights(pcm: &[f32], channels: usize) -> Vec<[f32; 3]> {
         .push(&pools, pcm, channels, 0)
         .expect("the fixture fits the test region");
     let extent = u64::try_from(pcm.len() / channels).expect("the frame count fits u64");
-    let wave = analyzer.snapshot(consts::FOLD, Some(extent));
-    (0..consts::REFERENCE_COLUMNS)
-        .map(|index| {
-            let start = index * wave.len() / consts::REFERENCE_COLUMNS;
-            let end = (index + 1) * wave.len() / consts::REFERENCE_COLUMNS;
-            wave.buckets()[start..end]
-                .iter()
-                .fold([0.0_f32; 3], |max, bucket| {
-                    [
-                        max[0].max(bucket.low()),
-                        max[1].max(bucket.mid()),
-                        max[2].max(bucket.high()),
-                    ]
-                })
-        })
-        .collect()
+    let wave = analyzer
+        .snapshot(NonZeroU32::MIN, Some(extent))
+        .expect("finite fixture");
+    let total = wave.len();
+    let count = consts::REFERENCE_COLUMNS.min(total);
+    let mut out = vec![[0_u8; 8]; count];
+    for (index, bucket) in wave.buckets().enumerate() {
+        let range = &mut out[((index + 1) * count - 1) / total];
+        let bytes = quantized(bucket);
+        *range = array::from_fn(|band| range[band].max(bytes[band]));
+    }
+    out
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -56,46 +62,48 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Checks `heights` against `name` within [`consts::TOLERANCE`]; with
-/// [`consts::UPDATE_REFERENCE`] set it records the reference instead.
-fn matches_reference(heights: &[[f32; 3]], name: &str) {
+fn matches_reference(actual: &[[u8; 8]], name: &str) {
     let path = fixture(name);
+    let mut encoded = consts::REFERENCE_VERSION.to_le_bytes().to_vec();
+    encoded.extend(actual.iter().flatten());
     if std::env::var_os(consts::UPDATE_REFERENCE).is_some() {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)
-                .unwrap_or_else(|error| panic!("failed to create {}: {error}", dir.display()));
-        }
-        let text = serde_json::to_string(heights).expect("band heights serialize");
-        std::fs::write(&path, text)
-            .unwrap_or_else(|error| panic!("failed to write {}: {error}", path.display()));
+        std::fs::write(&path, encoded).expect("write waveform reference");
         return;
     }
-
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("failed to read reference {}: {error}", path.display()));
-    let expected: Vec<[f32; 3]> = serde_json::from_str(&text)
-        .unwrap_or_else(|error| panic!("failed to parse reference {}: {error}", path.display()));
+    let expected = std::fs::read(&path).expect("read waveform reference");
     assert_eq!(
-        heights.len(),
+        encoded.len(),
         expected.len(),
         "column count differs from {name}"
     );
-    for (index, (got, want)) in heights.iter().zip(&expected).enumerate() {
-        for (height, recorded) in got.iter().zip(want) {
-            assert!(
-                (height - recorded).abs() <= consts::TOLERANCE,
-                "column {index} reads {height}, the reference {recorded}, in {name}"
-            );
-        }
-    }
+    assert!(encoded == expected, "quantized columns differ from {name}");
 }
 
 #[kithara::test(native)]
 fn a_full_spectrum_mix_matches_the_reference(waveform_mix: Vec<f32>) {
-    matches_reference(&heights(&waveform_mix, 1), "reference_waveform_mix.json");
+    matches_reference(&columns(&waveform_mix, 1), "v2_reference_waveform_mix.bin");
 }
 
 #[kithara::test(native)]
 fn a_stereo_tone_matches_the_reference(analysis_pcm: &'static [f32]) {
-    matches_reference(&heights(analysis_pcm, 2), "reference_analysis_pcm.json");
+    matches_reference(&columns(analysis_pcm, 2), "v2_reference_analysis_pcm.bin");
+}
+
+#[kithara::test(native)]
+fn frozen_v1_reference_waveforms_are_version_errors() {
+    for name in ["reference_analysis_pcm.json", "reference_waveform_mix.json"] {
+        let text = std::fs::read_to_string(fixture(name)).expect("frozen v1 heights");
+        let heights: Vec<[f32; 3]> = serde_json::from_str(&text).expect("v1 three-band rows");
+        let mut bytes = 1_u32.to_le_bytes().to_vec();
+        for height in heights.into_iter().flatten() {
+            bytes.extend_from_slice(&height.to_le_bytes());
+        }
+        assert!(matches!(
+            Waveform::try_from(bytes.as_slice()),
+            Err(kithara_blob::BlobError::Version {
+                found: 1,
+                expected: WAVEFORM_BYTES_VERSION
+            })
+        ));
+    }
 }

@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use fearless_simd::{Level, dispatch};
-use kithara_test_fixtures::portable::harmonics;
+use kithara_test_fixtures::portable::{harmonics, sawtooth};
 use kithara_test_utils::kithara;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -111,4 +111,80 @@ fn accelerate_cascade_planes_equal_individual_filters_bit_for_bit() {
             filter.process(planes, range).expect("matching planes");
         }
     );
+}
+
+#[kithara::test]
+fn windows_with_distinct_sections_match_the_causal_stream() {
+    for channels in [1, 3, 4, 8, 9] {
+        for sections in 1..=4 {
+            let count = NonZeroUsize::new(channels).expect("nonzero channels");
+            let sections = NonZeroUsize::new(sections).expect("nonzero sections");
+            let mut filter = crate::filter::Biquad::new(count, sections).expect("window lanes");
+            let mut portable = cascade::Cascade::new(count, sections).expect("portable lanes");
+            let coefficients = |plane, section| {
+                if channels == 8 && plane < 4 && section >= 2 {
+                    crate::consts::BIQUAD_IDENTITY
+                } else {
+                    *SECTIONS.get(section % 2).expect("two reference sections")
+                }
+            };
+            for section in 0..sections.get() {
+                for plane in 0..channels {
+                    let values = coefficients(plane, section);
+                    let [b0, b1, b2, a1, a2] = values.map(f64::from);
+                    filter
+                        .retune_plane(
+                            plane,
+                            section,
+                            crate::filter::Coefficients { b0, b1, b2, a1, a2 },
+                        )
+                        .expect("valid section");
+                    portable
+                        .set_section(section, plane..plane.saturating_add(1), values)
+                        .expect("portable section");
+                }
+            }
+            let mut expected: Vec<Vec<_>> = harmonics()
+                .into_iter()
+                .chain(std::iter::once(sawtooth()))
+                .take(channels)
+                .map(<[f32]>::to_vec)
+                .collect();
+            let frames = expected.first().expect("nonempty fixture").len();
+            let mut actual: Vec<_> = (0..frames)
+                .flat_map(|frame| {
+                    expected
+                        .iter()
+                        .map(move |plane| *plane.get(frame).expect("fixture frame"))
+                })
+                .collect();
+            let mut shared = actual.clone();
+            let mut fallback = actual.clone();
+            filter
+                .process(&mut expected, 0..frames)
+                .expect("causal stream");
+            filter
+                .process_window(&mut actual, 0..frames)
+                .expect("independent window");
+            portable
+                .process_window(&mut shared)
+                .expect("portable window");
+            dispatch!(Level::fallback(), simd => super::super::window::window_kernel(simd, &mut fallback, channels, sections.get(), coefficients));
+            let expected: Vec<_> = (0..frames)
+                .flat_map(|frame| {
+                    expected
+                        .iter()
+                        .map(move |plane| *plane.get(frame).expect("fixture frame"))
+                })
+                .collect();
+            for actual in [&actual, &shared, &fallback] {
+                assert!(
+                    actual
+                        .iter()
+                        .zip(&expected)
+                        .all(|(a, b)| (a - b).abs() <= 0.000_05)
+                );
+            }
+        }
+    }
 }

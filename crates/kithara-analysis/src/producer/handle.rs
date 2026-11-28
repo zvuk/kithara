@@ -1,17 +1,11 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 
 use kithara_audio::{AudioObserveError, AudioObserver};
-use kithara_dsp::downmix;
 use kithara_signal::{AudioChunk, AudioChunkInfo};
 use tracing::debug;
 
 use super::ring::Writer;
 use crate::analyzer::AnalysisToken;
-
-mod consts {
-    /// Frames downmixed per stack block, so an offer never allocates.
-    pub(super) const DOWNMIX_BLOCK: usize = 256;
-}
 
 /// The producer side of one analysis pass, named once when the handle is made
 /// so offering costs no lookup. A track with no open pass has no handle.
@@ -27,7 +21,7 @@ impl AnalysisProducer {
     }
 
     /// Offer interleaved samples at the metadata's raw source position, retaining
-    /// its original clock facts. Downmixes by the channel mean without allocation,
+    /// its original clock facts and channels without allocation,
     /// blocking, or retaining `pcm`.
     ///
     /// # Errors
@@ -50,18 +44,8 @@ impl AnalysisProducer {
             });
         }
 
-        let channels = NonZeroUsize::new(usize::from(spec.channels)).unwrap_or(NonZeroUsize::MIN);
-        let frames = pcm.len() / channels;
-        let mono = pcm
-            .chunks(consts::DOWNMIX_BLOCK.saturating_mul(channels.get()))
-            .flat_map(move |block| {
-                let mut mono = [0.0_f32; consts::DOWNMIX_BLOCK];
-                let written = downmix(block, channels, &mut mono);
-                mono.into_iter().take(written)
-            });
-
         self.ring
-            .push(info, frames, mono)
+            .push(info, pcm)
             .then_some(())
             .ok_or(AudioObserveError::Full)
     }
@@ -122,7 +106,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_mono_written_is_the_channel_mean(producer_stereo: Vec<f32>) {
+    fn stereo_channels_reach_the_worker_without_downmixing(producer_stereo: Vec<f32>) {
         let (mut producer, mut reader) = producer(64, 4);
         let pools = pools();
         let mut out = pools.get::<f32>();
@@ -138,8 +122,8 @@ mod tests {
         assert_eq!(reader.pop(&mut out).map(|span| span.start), Some(512));
         assert_eq!(
             &out[..],
-            &[2.0, -1.0],
-            "each frame is the mean of its channels"
+            &pcm[..],
+            "both channels must survive the transport"
         );
     }
 
@@ -195,11 +179,7 @@ mod tests {
             Some(0),
             "the range survives its source buffer going back to the pool"
         );
-        assert_eq!(
-            out.len(),
-            8,
-            "two channels of sixteen samples is eight frames"
-        );
+        assert_eq!(out.len(), 16, "both channels of all eight frames survive");
     }
 
     #[kithara::test]
@@ -239,28 +219,21 @@ mod tests {
     #[case::mono(1)]
     #[case::stereo(2)]
     #[case::six_channels(6)]
-    fn a_range_longer_than_one_block_downmixes_every_frame(
-        #[case] channels: u16,
-        waveform_mix: Vec<f32>,
-    ) {
+    fn a_long_range_preserves_every_channel(#[case] channels: u16, waveform_mix: Vec<f32>) {
         let frames = 700;
         let width = usize::from(channels);
         let pcm = &waveform_mix[..frames * width];
-        let (mut producer, mut reader) = producer(1024, 4);
+        let (mut producer, mut reader) = producer(frames * width, 4);
         let pools = pools();
         let mut out = pools.get::<f32>();
 
         assert_eq!(producer.offer(pcm, &info(44_100, channels, 0)), Ok(()));
         assert_eq!(reader.pop(&mut out).map(|span| span.start), Some(0));
-        let scale = 1.0 / f32::from(channels);
-        let want: Vec<u32> = pcm
-            .chunks_exact(width)
-            .map(|frame| (frame.iter().sum::<f32>() * scale).to_bits())
-            .collect();
+        let want: Vec<u32> = pcm.iter().map(|sample| sample.to_bits()).collect();
         let got: Vec<u32> = out.iter().map(|sample| sample.to_bits()).collect();
         assert_eq!(
             got, want,
-            "each of {frames} frames is the mean of its channels, bit for bit"
+            "every channel of {frames} frames survives, bit for bit"
         );
     }
     #[kithara::test]

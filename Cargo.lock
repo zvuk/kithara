@@ -4849,6 +4849,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "iced",
+ "iced_runtime",
  "image",
  "keyring-core",
  "kithara",
@@ -6887,6 +6888,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tracing",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -6943,6 +6945,7 @@ dependencies = [
  "firewheel-graph",
  "foldhash 0.2.0",
  "form_urlencoded",
+ "futures",
  "futures-channel",
  "futures-core",
  "futures-sink",
@@ -6954,6 +6957,8 @@ dependencies = [
  "hashbrown 0.17.1",
  "hyper",
  "hyper-util",
+ "iced_core",
+ "iced_futures",
  "idna",
  "indexmap",
  "itertools 0.13.0",

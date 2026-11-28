@@ -77,12 +77,11 @@ fn settled(
             strength: estimate.strength(),
         }),
         waveform: analysis.waveform().map(|waveform| Wave {
-            bands: ["low", "mid", "high"],
+            bands: ["low", "low_mid", "high_mid", "high"],
             span_frames: waveform.span_frames().get(),
             buckets: waveform
                 .buckets()
-                .iter()
-                .map(|bucket| [bucket.low(), bucket.mid(), bucket.high()])
+                .map(|bucket| [bucket.left(), bucket.right()])
                 .collect(),
         }),
     };
@@ -192,7 +191,7 @@ struct Key {
 
 #[derive(Serialize)]
 struct Wave {
-    buckets: Vec<[f32; 3]>,
-    bands: [&'static str; 3],
+    buckets: Vec<[[f32; 4]; 2]>,
+    bands: [&'static str; 4],
     span_frames: u64,
 }

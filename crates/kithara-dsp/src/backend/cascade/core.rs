@@ -8,8 +8,6 @@ use fearless_simd::{Level, dispatch, prelude::*};
 use crate::filter::FilterError;
 
 mod consts {
-    /// A section that passes its input through.
-    pub(super) const IDENTITY: [f32; 5] = [1.0, 0.0, 0.0, 0.0, 0.0];
     /// Section memory below this on every entry restarts from zero at the
     /// end of each sample, before its free decay reaches subnormals.
     pub(super) const FLUSH_FLOOR: f32 = 1.0e-30;
@@ -36,7 +34,7 @@ impl Cascade {
         Ok(Self {
             channels,
             sections,
-            coefficients: vec![consts::IDENTITY; states].into_boxed_slice(),
+            coefficients: vec![crate::consts::BIQUAD_IDENTITY; states].into_boxed_slice(),
             state: vec![[0.0; 4]; states].into_boxed_slice(),
         })
     }
@@ -78,6 +76,23 @@ impl Cascade {
             return Err(FilterError::Shape);
         }
         dispatch!(Level::new(), simd => cascade_kernel(simd, self, planes, range));
+        Ok(())
+    }
+
+    pub(crate) fn process_window(&mut self, samples: &mut [f32]) -> Result<(), FilterError> {
+        if !samples.len().is_multiple_of(self.channels.get()) {
+            return Err(FilterError::Shape);
+        }
+        let sections = self.sections.get();
+        crate::backend::biquad_window(samples, self.channels.get(), sections, |plane, section| {
+            *self
+                .coefficients
+                .chunks_exact(sections)
+                .nth(plane)
+                .expect("validated plane")
+                .get(section)
+                .expect("validated section")
+        });
         Ok(())
     }
 

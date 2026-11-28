@@ -16,10 +16,10 @@ mod resume;
 
 #[cfg(feature = "dsp")]
 pub use analyzer::WaveformAnalyzer;
-pub(crate) use band::Band;
+pub use band::Band;
 pub use bucket::{Bucket, MAX_BUCKETS, WAVEFORM_BYTES_VERSION, Waveform, WaveformError};
 pub use error::AnalyzerError;
-#[cfg(test)]
+#[cfg(all(test, feature = "dsp", not(target_arch = "wasm32")))]
 pub(crate) use kithara_test_utils::bufpool as test_pools;
 pub use params::AnalysisParams;
 pub use resume::{WaveformPartialResume, WaveformResume};

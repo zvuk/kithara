@@ -191,11 +191,8 @@ fn archived_partial_resumes_without_decoding_completed_chunks(archive_tone: Vec<
 
     assert!(resumed.revision() > partial_revision);
     assert_eq!(
-        resumed.waveform().expect("resumed waveform").buckets(),
-        uninterrupted
-            .waveform()
-            .expect("uninterrupted waveform")
-            .buckets()
+        resumed.waveform().expect("resumed waveform"),
+        uninterrupted.waveform().expect("uninterrupted waveform")
     );
     let resumed_beat = resumed.beat().expect("resumed beat").artifact();
     let uninterrupted_beat = uninterrupted.beat().expect("uninterrupted beat").artifact();
