@@ -573,10 +573,7 @@ fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backend: DecoderBackend) {
     let server = TestServerHelper::new().await;
     let created = server

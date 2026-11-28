@@ -92,7 +92,7 @@ mod tests {
 
     use super::has_content_encoding;
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn content_encoding_detection_is_ascii_case_insensitive() {
         let pairs = [("CoNtEnT-EnCoDiNg".to_string(), "identity, GZIP".to_string())];
 

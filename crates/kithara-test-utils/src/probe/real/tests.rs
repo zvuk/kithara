@@ -1,6 +1,7 @@
 use super::{fire_0, fire_1, fire_2, fire_3, fire_4, fire_5, register_probes};
+use crate::kithara;
 
-#[test]
+#[kithara::test(native, platform = apple)]
 fn usdt_registration_and_firing_are_callable() {
     register_probes();
     register_probes();

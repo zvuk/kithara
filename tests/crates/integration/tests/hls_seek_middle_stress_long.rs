@@ -254,10 +254,7 @@ async fn wait_for_gate_request(player: &mut OfflinePlayer, gate: &SegmentGateHan
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn hls_seek_middle_repeated_seeks_long_stress(
     #[case] backend: DecoderBackend,
@@ -389,10 +386,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
     hang_timeout_secs(10)
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 #[ignore = "run: just test run --flash=off -p kithara-integration-tests --test suite_stress --run-ignored=only -E 'test(~hls_rate_seek_stress_keeps_playback_live)'"]
 async fn hls_rate_seek_stress_keeps_playback_live(

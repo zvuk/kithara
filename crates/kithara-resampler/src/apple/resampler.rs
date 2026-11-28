@@ -328,7 +328,7 @@ mod tests {
         Rubato,
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn resampler_apple_rubato_length_contract_44100_to_48000_stereo(
         apple_planar_44100: Vec<f32>,
         trim_silence: Vec<f32>,
@@ -336,7 +336,7 @@ mod tests {
         assert_length_contract(44_100, 48_000, &apple_planar_44100, &trim_silence);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn resampler_apple_rubato_length_contract_48000_to_44100_mono(
         apple_planar_48000: Vec<f32>,
         trim_silence: Vec<f32>,
@@ -344,7 +344,7 @@ mod tests {
         assert_length_contract(48_000, 44_100, &apple_planar_48000[..1024], &trim_silence);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn resampler_apple_tail_flush_drain_eventually_empty(
         apple_planar_44100: Vec<f32>,
         trim_silence: Vec<f32>,
@@ -363,7 +363,7 @@ mod tests {
         assert!(output_energy > input_energy * 0.5);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn resampler_apple_passthrough_near_identity(
         apple_planar_48000: Vec<f32>,
         trim_silence: Vec<f32>,
@@ -381,7 +381,7 @@ mod tests {
         assert!(rms <= consts::PASSTHROUGH_RMS_TOLERANCE);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn resampler_apple_rubato_shape_energy_close(
         apple_planar_44100: Vec<f32>,
         trim_silence: Vec<f32>,

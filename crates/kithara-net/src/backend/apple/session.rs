@@ -196,7 +196,7 @@ mod tests {
     use super::{super::response::copy_data, *};
     use crate::NetError;
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn idle_pool_capacity_leaves_the_native_connection_limit_unchanged() {
         let ephemeral_default = NSURLSessionConfiguration::ephemeralSessionConfiguration()
             .HTTPMaximumConnectionsPerHost();
@@ -222,7 +222,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn secure_and_insecure_options_rekey_the_shared_session() {
         let secure = NetOptions::default();
         let insecure = NetOptions::builder().is_insecure(true).build();
@@ -252,7 +252,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn configured_byte_pool_reaches_response_copy_path() {
         let pools = crate::test_pools::pools_with_budget(64);
         let options = NetOptions::default();
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(bytes.as_ptr(), ptr);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(platform = apple, native, flash(false))]
     fn response_copy_reports_byte_budget_exhaustion() {
         let buffers = ByteBuffers::new(crate::test_pools::pools_with_budget(1));
         let data = NSData::with_bytes(b"ab");

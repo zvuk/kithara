@@ -65,17 +65,6 @@ impl Backend {
     }
 }
 
-fn available_backends() -> Vec<Backend> {
-    #[cfg(feature = "apple")]
-    {
-        vec![Backend::Default, Backend::Apple]
-    }
-    #[cfg(not(feature = "apple"))]
-    {
-        vec![Backend::Default]
-    }
-}
-
 /// Drain the decoder and return concatenated f32 PCM samples.
 fn drain_all(decoder: &mut dyn Decoder) -> Vec<f32> {
     let mut all = Vec::new();
@@ -102,167 +91,151 @@ fn l2_norm(samples: &[f32]) -> f64 {
 }
 
 #[kithara::test]
-fn spec_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) {
-    let specs: Vec<_> = available_backends()
-        .into_iter()
-        .map(|b| (b, b.make_mp3(tone_mp3).spec()))
-        .collect();
-
-    let first = specs[0].1;
-    for (backend, spec) in &specs[1..] {
-        assert_eq!(
-            *spec, first,
-            "spec mismatch between {:?} and {:?}: {:?} vs {:?}",
-            specs[0].0, backend, first, spec
-        );
-    }
+#[case::default(Backend::Default)]
+#[cfg_attr(feature = "apple", case::apple(platform = apple, Backend::Apple))]
+fn spec_after_create_is_consistent_across_backends(
+    #[case] backend: Backend,
+    tone_mp3: &'static [u8],
+) {
+    let reference = Backend::Default.make_mp3(tone_mp3).spec();
+    let spec = backend.make_mp3(tone_mp3).spec();
+    assert_eq!(
+        spec,
+        reference,
+        "spec mismatch between {:?} and {backend:?}: {reference:?} vs {spec:?}",
+        Backend::Default
+    );
 }
 
 #[kithara::test]
-fn duration_after_create_is_consistent_across_backends(tone_mp3: &'static [u8]) {
-    let durations: Vec<_> = available_backends()
-        .into_iter()
-        .map(|b| (b, b.make_mp3(tone_mp3).duration()))
-        .collect();
-
-    for (backend, duration) in &durations {
-        let Some(kithara_decode::DecoderDuration::RawLength(d)) = duration else {
-            panic!("backend {backend:?} must report a raw PCM length for a complete MP3 file")
-        };
-        assert!(
-            d.as_secs_f64() > 1.0,
-            "duration from {backend:?} is suspiciously short: {d:?}"
-        );
-    }
-
-    let Some(kithara_decode::DecoderDuration::RawLength(first)) = durations[0].1 else {
+#[case::default(Backend::Default)]
+#[cfg_attr(feature = "apple", case::apple(platform = apple, Backend::Apple))]
+fn duration_after_create_is_consistent_across_backends(
+    #[case] backend: Backend,
+    tone_mp3: &'static [u8],
+) {
+    let Some(kithara_decode::DecoderDuration::RawLength(first)) =
+        Backend::Default.make_mp3(tone_mp3).duration()
+    else {
         panic!("Symphonia must report a raw PCM length");
     };
-    for (backend, duration) in &durations[1..] {
-        let Some(kithara_decode::DecoderDuration::RawLength(other)) = duration else {
-            panic!("backend {backend:?} must report a raw PCM length");
-        };
-        let diff = (first.as_secs_f64() - other.as_secs_f64()).abs();
-        let tol = first.as_secs_f64() * 0.05;
-        assert!(
-            diff <= tol,
-            "duration diverges between Symphonia ({:?}) and {:?} ({:?}); diff={:.3}s, tol={:.3}s",
-            first,
-            backend,
-            other,
-            diff,
-            tol
-        );
-    }
+    let Some(kithara_decode::DecoderDuration::RawLength(other)) =
+        backend.make_mp3(tone_mp3).duration()
+    else {
+        panic!("backend {backend:?} must report a raw PCM length for a complete MP3 file")
+    };
+    assert!(
+        other.as_secs_f64() > 1.0,
+        "duration from {backend:?} is suspiciously short: {other:?}"
+    );
+    let diff = (first.as_secs_f64() - other.as_secs_f64()).abs();
+    let tol = first.as_secs_f64() * 0.05;
+    assert!(
+        diff <= tol,
+        "duration diverges between Symphonia ({first:?}) and {backend:?} ({other:?}); \
+         diff={diff:.3}s, tol={tol:.3}s"
+    );
 }
 
 #[kithara::test]
-fn total_frames_are_consistent_across_backends(tone_mp3: &'static [u8]) {
-    let frame_counts: Vec<_> = available_backends()
-        .into_iter()
-        .map(|b| {
-            let mut dec = b.make_mp3(tone_mp3);
-            let samples = drain_all(&mut *dec);
-            let channels = dec.spec().channels.max(1) as usize;
-            let frames = samples.len() / channels;
-            (b, frames)
-        })
-        .collect();
-
-    let first = frame_counts[0].1;
-    for (backend, frames) in &frame_counts[1..] {
-        let tol = first.max(*frames) / 100;
-        let diff = first.abs_diff(*frames);
-        assert!(
-            diff <= tol,
-            "frame count mismatch: {:?}={}, {:?}={}, diff={} > tol={}",
-            frame_counts[0].0,
-            first,
-            backend,
-            frames,
-            diff,
-            tol
-        );
-    }
+#[case::default(Backend::Default)]
+#[cfg_attr(feature = "apple", case::apple(platform = apple, Backend::Apple))]
+fn total_frames_are_consistent_across_backends(#[case] backend: Backend, tone_mp3: &'static [u8]) {
+    let frames = |backend: Backend| {
+        let mut dec = backend.make_mp3(tone_mp3);
+        let samples = drain_all(&mut *dec);
+        samples.len() / dec.spec().channels.max(1) as usize
+    };
+    let first = frames(Backend::Default);
+    let other = frames(backend);
+    let tol = first.max(other) / 100;
+    let diff = first.abs_diff(other);
+    assert!(
+        diff <= tol,
+        "frame count mismatch: {:?}={first}, {backend:?}={other}, diff={diff} > tol={tol}",
+        Backend::Default
+    );
 }
 
 #[kithara::test]
-fn seek_then_first_chunk_timestamp_is_after_target(tone_mp3: &'static [u8]) {
+#[case::default(Backend::Default)]
+#[cfg_attr(feature = "apple", case::apple(platform = apple, Backend::Apple))]
+fn seek_then_first_chunk_timestamp_is_after_target(
+    #[case] backend: Backend,
+    tone_mp3: &'static [u8],
+) {
     const TARGET: Duration = Duration::from_millis(500);
     let tol = Duration::from_millis(200);
 
-    for backend in available_backends() {
-        let mut dec = backend.make_mp3(tone_mp3);
-        dec.seek(TARGET).expect("seek should succeed");
-        let outcome = dec.next_chunk().expect("next_chunk after seek");
-        let chunk = AudioChunk::try_from(outcome).expect("at least one chunk after a 0.5s seek");
+    let mut dec = backend.make_mp3(tone_mp3);
+    dec.seek(TARGET).expect("seek should succeed");
+    let outcome = dec.next_chunk().expect("next_chunk after seek");
+    let chunk = AudioChunk::try_from(outcome).expect("at least one chunk after a 0.5s seek");
 
-        let ts = chunk.meta.timestamp;
+    let ts = chunk.meta.timestamp;
+    assert!(
+        ts + tol >= TARGET,
+        "{backend:?}: first chunk after seek at {ts:?} is earlier than target {TARGET:?} - tol {tol:?}"
+    );
+}
+
+#[kithara::test]
+#[case::default(Backend::Default)]
+#[cfg_attr(feature = "apple", case::apple(platform = apple, Backend::Apple))]
+fn end_of_stream_returns_none_repeatedly(#[case] backend: Backend, tone_mp3: &'static [u8]) {
+    let mut dec = backend.make_mp3(tone_mp3);
+    while matches!(
+        dec.next_chunk().expect("decode before EOF should succeed"),
+        DecoderChunkOutcome::Chunk(_)
+    ) {}
+
+    for _ in 0..3 {
+        let next = dec.next_chunk().expect("decode after EOF");
         assert!(
-            ts + tol >= TARGET,
-            "{:?}: first chunk after seek at {:?} is earlier than target {:?} - tol {:?}",
-            backend,
-            ts,
-            TARGET,
-            tol
+            matches!(next, DecoderChunkOutcome::Eof),
+            "backend {backend:?} must keep returning Eof at end-of-stream"
         );
     }
 }
 
 #[kithara::test]
-fn end_of_stream_returns_none_repeatedly(tone_mp3: &'static [u8]) {
-    for backend in available_backends() {
-        let mut dec = backend.make_mp3(tone_mp3);
-        while matches!(
-            dec.next_chunk().expect("decode before EOF should succeed"),
-            DecoderChunkOutcome::Chunk(_)
-        ) {}
+#[case::default(Backend::Default)]
+#[cfg_attr(feature = "apple", case::apple(platform = apple, Backend::Apple))]
+fn wav_pcm_round_trip_matches_signal_across_backends(
+    #[case] backend: Backend,
+    protocol_wav: &'static [u8],
+) {
+    let mut dec = backend.make_wav(protocol_wav);
 
-        for _ in 0..3 {
-            let next = dec.next_chunk().expect("decode after EOF");
-            assert!(
-                matches!(next, DecoderChunkOutcome::Eof),
-                "backend {backend:?} must keep returning Eof at end-of-stream"
-            );
-        }
-    }
-}
+    let spec = dec.spec();
+    assert_eq!(
+        spec.sample_rate.get(),
+        consts::WAV_SAMPLE_RATE,
+        "{backend:?}: sample rate mismatch"
+    );
+    assert_eq!(
+        spec.channels,
+        consts::WAV_CHANNELS,
+        "{backend:?}: channel count mismatch"
+    );
 
-#[kithara::test]
-fn wav_pcm_round_trip_matches_signal_across_backends(protocol_wav: &'static [u8]) {
-    for backend in available_backends() {
-        let mut dec = backend.make_wav(protocol_wav);
+    let samples = drain_all(&mut *dec);
+    let channels = usize::from(spec.channels).max(1);
+    let frames = samples.len() / channels;
 
-        let spec = dec.spec();
-        assert_eq!(
-            spec.sample_rate.get(),
-            consts::WAV_SAMPLE_RATE,
-            "{backend:?}: sample rate mismatch"
-        );
-        assert_eq!(
-            spec.channels,
-            consts::WAV_CHANNELS,
-            "{backend:?}: channel count mismatch"
-        );
+    let tol = consts::WAV_FRAMES / 200;
+    let diff = consts::WAV_FRAMES.abs_diff(frames);
+    let expected = consts::WAV_FRAMES;
+    assert!(
+        diff <= tol,
+        "{backend:?}: decoded {frames} frames, expected ~{expected} (tol {tol})"
+    );
 
-        let samples = drain_all(&mut *dec);
-        let channels = usize::from(spec.channels).max(1);
-        let frames = samples.len() / channels;
-
-        let tol = consts::WAV_FRAMES / 200;
-        let diff = consts::WAV_FRAMES.abs_diff(frames);
-        let expected = consts::WAV_FRAMES;
-        assert!(
-            diff <= tol,
-            "{backend:?}: decoded {frames} frames, expected ~{expected} (tol {tol})"
-        );
-
-        let peak = samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
-        assert!(
-            peak > 0.1,
-            "{backend:?}: decoded PCM peak {peak} is too quiet — signal likely dropped"
-        );
-    }
+    let peak = samples.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+    assert!(
+        peak > 0.1,
+        "{backend:?}: decoded PCM peak {peak} is too quiet — signal likely dropped"
+    );
 }
 
 /// Standalone (non-fMP4) container codecs the Apple `AudioFileServices`
@@ -303,7 +276,7 @@ impl StandaloneCase {
 /// bitstreams that the device must decode through the Apple backend (the
 /// only decoder shipped in the iOS build — no Symphonia fallback).
 #[cfg(feature = "apple")]
-#[kithara::test]
+#[kithara::test(platform = apple)]
 #[case::alac(StandaloneCase::AlacM4a)]
 #[case::native_flac(StandaloneCase::NativeFlac)]
 fn apple_decodes_standalone(#[case] case: StandaloneCase, standalone_audio: [&'static [u8]; 2]) {
@@ -336,7 +309,7 @@ fn apple_decodes_standalone(#[case] case: StandaloneCase, standalone_audio: [&'s
 }
 
 #[cfg(feature = "apple")]
-#[kithara::test]
+#[kithara::test(platform = apple)]
 fn full_decode_l2_norm_matches_within_tolerance(tone_mp3: &'static [u8]) {
     const TOL_REL: f64 = 0.02;
 
