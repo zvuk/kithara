@@ -164,7 +164,12 @@ mod sharding_tests {
         };
         assert_eq!(
             runner.cargo.packages,
-            ["kithara-sync", "kithara-link", "kithara-sync-tests"]
+            [
+                "kithara-sync",
+                "kithara-link",
+                "kithara-sync-tests",
+                "kithara-sync-oracle-tests",
+            ]
         );
         assert!(
             runner
