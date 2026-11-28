@@ -74,12 +74,12 @@ fn hammer(warm_probe: Option<&'static str>, probe: &'static str) -> (usize, usiz
             });
         }
         warm.wait();
-        baseline = memory::live_bytes();
-        memory::reset_peak();
+        baseline = memory::process_live_bytes();
+        memory::reset_process_peak();
         go.wait();
     });
-    let peak = memory::peak_bytes().saturating_sub(baseline);
-    let left = memory::live_bytes().saturating_sub(baseline);
+    let peak = memory::process_peak_bytes().saturating_sub(baseline);
+    let left = memory::process_live_bytes().saturating_sub(baseline);
     (peak, left)
 }
 
@@ -103,7 +103,7 @@ fn continuous_probes_keep_the_heap_bounded() {
         "unobserved probes grew the heap by {peak} B"
     );
 
-    let before = memory::live_bytes();
+    let before = memory::process_live_bytes();
     let history = scope();
     let (peak, _) = hammer(None, "history");
     let history_bytes = MAX_EVENTS * size_of::<ProbeEvent>();
@@ -131,7 +131,7 @@ fn continuous_probes_keep_the_heap_bounded() {
     );
     drop(history);
 
-    let left = memory::live_bytes().saturating_sub(before);
+    let left = memory::process_live_bytes().saturating_sub(before);
     eprintln!("after the scopes: left +{left} B");
     assert!(
         left <= STEADY_BUDGET,

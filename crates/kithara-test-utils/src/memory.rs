@@ -8,38 +8,73 @@
 //! static HEAP: kithara_test_utils::memory::Counting = kithara_test_utils::memory::Counting;
 //! ```
 //!
-//! and then reads [`live_bytes`] around the construction it is measuring.
-//! [`measure`] wraps that pattern: it returns what the value it built holds,
-//! so a suite can name one line per subsystem instead of one total.
+//! and then reads [`live_bytes`] around the construction it is measuring on
+//! that thread. [`measure`] wraps that pattern: it returns what the value it
+//! built holds, so a suite can name one line per subsystem instead of one total.
+//! Tests that deliberately measure work across owned worker threads use
+//! [`process_live_bytes`] instead.
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
+    cell::Cell,
     sync::atomic::{AtomicIsize, Ordering},
 };
 
-/// Live heap bytes, maintained by [`Counting`].
-///
-/// Signed, because the counter only sees what this binary allocates: a target
-/// that links `std` dynamically frees buffers through here that `std` itself
-/// allocated before this allocator was installed, and were the balance
-/// unsigned that free would underflow it and the next allocation would panic
-/// on the overflowing add — a panic inside the global allocator, which the
-/// runtime can only answer by aborting the process.
-static LIVE_BYTES: AtomicIsize = AtomicIsize::new(0);
-/// Highest [`LIVE_BYTES`] since the last [`reset_peak`].
-static PEAK_BYTES: AtomicIsize = AtomicIsize::new(0);
+static PROCESS_LIVE_BYTES: AtomicIsize = AtomicIsize::new(0);
+static PROCESS_PEAK_BYTES: AtomicIsize = AtomicIsize::new(0);
 
-/// Live heap bytes this process currently holds, and zero while the balance
+struct Accounting {
+    /// Signed because a target that links `std` dynamically can free buffers
+    /// allocated before this allocator was installed; an unsigned balance would
+    /// underflow and panic inside the global allocator.
+    live: Cell<isize>,
+    peak: Cell<isize>,
+}
+
+thread_local! {
+    static ACCOUNTING: Accounting = const {
+        Accounting {
+            live: Cell::new(0),
+            peak: Cell::new(0),
+        }
+    };
+}
+
+impl Accounting {
+    fn live(&self) -> usize {
+        above_zero(self.live.get())
+    }
+
+    fn peak(&self) -> usize {
+        above_zero(self.peak.get())
+    }
+
+    fn reset_peak(&self) {
+        self.peak.set(self.live.get());
+    }
+
+    fn charge(&self, bytes: usize) {
+        let live = self.live.get().wrapping_add(bytes as isize);
+        self.live.set(live);
+        self.peak.set(self.peak.get().max(live));
+    }
+
+    fn release(&self, bytes: usize) {
+        self.live.set(self.live.get().wrapping_sub(bytes as isize));
+    }
+}
+
+/// Live heap bytes this thread currently holds, and zero while the balance
 /// stands below where it started.
 #[must_use]
 pub fn live_bytes() -> usize {
-    above_zero(LIVE_BYTES.load(Ordering::Relaxed))
+    ACCOUNTING.with(Accounting::live)
 }
 
-/// Highest live heap since the last [`reset_peak`].
+/// Highest live heap on this thread since the last [`reset_peak`].
 #[must_use]
 pub fn peak_bytes() -> usize {
-    above_zero(PEAK_BYTES.load(Ordering::Relaxed))
+    ACCOUNTING.with(Accounting::peak)
 }
 
 /// A balance as a count of bytes: what it holds, or nothing once it has fallen
@@ -48,12 +83,33 @@ fn above_zero(balance: isize) -> usize {
     balance.max(0).unsigned_abs()
 }
 
-/// Drop the recorded peak to what is live now.
+/// Drop the calling thread's recorded peak to what is live now.
 pub fn reset_peak() {
-    PEAK_BYTES.store(LIVE_BYTES.load(Ordering::Relaxed), Ordering::Relaxed);
+    ACCOUNTING.with(Accounting::reset_peak);
 }
 
-/// Bytes still live after `build` returns, and the peak it passed through.
+/// Live heap bytes across every thread in this process.
+#[must_use]
+pub fn process_live_bytes() -> usize {
+    above_zero(PROCESS_LIVE_BYTES.load(Ordering::Relaxed))
+}
+
+/// Highest process-wide live heap since the last [`reset_process_peak`].
+#[must_use]
+pub fn process_peak_bytes() -> usize {
+    above_zero(PROCESS_PEAK_BYTES.load(Ordering::Relaxed))
+}
+
+/// Drop the process-wide recorded peak to what is live now.
+pub fn reset_process_peak() {
+    PROCESS_PEAK_BYTES.store(
+        PROCESS_LIVE_BYTES.load(Ordering::Relaxed),
+        Ordering::Relaxed,
+    );
+}
+
+/// Bytes still live after `build` returns on the calling thread, and the peak
+/// it passed through. Allocations on other threads are not included.
 ///
 /// The value stays alive across the measurement and is handed back, so a
 /// caller measures what a subsystem *holds*, not what it touched and freed.
@@ -86,7 +142,7 @@ impl Heap {
     }
 }
 
-/// The system allocator, counting live and peak bytes.
+/// The system allocator, counting per-thread and process-wide heap balances.
 pub struct Counting;
 
 // SAFETY: every method forwards to `System` with the layout it was given and
@@ -130,16 +186,18 @@ unsafe impl GlobalAlloc for Counting {
     }
 }
 
-/// Add `bytes` to the live total and raise the peak when that is a new high.
+/// Add `bytes` to the calling thread and process balances.
 fn charge(bytes: usize) {
+    let _ = ACCOUNTING.try_with(|accounting| accounting.charge(bytes));
     let bytes = bytes as isize;
-    let live = LIVE_BYTES
+    let live = PROCESS_LIVE_BYTES
         .fetch_add(bytes, Ordering::Relaxed)
         .wrapping_add(bytes);
-    PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
+    PROCESS_PEAK_BYTES.fetch_max(live, Ordering::Relaxed);
 }
 
-/// Take `bytes` off the live total.
+/// Take `bytes` off the calling thread and process live balances.
 fn release(bytes: usize) {
-    LIVE_BYTES.fetch_sub(bytes as isize, Ordering::Relaxed);
+    let _ = ACCOUNTING.try_with(|accounting| accounting.release(bytes));
+    PROCESS_LIVE_BYTES.fetch_sub(bytes as isize, Ordering::Relaxed);
 }
