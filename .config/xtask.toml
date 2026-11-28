@@ -4041,6 +4041,14 @@ sources = [
 ]
 timeout_minutes = 180
 
+[ext.ci.planning.dedicated.host-replace-binary]
+owner = "xtask/src/ci/host/mac/services.rs"
+platforms = ["macos"]
+kinds = ["main"]
+semantics = { kind = "provisioning", acceptance = "native-exit" }
+sources = [".gitlab/ci/host.yml", "xtask/src/ci/host/mac/services.rs"]
+timeout_minutes = 30
+
 [ext.ci.planning.dedicated.network]
 owner = ".config/just/test.just"
 platforms = ["linux", "macos"]
@@ -4217,6 +4225,7 @@ timeout_minutes = 180
 ".gitlab/ci/deep.yml::deps:shear" = ["deps-shear"]
 ".gitlab/ci/deep.yml::deps:unused" = ["deps-unused"]
 ".gitlab/ci/host.yml::host:provision" = ["host-provision"]
+".gitlab/ci/host.yml::host:replace-binary" = ["host-replace-binary"]
 ".gitlab/ci/linux.yml::linux:arch" = ["linux-arch"]
 ".gitlab/ci/linux.yml::linux:broadcast" = ["linux-broadcast"]
 ".gitlab/ci/linux.yml::linux:check" = ["linux-check"]

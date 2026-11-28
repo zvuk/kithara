@@ -43,6 +43,9 @@ enum MacCommand {
     InstallCache,
     /// Install the current Rust executable and launchd service definitions.
     InstallServices,
+    /// Replace the CI executable control jobs and periodic agents run with
+    /// this one.
+    ReplaceBinary,
     /// Validate credentials and activate the repository bridge daemon.
     ActivateBridge,
     /// Configure `GitLab` runners from local token files.
@@ -124,6 +127,7 @@ pub(crate) fn run(args: &MacArgs) -> Result<()> {
         MacCommand::InstallServices => {
             ServiceInstaller::new(&config, &process).install(&args.config, &args.pins)
         }
+        MacCommand::ReplaceBinary => ServiceInstaller::new(&config, &process).replace_binary(),
         MacCommand::ActivateBridge => ServiceInstaller::new(&config, &process).activate_bridge(),
         MacCommand::ConfigureRunners => RunnerManager::new(&config, &process).configure(),
         MacCommand::Activate => RunnerManager::new(&config, &process).activate(),

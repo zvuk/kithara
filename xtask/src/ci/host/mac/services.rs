@@ -41,6 +41,17 @@ impl<'a> ServiceInstaller<'a> {
         Ok(())
     }
 
+    /// Puts this executable where control jobs and the periodic agents run it
+    /// from, so they run the default branch's code rather than the code of the
+    /// last provisioning pass.
+    pub(super) fn replace_binary(&self) -> Result<()> {
+        let source = std::env::current_exe().context("resolving current CI executable")?;
+        let target = self.replaceable_binary();
+        replace_executable(&source, &target)?;
+        info!(binary = %target.display(), "replaceable CI executable updated");
+        Ok(())
+    }
+
     pub(super) fn install_cache(&self, binary_directory: &Path) -> Result<()> {
         require_macos()?;
         let root = self.service_root().join("ci-cache");
@@ -481,6 +492,20 @@ fn path_text(path: &Path) -> Result<&str> {
         .with_context(|| format!("path is not UTF-8: {}", path.display()))
 }
 
+/// Swaps `target` for a copy of `source` in one rename, so a process already
+/// running the old file keeps it and the next one starts the new file.
+#[cfg(unix)]
+fn replace_executable(source: &Path, target: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let staged = target.with_extension("staged");
+    fs::copy(source, &staged)
+        .with_context(|| format!("copying {} to {}", source.display(), staged.display()))?;
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))
+        .with_context(|| format!("making {} executable", staged.display()))?;
+    fs::rename(&staged, target).with_context(|| format!("replacing {}", target.display()))
+}
+
 pub(super) fn xml(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -553,6 +578,30 @@ mod tests {
         Cli,
         ci::{config::fixture, process::Recording},
     };
+
+    /// A control job already running the old executable keeps it; the next
+    /// one starts the new executable, never a half-written file.
+    #[test]
+    fn replacing_the_binary_leaves_running_copies_whole() -> Result<()> {
+        use std::{io::Read as _, os::unix::fs::PermissionsExt};
+
+        let directory = tempfile::tempdir()?;
+        let source = directory.path().join("built");
+        let target = directory.path().join(ServiceInstaller::BINARY_NAME);
+        fs::write(&source, "main head")?;
+        fs::write(&target, "last provision")?;
+        let mut running = fs::File::open(&target)?;
+
+        replace_executable(&source, &target)?;
+
+        let mut kept = String::new();
+        running.read_to_string(&mut kept)?;
+        assert_eq!(kept, "last provision");
+        assert_eq!(fs::read_to_string(&target)?, "main head");
+        assert_eq!(fs::metadata(&target)?.permissions().mode() & 0o777, 0o755);
+        assert_eq!(fs::read_dir(directory.path())?.count(), 2);
+        Ok(())
+    }
 
     #[test]
     fn periodic_agent_commands_are_accepted_by_the_host_cli() -> Result<()> {

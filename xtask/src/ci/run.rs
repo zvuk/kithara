@@ -1213,7 +1213,8 @@ mod tests {
                     text.split(invocation)
                         .skip(1)
                         .filter_map(|rest| rest.split_whitespace().next())
-                        .map(str::to_string),
+                        // A quoted script line ends the lane name with its quote.
+                        .map(|lane| lane.trim_end_matches(['\'', '"']).to_string()),
                 );
             }
         }

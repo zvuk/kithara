@@ -17,6 +17,11 @@ verdict:
   # Every lane it judges, and every one of them optional: platforms are opt-in,
   # so a pipeline that did not ask for Android has no Android job to wait for.
   needs:
+    # On the default branch, the executable this runs is the one the merge
+    # just put in place.
+    - job: host:replace-binary
+      artifacts: false
+      optional: true
     - job: apple:test
       artifacts: true
       optional: true

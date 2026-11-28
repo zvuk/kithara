@@ -80,7 +80,9 @@ protected. `configure-runners` writes native shell executors.
 
 Control jobs (`kithara-macos-control`) run in a separate runner process
 (`control.toml`, `concurrent = 1`). Provisioning issues `runner-macos-control.token`
-with `GITLAB_TOKEN` (scope `create_runner`) only when the file is absent. Apple and
+with `GITLAB_TOKEN` (scope `create_runner`) only when the file is absent. They run
+`shared-bin/kithara-ci`, which `host:replace-binary` replaces on each `main`
+pipeline; a PR's verdict changes are proven by unit tests. Apple and
 dependency-audit lanes share the host filesystem and cache roots across jobs.
 Linux and browser placement is selected separately; the Mac has no
 Linux runner, Docker image builder or Colima launch agent.

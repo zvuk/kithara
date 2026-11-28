@@ -1004,6 +1004,44 @@ fn control_jobs_alone_take_the_control_registration_and_build_nothing() {
     }
 }
 
+/// Control jobs run the host's executable, so a merge has to put the merged
+/// code there, on a build registration and before that merge's own verdict.
+/// Otherwise verdict keeps the code of whichever provisioning pass ran last.
+#[test]
+fn a_merge_replaces_the_executable_control_jobs_run_before_its_verdict() {
+    let config = GitlabConfig::load(&workspace_root());
+    let job = "host:replace-binary";
+    assert_eq!(
+        config.admitted_kinds(job),
+        BTreeSet::from(["main".to_owned()]),
+        "only reviewed default-branch code replaces the host's executable"
+    );
+    let tags = job_tags(&config, job);
+    assert!(
+        tags.iter()
+            .all(|tag| MAC_BUILD_TAGS.contains(&tag.as_str())),
+        "`{job}` builds the executable, so it takes a build registration: {tags:?}"
+    );
+    let script = config
+        .effective_value(job, "script")
+        .and_then(|lines| lines.as_sequence().cloned())
+        .unwrap_or_default();
+    assert_eq!(
+        script.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
+        ["just ci host mac replace-binary"]
+    );
+    for control in CONTROL_JOBS {
+        let needs = config
+            .effective_value(control, "needs")
+            .and_then(|needs| needs.as_sequence().cloned())
+            .unwrap_or_default();
+        assert!(
+            needs.iter().any(|need| need["job"].as_str() == Some(job)),
+            "`{control}` on the default branch must wait for `{job}`"
+        );
+    }
+}
+
 /// A Mac build slot is spent only on work the lane catalog places on macOS.
 #[test]
 fn mac_build_registrations_run_only_lanes_the_catalog_places_on_macos() {
@@ -1099,8 +1137,10 @@ fn verdict_downloads_every_judged_apple_report() {
         .and_then(Value::as_sequence)
         .expect("the verdict declares judged jobs")
         .iter()
+        .map(|need| mapping(need, "a verdict dependency"))
+        // The executable the verdict runs, not a report it judges.
+        .filter(|need| need.get("job").and_then(Value::as_str) != Some("host:replace-binary"))
         .map(|need| {
-            let need = mapping(need, "a verdict dependency");
             assert_eq!(need.get("artifacts").and_then(Value::as_bool), Some(true));
             assert_eq!(need.get("optional").and_then(Value::as_bool), Some(true));
             need.get("job")

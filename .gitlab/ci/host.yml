@@ -15,3 +15,19 @@ host:provision:
     - if: $KITHARA_PIPELINE_KIND == "provision"
   script:
     - just ci host provision
+
+# The CI executable control jobs and the periodic agents run is the default
+# branch's. A merge replaces it here, so verdict runs the code that was merged
+# instead of the code of the last provisioning pass. A merge request is judged
+# by the default branch's verdict; its own verdict code is covered by the unit
+# tests, not by a run.
+host:replace-binary:
+  extends: .macos-job
+  stage: apple
+  timeout: 30 minutes
+  interruptible: false
+  needs: []
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "main"
+  script:
+    - just ci host mac replace-binary
