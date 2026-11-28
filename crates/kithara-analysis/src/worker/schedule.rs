@@ -125,7 +125,11 @@ mod tests {
     use rangemap::RangeSet;
 
     use super::Schedule;
-    use crate::consts;
+
+    mod consts {
+        pub(super) const WORKER_SCHEDULE_EXTENT: u64 = 1000;
+        pub(super) const WINDOW: u64 = 200;
+    }
 
     fn coverage(runs: &[(u64, u64)]) -> RangeSet<u64> {
         let mut out = RangeSet::new();

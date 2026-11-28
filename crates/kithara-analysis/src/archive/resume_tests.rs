@@ -4,7 +4,10 @@ use kithara_platform::time::Duration;
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_fixtures::analysis_beat_fixtures::archive_tone;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{Pools, TestPools, pools, sample_buffer},
+    kithara,
+};
 
 use super::{AnalysisFile, AnalysisFileSpec, AnalysisFileUpdate};
 use crate::{
@@ -12,7 +15,6 @@ use crate::{
     analyzer::{AnalysisDemand, Detector, Extent, Ingest, TrackAnalyzers},
     beat::GridParams,
     consts,
-    test_pools::{Pools, TestPools, pools, sample_buffer},
     tests::fixtures::beat_detector,
 };
 

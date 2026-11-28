@@ -13,6 +13,7 @@ use kithara_platform::sync::Arc;
 use kithara_platform::thread;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
+use kithara_test_utils::bufpool::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_test_utils::kithara;
 #[cfg(feature = "analysis-beat")]
@@ -27,10 +28,13 @@ use crate::{
     beat::{BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
     blob::to_bytes,
 };
-use crate::{
-    consts,
-    test_pools::{Pools, sample_buffer},
-};
+
+/// The source axis every fixture in this suite is written on.
+pub(super) mod consts {
+    pub(in crate::tests) const FIXTURES_SR: u32 = 44_100;
+    pub(in crate::tests) const CH: u16 = 2;
+    pub(in crate::tests) const CHUNK: u64 = 8820;
+}
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub(super) type Artifacts = (Waveform, Vec<u64>);
@@ -116,7 +120,7 @@ pub(super) fn assert_agrees(want: &Artifacts, got: &Artifacts, what: &str) {
     );
     for (a, b) in want.1.iter().zip(got.1.iter()) {
         assert!(
-            a.abs_diff(*b) <= consts::MARKER_TOLERANCE,
+            a.abs_diff(*b) <= crate::consts::MARKER_TOLERANCE,
             "{what}: marker moved from {a} to {b}"
         );
     }
@@ -231,7 +235,7 @@ impl FakeReader {
 }
 
 pub(super) fn idle_ingest() -> crate::producer::ring::Reader {
-    crate::producer::ring::open_for(&crate::test_pools::pools(), spec().sample_rate)
+    crate::producer::ring::open_for(&kithara_test_utils::bufpool::pools(), spec().sample_rate)
         .expect("test ring fits the pools")
         .1
 }

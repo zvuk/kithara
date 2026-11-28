@@ -558,6 +558,9 @@ kithara-stream v0.0.1 (/workspace/crates/kithara-stream)\n";
         // ships with the product; the detector stays behind features the device
         // does not enable.
         assert!(names.contains("kithara-beat"));
+        // The device computes no analysis, so the analysis crate is not part of
+        // the product.
+        assert!(!names.contains("kithara-analysis"));
         assert!(!names.contains("kithara-app"));
         assert!(!names.contains("kithara-app-tests"));
     }

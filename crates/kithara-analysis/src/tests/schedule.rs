@@ -14,7 +14,10 @@ use kithara_platform::{
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_signal::{AudioChunk, AudioSpec, FrameCoverage, FrameSpan};
 use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{TestPools, pools},
+    kithara,
+};
 use kithara_worker::TickResult;
 use num_traits::cast::ToPrimitive;
 
@@ -25,13 +28,17 @@ use super::{
         producer::{AnalysisProducer, ring},
         worker::Job,
     },
-    fixtures::{chunk, sine_from, spec},
+    fixtures::{self, chunk, sine_from, spec},
     node::NodeHarness,
 };
-use crate::{
-    AnalysisCompletion, AnalysisOutcome, AnalysisProgress, consts,
-    test_pools::{TestPools, pools},
-};
+use crate::{AnalysisCompletion, AnalysisOutcome, AnalysisProgress};
+
+mod consts {
+    pub(super) const SCHEDULE_EXTENT: u64 = 4 * 44_100;
+    pub(super) const TICKS: usize = 8192;
+    pub(super) const SCHEDULE_TOKEN: &str = "scheduled-track";
+    pub(super) const SCHEDULE_WINDOW_SECONDS: u32 = 1;
+}
 
 fn duration_for_frames(_rate: u32, frames: u64) -> Duration {
     spec()
@@ -76,7 +83,7 @@ impl Source {
             pcm,
             frames,
             reports: Some(frames),
-            chunk: consts::CHUNK,
+            chunk: fixtures::consts::CHUNK,
             snap: 1,
             floor: 0,
             refines: false,
@@ -162,7 +169,7 @@ impl AudioSession for Source {
         } else {
             reports
         };
-        Some(duration_for_frames(consts::FIXTURES_SR, frames))
+        Some(duration_for_frames(fixtures::consts::FIXTURES_SR, frames))
     }
 
     fn event_bus(&self) -> &EventBus {
@@ -208,7 +215,7 @@ impl AudioRead for Source {
     }
 
     fn position(&self) -> Duration {
-        duration_for_frames(consts::FIXTURES_SR, self.at)
+        duration_for_frames(fixtures::consts::FIXTURES_SR, self.at)
     }
 
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, AudioReadError> {
@@ -234,7 +241,7 @@ impl AudioControl for Source {
             self.push(Call::PastEof { to: target });
             return Ok(SeekOutcome::PastEof {
                 target: position,
-                duration: duration_for_frames(consts::FIXTURES_SR, self.frames),
+                duration: duration_for_frames(fixtures::consts::FIXTURES_SR, self.frames),
             });
         }
 
@@ -247,7 +254,7 @@ impl AudioControl for Source {
         let reported = if self.echoes { target } else { landed };
         Ok(SeekOutcome::Landed {
             target: position,
-            landed_at: duration_for_frames(consts::FIXTURES_SR, reported),
+            landed_at: duration_for_frames(fixtures::consts::FIXTURES_SR, reported),
         })
     }
 }
@@ -371,7 +378,7 @@ where
         let frames = frames.to_usize().unwrap_or(0);
         assert_eq!(
             self.producer
-                .offer(sine_from(self.pcm, at, frames), &super::fixtures::info(at)),
+                .offer(sine_from(self.pcm, at, frames), &fixtures::info(at)),
             Ok(()),
             "the transport takes a range on its own axis"
         );
@@ -458,8 +465,8 @@ pub(super) fn assert_reader_visible_length_basis(analysis_pcm: &'static [f32]) {
         reader.chunk = 44_100;
         reader.media_origin = Some(media_origin);
         reader.visible_origin = visible_origin;
-        let builder =
-            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(consts::NODE_FOLD);
+        let builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
+            .with_waveform(crate::consts::NODE_FOLD);
         let mut pass = Pass::open_with_settings(
             reader,
             builder,
@@ -547,8 +554,8 @@ fn decoded_at(calls: &[Call]) -> Vec<u64> {
 }
 
 fn least_runs() -> usize {
-    let chunk =
-        u64::from(consts::FIXTURES_SR).saturating_mul(u64::from(consts::SCHEDULE_WINDOW_SECONDS));
+    let chunk = u64::from(fixtures::consts::FIXTURES_SR)
+        .saturating_mul(u64::from(consts::SCHEDULE_WINDOW_SECONDS));
     usize::try_from(consts::SCHEDULE_EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
 }
 
@@ -1102,19 +1109,19 @@ mod artifacts {
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_signal::FrameSpan;
     use kithara_test_fixtures::analysis_fixtures::analysis_pcm;
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{TestPools, pools},
+        kithara,
+    };
 
     use super::{
         super::{
             super::{analyzer::AnalyzerBuilder, beat::GridParams},
-            fixtures::{Artifacts, artifacts, assert_agrees, beat_detector},
+            fixtures::{self, Artifacts, artifacts, assert_agrees, beat_detector},
         },
-        Drive, Pass, Source, targets,
+        Drive, Pass, Source, consts, targets,
     };
-    use crate::{
-        BeatAnalysisConfig, consts,
-        test_pools::{TestPools, pools},
-    };
+    use crate::BeatAnalysisConfig;
 
     struct Route {
         artifacts: Artifacts,
@@ -1123,18 +1130,18 @@ mod artifacts {
     }
 
     fn least_runs() -> usize {
-        let chunk = u64::from(consts::FIXTURES_SR)
+        let chunk = u64::from(fixtures::consts::FIXTURES_SR)
             .saturating_mul(u64::from(consts::SCHEDULE_WINDOW_SECONDS));
-        usize::try_from(consts::ARTIFACTS_EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
+        usize::try_from(crate::consts::ARTIFACTS_EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
     }
 
     fn beat_pass() -> AnalyzerBuilder<RubatoBackend, TestPools> {
         AnalyzerBuilder::<RubatoBackend, _>::new(pools())
-            .with_waveform(consts::HOLD_FOLD)
+            .with_waveform(crate::consts::HOLD_FOLD)
             .with_beat_config(
                 BeatAnalysisConfig::builder()
                     .resampler_backend(RubatoBackend::default())
-                    .detector_window_seconds(consts::ARTIFACTS_WINDOW_SECONDS)
+                    .detector_window_seconds(crate::consts::ARTIFACTS_WINDOW_SECONDS)
                     .detector_overlap_seconds(0)
                     .build(),
             )
@@ -1175,7 +1182,7 @@ mod artifacts {
         // The same source, once decoded in order because it reports no
         // length, and once scheduled because it does.
         let linear = covered(
-            Source::new(analysis_pcm, consts::ARTIFACTS_EXTENT).reporting(None),
+            Source::new(analysis_pcm, crate::consts::ARTIFACTS_EXTENT).reporting(None),
             &[],
         )
         .await;
@@ -1185,7 +1192,11 @@ mod artifacts {
         );
         assert_eq!(linear.seeks, 0, "a source with no length is read in order");
 
-        let scheduled = covered(Source::new(analysis_pcm, consts::ARTIFACTS_EXTENT), &[]).await;
+        let scheduled = covered(
+            Source::new(analysis_pcm, crate::consts::ARTIFACTS_EXTENT),
+            &[],
+        )
+        .await;
         assert!(
             scheduled.seeks > 1,
             "the other route must really have been scheduled, not read in order"
@@ -1217,17 +1228,17 @@ mod artifacts {
         analysis_pcm: &'static [f32],
     ) {
         let linear = covered(
-            Source::new(analysis_pcm, consts::ARTIFACTS_EXTENT).reporting(None),
+            Source::new(analysis_pcm, crate::consts::ARTIFACTS_EXTENT).reporting(None),
             &[],
         )
         .await;
 
         // Playback covered the first half in its own decode blocks; the
         // schedule has to take up the rest.
-        let block = consts::ARTIFACTS_EXTENT / 16;
+        let block = crate::consts::ARTIFACTS_EXTENT / 16;
         let offered: Vec<(u64, u64)> = (0..8).map(|index| (index * block, block)).collect();
         let mixed = covered(
-            Source::new(analysis_pcm, consts::ARTIFACTS_EXTENT),
+            Source::new(analysis_pcm, crate::consts::ARTIFACTS_EXTENT),
             &offered,
         )
         .await;

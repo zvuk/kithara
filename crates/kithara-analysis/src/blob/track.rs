@@ -48,10 +48,12 @@ impl TrackAnalysis {
     }
 }
 
-impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
+impl TryFrom<&[u8]> for TrackAnalysis {
     type Error = BlobError;
 
-    fn try_from((bytes, active): (&[u8], &AnalysisFingerprint)) -> Result<Self, Self::Error> {
+    /// Read a snapshot as it was written: every artifact under the tag it
+    /// carries, whatever analyzers this build has.
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         let mut reader = Reader::new(bytes);
         let version = reader.read_u32()?;
         if version != consts::TRACK_ANALYSIS_BYTES_VERSION {
@@ -60,7 +62,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
                 expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
             });
         }
-        RawTrackSnapshot::read(&mut reader)?.into_analysis(active)
+        Self::try_from(RawTrackSnapshot::read(&mut reader)?)
     }
 }
 
@@ -95,8 +97,7 @@ impl<'a> RawTrackSnapshot<'a> {
         let coverage = reader.read_coverage()?;
         let waveform = Tagged::read(reader)?;
         let beat = Tagged::read(reader)?;
-        let final_grid = reader.read_bool()?;
-        let unanalysed = read_ranges(reader)?;
+        let (final_grid, unanalysed) = read_beat_state(reader, &beat)?;
         let key = Tagged::read(reader)?;
         reader.finish()?;
         Ok(Self {
@@ -114,60 +115,40 @@ impl<'a> RawTrackSnapshot<'a> {
             key,
         })
     }
+}
 
-    /// Whether the active configuration still produces something stored
-    /// here; a snapshot with nothing in it is served under an empty
-    /// configuration.
-    fn check_served(&self, active: &AnalysisFingerprint) -> Result<(), BlobError> {
-        let served = self.waveform.matches(active.waveform())
-            || self.beat.matches(active.beat())
-            || self.key.matches(active.key());
-        if served || active == &AnalysisFingerprint::default() && self.is_blank() {
-            return Ok(());
-        }
-        Err(BlobError::Fingerprint)
-    }
+impl TryFrom<RawTrackSnapshot<'_>> for TrackAnalysis {
+    type Error = BlobError;
 
-    fn is_blank(&self) -> bool {
-        self.waveform.is_blank()
-            && self.beat.is_blank()
-            && self.key.is_blank()
-            && !self.final_grid
-            && self.unanalysed.is_empty()
-    }
-
-    fn into_analysis(self, active: &AnalysisFingerprint) -> Result<TrackAnalysis, BlobError> {
-        self.check_served(active)?;
-        let waveform = self.waveform.served(active.waveform());
-        let beat = self.beat.served(active.beat());
-        let key = self.key.served(active.key());
-        let state = if self.final_grid {
+    fn try_from(raw: RawTrackSnapshot<'_>) -> Result<Self, Self::Error> {
+        let state = if raw.final_grid {
             BeatState::Final
         } else {
             BeatState::Provisional
         };
-        let grid = Tagged::decode(beat.as_ref(), |bytes| {
-            BeatArtifact::try_from(bytes).map_err(|_| BlobError::Corrupt)
-        })?;
+        let grid = raw
+            .beat
+            .decode(|bytes| BeatArtifact::try_from(bytes).map_err(|_| BlobError::Corrupt))?;
 
-        Ok(TrackAnalysis::builder()
-            .token(self.token.as_str().into())
-            .revision(self.revision)
-            .source_sample_rate(self.source_sample_rate)
-            .maybe_media_origin(self.media_origin)
-            .maybe_extent(self.extent)
-            .settled(self.settled)
-            .coverage(self.coverage)
-            .maybe_waveform(Tagged::decode(waveform.as_ref(), |bytes| {
-                Waveform::try_from(bytes).map_err(|_| BlobError::Corrupt)
-            })?)
-            .maybe_key(Tagged::decode(key.as_ref(), read_key)?)
-            .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, self.unanalysed)))
+        Ok(Self::builder()
+            .token(raw.token.as_str().into())
+            .revision(raw.revision)
+            .source_sample_rate(raw.source_sample_rate)
+            .maybe_media_origin(raw.media_origin)
+            .maybe_extent(raw.extent)
+            .settled(raw.settled)
+            .coverage(raw.coverage)
+            .maybe_waveform(
+                raw.waveform
+                    .decode(|bytes| Waveform::try_from(bytes).map_err(|_| BlobError::Corrupt))?,
+            )
+            .maybe_key(raw.key.decode(read_key)?)
+            .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, raw.unanalysed)))
             .fingerprint(
                 AnalysisFingerprint::builder()
-                    .maybe_beat(beat.map(|tagged| tagged.tag))
-                    .maybe_waveform(waveform.map(|tagged| tagged.tag))
-                    .maybe_key(key.map(|tagged| tagged.tag))
+                    .maybe_beat(raw.beat.tag())
+                    .maybe_waveform(raw.waveform.tag())
+                    .maybe_key(raw.key.tag())
                     .build(),
             )
             .build())
@@ -183,32 +164,35 @@ impl<'a> Tagged<'a> {
         })
     }
 
-    /// Whether `active` is the configuration that wrote this section.
-    fn matches(&self, active: Option<&str>) -> bool {
-        active.is_some_and(|tag| self.tag == tag)
+    /// The tag this section was written under; an empty tag names none.
+    fn tag(&self) -> Option<&str> {
+        (!self.tag.is_empty()).then_some(self.tag.as_str())
     }
 
-    fn is_blank(&self) -> bool {
-        self.tag.is_empty() && self.bytes.is_empty()
-    }
-
-    /// This section when `active` wrote it, and nothing otherwise.
-    fn served(self, active: Option<&str>) -> Option<Self> {
-        self.matches(active).then_some(self)
-    }
-
-    /// The artifact a served section holds; a served empty section holds
-    /// none.
+    /// The artifact this section holds; an empty section holds none.
     fn decode<T>(
-        served: Option<&Self>,
+        &self,
         decode: impl FnOnce(&'a [u8]) -> Result<T, BlobError>,
     ) -> Result<Option<T>, BlobError> {
-        served
-            .map(|tagged| tagged.bytes)
-            .filter(|bytes| !bytes.is_empty())
+        (!self.bytes.is_empty())
+            .then_some(self.bytes)
             .map(decode)
             .transpose()
     }
+}
+
+/// The final flag and unanalysed ranges of the beat artifact in `beat`. They
+/// belong to that artifact, so stating either without one is corrupt.
+fn read_beat_state(
+    reader: &mut Reader<'_>,
+    beat: &Tagged<'_>,
+) -> Result<(bool, Vec<Range<u64>>), BlobError> {
+    let final_grid = reader.read_bool()?;
+    let unanalysed = read_ranges(reader)?;
+    if beat.bytes.is_empty() && (final_grid || !unanalysed.is_empty()) {
+        return Err(BlobError::Corrupt);
+    }
+    Ok((final_grid, unanalysed))
 }
 
 fn read_source_axis(reader: &mut Reader<'_>) -> Result<(NonZeroU32, Option<Duration>), BlobError> {
@@ -320,6 +304,28 @@ mod tests {
         )
     }
 
+    /// Eight beats half a second apart, so the artifact states a grid.
+    fn steady_grid() -> BeatArtifact {
+        BeatArtifact::new(
+            consts::BPM,
+            (0..8)
+                .map(|beat| (beat * consts::PERIOD_44_1, Some(0.8)))
+                .collect(),
+            vec![(0, Some(0.7)), (4 * consts::PERIOD_44_1, Some(0.6))],
+        )
+    }
+
+    fn a_minor() -> KeyEstimate {
+        KeyEstimate::new(
+            MusicalKey {
+                tonic: PitchClass::A,
+                mode: Mode::Minor,
+            },
+            0.875,
+        )
+        .expect("a fixture strength is in range")
+    }
+
     fn analysis(
         beat: Option<BeatArtifact>,
         waveform: Option<Waveform>,
@@ -358,16 +364,19 @@ mod tests {
         bytes
     }
 
+    fn decode(bytes: &[u8]) -> Result<TrackAnalysis, BlobError> {
+        TrackAnalysis::try_from(bytes)
+    }
+
     #[kithara::test]
-    fn frozen_v5_v7_and_v8_fixtures_are_cache_misses() {
-        let active = fingerprint("wave:v1", "beat:v1");
+    fn frozen_v5_v7_and_v8_fixtures_are_refused() {
         for (bytes, version) in [
             (consts::V5_FIXTURE, 0x4b41_0005),
             (consts::V7_FIXTURE, 0x4b41_0007),
             (consts::V8_FIXTURE, 0x4b41_0008),
         ] {
             assert!(matches!(
-                TrackAnalysis::try_from((bytes, &active)),
+                decode(bytes),
                 Err(BlobError::Version {
                     found,
                     expected: consts::TRACK_ANALYSIS_BYTES_VERSION,
@@ -378,12 +387,7 @@ mod tests {
 
     #[kithara::test]
     fn frozen_v9_fixture_decodes_and_reencodes_identically() {
-        let active = AnalysisFingerprint::builder()
-            .beat("beat:v1")
-            .waveform("wave:v1")
-            .key("key:v1")
-            .build();
-        let decoded = TrackAnalysis::try_from((consts::V9_FIXTURE, &active)).expect("v9 decodes");
+        let decoded = decode(consts::V9_FIXTURE).expect("v9 decodes");
 
         assert_eq!(decoded.token().as_str(), "golden-v9");
         assert_eq!(decoded.source_sample_rate().get(), 44_100);
@@ -398,63 +402,156 @@ mod tests {
             decoded.coverage().iter().collect::<Vec<_>>(),
             [&(0..100), &(200..250)]
         );
-        assert_eq!(decoded.fingerprint(), &active);
+        assert_eq!(
+            decoded.fingerprint(),
+            &AnalysisFingerprint::builder()
+                .beat("beat:v1")
+                .waveform("wave:v1")
+                .key("key:v1")
+                .build()
+        );
         assert!(decoded.waveform().is_none());
         assert!(decoded.beat().is_none());
-        assert_eq!(
-            decoded.key(),
-            KeyEstimate::new(
-                MusicalKey {
-                    tonic: PitchClass::A,
-                    mode: Mode::Minor,
-                },
-                0.875,
-            )
-        );
+        assert_eq!(decoded.key(), Some(a_minor()));
 
         let mut encoded = Vec::new();
         decoded.write_to(&mut encoded).expect("v9 re-encodes");
         assert_eq!(encoded.as_slice(), consts::V9_FIXTURE);
     }
 
+    /// A reader keeps no analyzer of its own: a density, a beat model and a
+    /// key estimator it never ran are read as the writer tagged them.
     #[kithara::test]
-    fn stale_fingerprint_is_a_miss() {
-        assert!(matches!(
-            TrackAnalysis::try_from((
-                &encode(&analysis(Some(grid()), Some(wave()), 1))[..],
-                &fingerprint("other-wave", "other-beat"),
-            )),
-            Err(BlobError::Fingerprint)
-        ));
-
-        let empty = TrackAnalysis::builder()
-            .token("empty-fingerprint".into())
-            .revision(1)
-            .source_sample_rate(rate())
+    fn a_document_reads_every_artifact_under_the_tag_it_carries() {
+        let span = NonZeroU64::new(10 * 441).expect("ten windows span frames");
+        let waveform = Waveform::try_new(
+            vec![
+                Bucket::new([0.25, 0.5, 0.75, 0.5], [0.25, 0.5, 0.75, 0.5]),
+                Bucket::new([0.5, 0.25, 0.125, 0.25], [0.5, 0.25, 0.125, 0.25]),
+            ],
+            span,
+        )
+        .expect("hand-built buckets are valid");
+        let tags = AnalysisFingerprint::builder()
+            .waveform("wave:fold10:v2")
+            .beat("beat:nn:a-model-no-build-embeds:v1")
+            .key("key:another-estimator:v1")
             .build();
-        let bytes = encode(&empty);
-        // The beat flag and ranges, then an empty key tag and key section.
-        let tail = 1 + 8 + 4 + 8;
-        for final_grid in [false, true] {
-            let mut inconsistent = bytes[..bytes.len() - tail].to_vec();
-            let mut writer = Writer::new(&mut inconsistent);
-            writer.write_bool(final_grid);
-            write_ranges(
-                &mut writer,
-                if final_grid {
-                    &[]
-                } else {
-                    &[Range { start: 0, end: 1 }]
-                },
+        let mut coverage = RangeSet::new();
+        coverage.insert(0..8 * consts::PERIOD_44_1);
+        let want = TrackAnalysis::builder()
+            .media_origin(Duration::new(0, 25_056_689))
+            .token(consts::TRACK_TOKEN.into())
+            .revision(4)
+            .source_sample_rate(rate())
+            .extent(8 * consts::PERIOD_44_1)
+            .settled(true)
+            .coverage(coverage)
+            .fingerprint(tags.clone())
+            .waveform(waveform.clone())
+            .beat(BeatSnapshot::new(
+                steady_grid(),
+                BeatState::Final,
+                Vec::new(),
+            ))
+            .key(a_minor())
+            .build();
+
+        let got = decode(&encode(&want)).expect("a document decodes");
+
+        assert_eq!(got.fingerprint(), &tags);
+        assert_eq!(got.source_sample_rate(), want.source_sample_rate());
+        assert_eq!(got.media_origin(), want.media_origin());
+        assert_eq!(got.extent(), want.extent());
+        assert_eq!(got.coverage(), want.coverage());
+        assert!(got.is_complete());
+        let got_waveform = got.waveform().expect("the waveform is read");
+        assert_eq!(got_waveform.span_frames(), span);
+        assert_eq!(got_waveform, &waveform);
+        assert_eq!(got.beat().map(BeatSnapshot::artifact), Some(&steady_grid()));
+        assert_eq!(got.beat().map(BeatSnapshot::state), Some(BeatState::Final));
+        assert!(want.grid().is_some(), "the fixture states a grid");
+        assert_eq!(got.grid(), want.grid());
+        assert_eq!(got.key(), Some(a_minor()));
+    }
+
+    #[kithara::test]
+    fn a_beat_and_key_document_reads_without_a_waveform() {
+        let want = TrackAnalysis::builder()
+            .media_origin(Duration::ZERO)
+            .token(consts::TRACK_TOKEN.into())
+            .revision(2)
+            .source_sample_rate(rate())
+            .extent(8 * consts::PERIOD_44_1)
+            .settled(true)
+            .fingerprint(
+                AnalysisFingerprint::builder()
+                    .beat(consts::BEAT_TAG)
+                    .key("key:test:v1")
+                    .build(),
+            )
+            .beat(BeatSnapshot::new(
+                steady_grid(),
+                BeatState::Final,
+                Vec::new(),
+            ))
+            .key(a_minor())
+            .build();
+
+        let got = decode(&encode(&want)).expect("a document decodes");
+
+        assert!(got.waveform().is_none());
+        assert_eq!(got.fingerprint().waveform(), None);
+        assert!(got.grid().is_some(), "the beat artifact states a grid");
+        assert_eq!(got.key(), Some(a_minor()));
+    }
+
+    #[kithara::test]
+    fn a_settled_document_with_a_coverage_gap_reads_as_incomplete() {
+        let mut coverage = RangeSet::new();
+        coverage.insert(0..400);
+        coverage.insert(600..1_000);
+        let want = TrackAnalysis::builder()
+            .token(consts::TRACK_TOKEN.into())
+            .revision(5)
+            .source_sample_rate(rate())
+            .extent(1_000)
+            .settled(true)
+            .coverage(coverage)
+            .fingerprint(active())
+            .waveform(wave())
+            .build();
+
+        let got = decode(&encode(&want)).expect("a document decodes");
+
+        assert!(got.is_settled());
+        assert!(!got.is_complete());
+        assert_eq!(
+            got.missing(),
+            vec![Range {
+                start: 400,
+                end: 600
+            }]
+        );
+        assert_eq!(got.missing(), want.missing());
+    }
+
+    #[kithara::test]
+    fn a_foreign_version_and_a_truncated_document_are_refused() {
+        let bytes = encode(&analysis(Some(grid()), Some(wave()), 1));
+        let mut foreign = bytes.clone();
+        foreign[..4].copy_from_slice(&(consts::TRACK_ANALYSIS_BYTES_VERSION + 1).to_le_bytes());
+        assert!(matches!(
+            decode(&foreign),
+            Err(BlobError::Version { found, expected })
+                if found == consts::TRACK_ANALYSIS_BYTES_VERSION + 1
+                    && expected == consts::TRACK_ANALYSIS_BYTES_VERSION
+        ));
+        for cut in [1, 4, bytes.len() / 2] {
+            assert!(
+                matches!(decode(&bytes[..bytes.len() - cut]), Err(BlobError::Corrupt)),
+                "a document cut {cut} bytes short"
             );
-            writer.write_str("").expect("an empty tag fits");
-            writer.write_len(0);
-            assert!(matches!(
-                TrackAnalysis::try_from(
-                    (inconsistent.as_slice(), &AnalysisFingerprint::default(),)
-                ),
-                Err(BlobError::Fingerprint)
-            ));
         }
     }
 
@@ -499,8 +596,7 @@ mod tests {
             analysis(Some(grid()), None, 0),
             empty,
         ] {
-            let bytes = encode(&want);
-            let got = TrackAnalysis::try_from((&bytes[..], want.fingerprint())).expect("decodes");
+            let got = decode(&encode(&want)).expect("decodes");
 
             assert_eq!(got.token(), want.token());
             assert_eq!(got.source_sample_rate(), want.source_sample_rate());
@@ -525,51 +621,6 @@ mod tests {
                 want.beat().map(BeatSnapshot::unanalysed)
             );
         }
-    }
-
-    #[kithara::test]
-    fn a_key_round_trips_under_its_own_tag() {
-        let estimate = KeyEstimate::new(
-            MusicalKey {
-                tonic: PitchClass::A,
-                mode: Mode::Minor,
-            },
-            0.875,
-        )
-        .expect("a fixture strength is in range");
-        let tagged = |key: &str| {
-            AnalysisFingerprint::builder()
-                .beat(consts::BEAT_TAG)
-                .waveform("wave:fold1:v3")
-                .key(key)
-                .build()
-        };
-        let want = TrackAnalysis::builder()
-            .token(consts::TRACK_TOKEN.into())
-            .revision(3)
-            .source_sample_rate(rate())
-            .extent(1_000)
-            .settled(true)
-            .fingerprint(tagged("key:test:v1"))
-            .beat(BeatSnapshot::new(grid(), BeatState::Final, Vec::new()))
-            .key(estimate)
-            .build();
-        let bytes = encode(&want);
-
-        let got = TrackAnalysis::try_from((&bytes[..], want.fingerprint())).expect("decodes");
-        assert_eq!(got.key(), Some(estimate));
-        assert_eq!(got.fingerprint(), want.fingerprint());
-
-        let other = TrackAnalysis::try_from((&bytes[..], &tagged("key:other:v1")))
-            .expect("the beat and waveform tags still match");
-        assert_eq!(other.key(), None, "another key configuration is a key miss");
-        assert_eq!(other.fingerprint().key(), None);
-        assert_eq!(other.fingerprint().beat(), Some(consts::BEAT_TAG));
-        assert_eq!(
-            other.beat().map(BeatSnapshot::artifact),
-            Some(&grid()),
-            "the beat result stays usable"
-        );
     }
 
     #[kithara::test]
@@ -603,12 +654,38 @@ mod tests {
             let mut corrupt = bytes.clone();
             corrupt[offset] = 0xff;
             assert!(
-                matches!(
-                    TrackAnalysis::try_from((&corrupt[..], &active())),
-                    Err(BlobError::Corrupt)
-                ),
+                matches!(decode(&corrupt), Err(BlobError::Corrupt)),
                 "{name}"
             );
+        }
+    }
+
+    /// A final flag or unanalysed ranges belong to a beat artifact, so a
+    /// snapshot stating either without one is corrupt.
+    #[kithara::test]
+    fn beat_state_without_a_beat_artifact_is_corrupt() {
+        let empty = TrackAnalysis::builder()
+            .token("empty-fingerprint".into())
+            .revision(1)
+            .source_sample_rate(rate())
+            .build();
+        let bytes = encode(&empty);
+        let tail = 1 + 8 + 4 + 8;
+        for final_grid in [false, true] {
+            let mut inconsistent = bytes[..bytes.len() - tail].to_vec();
+            let mut writer = Writer::new(&mut inconsistent);
+            writer.write_bool(final_grid);
+            write_ranges(
+                &mut writer,
+                if final_grid {
+                    &[]
+                } else {
+                    &[Range { start: 0, end: 1 }]
+                },
+            );
+            writer.write_str("").expect("an empty tag fits");
+            writer.write_len(0);
+            assert!(matches!(decode(&inconsistent), Err(BlobError::Corrupt)));
         }
     }
 
@@ -627,8 +704,7 @@ mod tests {
                 .beat(BeatSnapshot::new(grid(), BeatState::Final, Vec::new()))
                 .fingerprint(active())
                 .build();
-            let bytes = encode(&want);
-            let back = TrackAnalysis::try_from((&bytes[..], &active())).expect("the blob decodes");
+            let back = decode(&encode(&want)).expect("the blob decodes");
             assert_eq!(back.media_origin(), origin);
             assert_eq!(
                 back.beat().expect("raw markers survive").artifact(),
@@ -649,10 +725,7 @@ mod tests {
             bytes[origin_flag] = u8::from(present);
             bytes[origin_flag + 1..origin_flag + 9].copy_from_slice(&seconds.to_le_bytes());
             bytes[origin_flag + 9..origin_flag + 13].copy_from_slice(&nanos.to_le_bytes());
-            assert!(matches!(
-                TrackAnalysis::try_from((&bytes[..], &active())),
-                Err(BlobError::Corrupt)
-            ));
+            assert!(matches!(decode(&bytes), Err(BlobError::Corrupt)));
         }
     }
 }

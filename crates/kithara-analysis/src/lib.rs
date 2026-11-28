@@ -2,30 +2,30 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod analyzer;
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod archive;
 mod artifact;
 #[cfg(feature = "analysis-beat")]
 pub(crate) mod beat;
 mod blob;
 mod model;
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub(crate) mod producer;
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod progress;
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod slots;
-#[cfg(test)]
-pub(crate) use kithara_test_utils::bufpool as test_pools;
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(
+    test,
+    not(target_arch = "wasm32"),
+    any(feature = "analysis-beat", feature = "analysis-waveform")
+))]
 mod tests;
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod worker;
 
-pub use analyzer::{
-    AnalysisDemand, AnalyzerBuilder, BeatAnalysisConfig, BeatAnalysisConfigPatch,
-    BeatAnalysisConfigPatchError, PassError,
-};
-pub use archive::{
-    AnalysisFile, AnalysisFileError, AnalysisFilePatch, AnalysisFileSpec, AnalysisFileUpdate,
-    AnalysisFileWrite,
-};
 pub use artifact::{
     AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatGridUnavailable, BeatSnapshot, BeatState,
     ORDINAL_TOLERANCE_BEATS, TrackAnalysis,
@@ -43,12 +43,23 @@ pub use kithara_waveform::WaveformAnalyzer;
 /// The waveform result and its tunables, re-exported from their owner: a
 /// consumer that only reads a waveform needs no DSP.
 pub use kithara_waveform::{AnalysisParams, Band, Bucket, MAX_BUCKETS, Waveform};
-pub use producer::AnalysisProducer;
-pub use progress::AnalysisProgress;
 pub use rangemap::RangeSet;
-pub use worker::{
-    AnalysisCompletion, AnalysisError, AnalysisOpen, AnalysisOutcome, AnalysisPass, AnalysisWorker,
-    AnalysisWorkerConfig,
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
+pub use {
+    analyzer::{
+        AnalysisDemand, AnalyzerBuilder, BeatAnalysisConfig, BeatAnalysisConfigPatch,
+        BeatAnalysisConfigPatchError, PassError,
+    },
+    archive::{
+        AnalysisFile, AnalysisFileError, AnalysisFilePatch, AnalysisFileSpec, AnalysisFileUpdate,
+        AnalysisFileWrite,
+    },
+    producer::AnalysisProducer,
+    progress::AnalysisProgress,
+    worker::{
+        AnalysisCompletion, AnalysisError, AnalysisOpen, AnalysisOutcome, AnalysisPass,
+        AnalysisWorker, AnalysisWorkerConfig,
+    },
 };
 /// The served beat-grid contract, re-exported from its owner so a consumer of
 /// a publication can name what [`TrackAnalysis::grid`] hands it. The types are

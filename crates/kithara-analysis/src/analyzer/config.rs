@@ -8,7 +8,16 @@ use kithara_config::Config;
 use kithara_derive::Patch;
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 
-use crate::consts;
+mod consts {
+    use super::ResamplerQuality;
+
+    pub(super) const DEFAULT_BEAT_BLOCK_FRAMES: usize = 1024;
+    pub(super) const DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS: u32 = 10;
+    pub(super) const DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS: u32 = 2;
+    pub(super) const DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS: u32 = 30;
+    pub(super) const DEFAULT_BEAT_RESAMPLER_QUALITY: ResamplerQuality = ResamplerQuality::High;
+    pub(super) const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
+}
 
 /// Beat-analysis tunables used by [`super::AnalyzerBuilder`], beside the
 /// resampler backend the caller hands over.

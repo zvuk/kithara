@@ -4,11 +4,14 @@ use std::{
 };
 
 use axum::{Router, routing::get};
-use kithara::platform::{
-    time::{Duration, timeout},
-    tokio::{
-        sync::{mpsc, watch},
-        task,
+use kithara::{
+    analysis::TrackAnalysis,
+    platform::{
+        time::{Duration, timeout},
+        tokio::{
+            sync::{mpsc, watch},
+            task,
+        },
     },
 };
 use kithara_test_fixtures::assets;
@@ -42,6 +45,49 @@ fn input() -> String {
     .map(|record| record.to_string())
     .collect::<Vec<_>>()
     .join("\n")
+}
+
+fn records(lines: &[Value]) -> String {
+    lines
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn file_names(directory: &TestTempDir) -> Vec<String> {
+    let mut files: Vec<_> = std::fs::read_dir(directory.path())
+        .expect("directory")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .into_string()
+                .expect("UTF-8 name")
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+fn document(directory: &TestTempDir, id: &str) -> TrackAnalysis {
+    let bytes =
+        std::fs::read(directory.path().join(format!("{id}.analysis"))).expect("binary record");
+    TrackAnalysis::try_from(bytes.as_slice()).expect("an analysis document")
+}
+
+/// The stderr line that names `id`.
+fn diagnostic(output: &Output, id: &str) -> String {
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .find(|line| line.contains(&format!("id={id}")))
+        .unwrap_or_else(|| {
+            panic!(
+                "no diagnostic names {id}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+        .to_owned()
 }
 
 fn output_names_alias(directory: &TestTempDir, first: &str, second: &str) -> bool {
@@ -257,9 +303,132 @@ fn usage_errors_write_no_records_and_do_not_create_the_output_directory() {
     assert!(output.stdout.is_empty());
 }
 
+#[kithara::test(native, flash(false))]
+fn binary_records_are_analysis_documents_with_every_selected_artifact() {
+    let rhythm = assets::rhythm_wav_deck_a_120bpm_48k()
+        .path()
+        .expect("fixture");
+    let sine = assets::sine_wav_a440_2s().path().expect("fixture");
+    let directory = TestTempDir::new();
+    let output = invoke(
+        &[
+            "--format",
+            "binary",
+            "--out",
+            directory.path().to_str().expect("path"),
+            "-",
+        ],
+        &records(&[
+            json!({"id":"one","src":rhythm}),
+            json!({"id":"two","src":sine}),
+        ]),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(file_names(&directory), ["one.analysis", "two.analysis"]);
+
+    let one = document(&directory, "one");
+    assert_eq!(one.token().as_str(), "one");
+    assert!(one.is_complete());
+    assert!(one.waveform().is_some());
+    assert!(one.beat().is_some());
+    assert!(one.key().is_some());
+    assert!(one.fingerprint().waveform().is_some());
+    assert!(one.fingerprint().beat().is_some());
+    assert!(one.fingerprint().key().is_some());
+    assert_eq!(document(&directory, "two").token().as_str(), "two");
+}
+
+#[kithara::test(native, flash(false))]
+fn a_beat_and_key_binary_record_has_no_waveform() {
+    let rhythm = assets::rhythm_wav_deck_a_120bpm_48k()
+        .path()
+        .expect("fixture");
+    let directory = TestTempDir::new();
+    let output = invoke(
+        &[
+            "--artifacts",
+            "beat,key",
+            "--format",
+            "binary",
+            "--out",
+            directory.path().to_str().expect("path"),
+            "-",
+        ],
+        &records(&[json!({"id":"one","src":rhythm})]),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let one = document(&directory, "one");
+    assert!(one.waveform().is_none());
+    assert_eq!(one.fingerprint().waveform(), None);
+    assert!(one.beat().is_some());
+    assert!(one.key().is_some());
+}
+
+#[kithara::test(native, flash(false))]
+fn a_missing_binary_source_writes_no_file_and_is_named_on_stderr() {
+    let path = assets::sine_wav_a440_2s().path().expect("fixture");
+    let directory = TestTempDir::new();
+    let output = invoke(
+        &[
+            "--jobs",
+            "1",
+            "--artifacts",
+            "waveform",
+            "--format",
+            "binary",
+            "--out",
+            directory.path().to_str().expect("path"),
+            "-",
+        ],
+        &records(&[
+            json!({"id":"one","src":path}),
+            json!({"id":"two","src":path.with_file_name("absent-export-binary.wav")}),
+            json!({"id":"three","src":path}),
+        ]),
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(file_names(&directory), ["one.analysis", "three.analysis"]);
+    let two = diagnostic(&output, "two");
+    assert!(two.contains("failed"), "{two}");
+    assert!(two.contains("absent-export-binary.wav"), "{two}");
+    assert!(two.contains("cause="), "{two}");
+}
+
+#[kithara::test(native, flash(false))]
+fn binary_without_an_output_directory_is_a_usage_error() {
+    let path = assets::sine_wav_a440_2s().path().expect("fixture");
+    let output = invoke(&["--format", "binary", path.to_str().expect("path")], "");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--out"));
+}
+
+#[kithara::test(native, flash(false))]
+fn an_unknown_format_names_both_formats() {
+    let path = assets::sine_wav_a440_2s().path().expect("fixture");
+    let output = invoke(&["--format", "xml", path.to_str().expect("path")], "");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("json"), "{stderr}");
+    assert!(stderr.contains("binary"), "{stderr}");
+}
+
+/// Runs five tracks with `options`, holds the third at its source and
+/// interrupts the tool while it waits.
 #[cfg(unix)]
-#[kithara::test(tokio, multi_thread, native, flash(false))]
-async fn sigint_writes_the_inflight_cancellation_and_exits_one() {
+async fn interrupted_at_the_third_of_five(options: &[&str]) -> Output {
     let (entered, mut requests) = mpsc::channel(1);
     let (gate, blocked) = watch::channel(false);
     let router = Router::new().route(
@@ -278,19 +447,15 @@ async fn sigint_writes_the_inflight_cancellation_and_exits_one() {
     );
     let server = TestHttpServer::new(router).await;
     let path = assets::sine_wav_a440_2s().path().expect("fixture");
-    let input = [
+    let input = records(&[
         json!({"id":"first","src":path}),
         json!({"id":"second","src":path}),
         json!({"id":"third","src":server.url("/third.wav")}),
         json!({"id":"fourth","src":path}),
         json!({"id":"fifth","src":path}),
-    ]
-    .into_iter()
-    .map(|record| record.to_string())
-    .collect::<Vec<_>>()
-    .join("\n");
+    ]);
     let mut child = Command::new(env!("CARGO_BIN_EXE_kithara-analyze"))
-        .args(["--jobs", "1", "--artifacts", "waveform", "-"])
+        .args(options)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -319,6 +484,45 @@ async fn sigint_writes_the_inflight_cancellation_and_exits_one() {
     };
     assert!(signal.success());
     assert!(opened.expect("third source opens").is_some());
+    output
+}
+
+#[cfg(unix)]
+#[kithara::test(tokio, multi_thread, native, flash(false))]
+async fn an_interrupted_binary_batch_leaves_no_file_for_the_cancelled_track() {
+    let directory = TestTempDir::new();
+    let output = interrupted_at_the_third_of_five(&[
+        "--jobs",
+        "1",
+        "--artifacts",
+        "waveform",
+        "--format",
+        "binary",
+        "--out",
+        directory.path().to_str().expect("path"),
+        "-",
+    ])
+    .await;
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        file_names(&directory),
+        ["first.analysis", "second.analysis"]
+    );
+    let third = diagnostic(&output, "third");
+    assert!(third.contains("cancelled"), "{third}");
+}
+
+#[cfg(unix)]
+#[kithara::test(tokio, multi_thread, native, flash(false))]
+async fn sigint_writes_the_inflight_cancellation_and_exits_one() {
+    let output =
+        interrupted_at_the_third_of_five(&["--jobs", "1", "--artifacts", "waveform", "-"]).await;
     assert_eq!(
         output.status.code(),
         Some(1),

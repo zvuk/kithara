@@ -1,9 +1,12 @@
 use crate::{
     AnalysisFingerprint, AnalysisProgress, TrackAnalysis,
     blob::{BlobError, Reader, Writer},
-    consts,
     progress::AnalysisResume,
 };
+
+mod consts {
+    pub(super) const ANALYSIS_PROGRESS_BYTES_VERSION: u32 = 0x4b41_5001;
+}
 
 impl AnalysisProgress {
     pub(crate) fn write_to(&self, out: &mut Vec<u8>) -> Result<(), BlobError> {
@@ -33,7 +36,10 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for AnalysisProgress {
                 expected: consts::ANALYSIS_PROGRESS_BYTES_VERSION,
             });
         }
-        let analysis = TrackAnalysis::try_from((reader.read_section()?, fingerprint))?;
+        let analysis = narrow(
+            &TrackAnalysis::try_from(reader.read_section()?)?,
+            fingerprint,
+        )?;
         let resume = match reader.read_section()? {
             [] => None,
             bytes => Some(AnalysisResume::try_from(bytes)?),
@@ -43,6 +49,51 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for AnalysisProgress {
         progress.validate_resume()?;
         Ok(progress)
     }
+}
+
+/// The part of a stored snapshot the `active` analyzers still produce: an
+/// artifact stored under another tag is dropped, and a snapshot left with
+/// nothing is a miss, unless neither it nor `active` names any analyzer.
+fn narrow(
+    stored: &TrackAnalysis,
+    active: &AnalysisFingerprint,
+) -> Result<TrackAnalysis, BlobError> {
+    let tags = stored.fingerprint();
+    let waveform = served(tags.waveform(), active.waveform());
+    let beat = served(tags.beat(), active.beat());
+    let key = served(tags.key(), active.key());
+    let nothing_served = waveform.is_none() && beat.is_none() && key.is_none();
+    let blank = *tags == AnalysisFingerprint::default()
+        && stored.waveform().is_none()
+        && stored.beat().is_none()
+        && stored.key().is_none();
+    if nothing_served && !(blank && *active == AnalysisFingerprint::default()) {
+        return Err(BlobError::Fingerprint);
+    }
+    Ok(TrackAnalysis::builder()
+        .token(stored.token().clone())
+        .revision(stored.revision())
+        .source_sample_rate(stored.source_sample_rate())
+        .maybe_media_origin(stored.media_origin())
+        .maybe_extent(stored.extent())
+        .settled(stored.is_settled())
+        .coverage(stored.coverage().clone())
+        .maybe_waveform(stored.waveform().filter(|_| waveform.is_some()).cloned())
+        .maybe_beat(stored.beat().filter(|_| beat.is_some()).cloned())
+        .maybe_key(stored.key().filter(|_| key.is_some()))
+        .fingerprint(
+            AnalysisFingerprint::builder()
+                .maybe_waveform(waveform)
+                .maybe_beat(beat)
+                .maybe_key(key)
+                .build(),
+        )
+        .build())
+}
+
+/// The stored tag when `active` is the configuration that wrote it.
+fn served<'a>(stored: Option<&'a str>, active: Option<&str>) -> Option<&'a str> {
+    stored.filter(|tag| active == Some(*tag))
 }
 
 #[cfg(test)]
@@ -55,7 +106,10 @@ mod tests {
     use rangemap::RangeSet;
 
     use super::*;
-    use crate::AnalysisToken;
+    use crate::{
+        AnalysisToken, BeatArtifact, BeatSnapshot, BeatState, Bucket, KeyEstimate, Mode,
+        MusicalKey, PitchClass, Waveform,
+    };
 
     fn analysis(settled: bool) -> TrackAnalysis {
         TrackAnalysis::builder()
@@ -165,7 +219,7 @@ mod tests {
 
     #[kithara::test]
     fn a_damaged_key_resume_section_is_a_miss() {
-        let pools = crate::test_pools::pools();
+        let pools = kithara_test_utils::bufpool::pools();
         let estimator = KeyEstimator::new(44_100, &pools).expect("the estimator fits");
         let mut state = Vec::new();
         estimator.write_state(&mut state);
@@ -194,5 +248,111 @@ mod tests {
                 "{name}: a checkpoint whose key state is unreadable is a miss, got {decoded:?}"
             );
         }
+    }
+
+    fn beat() -> BeatArtifact {
+        BeatArtifact::new(
+            128.0,
+            vec![(0, Some(0.9)), (10_000, Some(0.75))],
+            Vec::new(),
+        )
+    }
+
+    fn wave() -> Waveform {
+        Waveform::try_new(vec![Bucket::new([0.5; 4], [0.5; 4])], NonZeroU64::MIN)
+            .expect("hand-built buckets are valid")
+    }
+
+    fn tagged(wave: &str, beat: &str, key: &str) -> AnalysisFingerprint {
+        AnalysisFingerprint::builder()
+            .waveform(wave)
+            .beat(beat)
+            .key(key)
+            .build()
+    }
+
+    fn stored(tags: AnalysisFingerprint, key: KeyEstimate) -> TrackAnalysis {
+        TrackAnalysis::builder()
+            .token(crate::consts::TRACK_TOKEN.into())
+            .revision(3)
+            .source_sample_rate(std::num::NonZeroU32::MIN)
+            .extent(1_000)
+            .settled(true)
+            .fingerprint(tags)
+            .waveform(wave())
+            .beat(BeatSnapshot::new(beat(), BeatState::Final, Vec::new()))
+            .key(key)
+            .build()
+    }
+
+    /// A settled snapshot as the local cache stores and reads it back.
+    fn cached(
+        analysis: TrackAnalysis,
+        active: &AnalysisFingerprint,
+    ) -> Result<TrackAnalysis, BlobError> {
+        let mut bytes = Vec::new();
+        AnalysisProgress::try_from(analysis)?.write_to(&mut bytes)?;
+        AnalysisProgress::try_from((bytes.as_slice(), active)).map(TrackAnalysis::from)
+    }
+
+    fn a_minor() -> KeyEstimate {
+        KeyEstimate::new(
+            MusicalKey {
+                tonic: PitchClass::A,
+                mode: Mode::Minor,
+            },
+            0.875,
+        )
+        .expect("a fixture strength is in range")
+    }
+
+    #[kithara::test]
+    fn stale_fingerprint_is_a_miss() {
+        let tags = tagged("wave:fold1:v2", crate::consts::BEAT_TAG, "key:test:v1");
+        assert!(matches!(
+            cached(
+                stored(tags, a_minor()),
+                &tagged("other-wave", "other-beat", "other-key")
+            ),
+            Err(BlobError::Fingerprint)
+        ));
+    }
+
+    #[kithara::test]
+    fn a_foreign_beat_tag_leaves_the_matching_waveform() {
+        let got = cached(
+            stored(
+                tagged("wave:fold1:v2", "beat:another-model:v1", "key:test:v1"),
+                a_minor(),
+            ),
+            &tagged("wave:fold1:v2", crate::consts::BEAT_TAG, "key:test:v1"),
+        )
+        .expect("the waveform and key tags still match");
+
+        assert_eq!(got.waveform(), Some(&wave()));
+        assert!(got.beat().is_none(), "another beat model is a beat miss");
+        assert_eq!(got.fingerprint().beat(), None);
+        assert_eq!(got.fingerprint().waveform(), Some("wave:fold1:v2"));
+    }
+
+    #[kithara::test]
+    fn a_key_round_trips_under_its_own_tag() {
+        let tags = |key: &str| tagged("wave:fold1:v2", crate::consts::BEAT_TAG, key);
+        let want = stored(tags("key:test:v1"), a_minor());
+
+        let got = cached(want.clone(), want.fingerprint()).expect("decodes");
+        assert_eq!(got.key(), Some(a_minor()));
+        assert_eq!(got.fingerprint(), want.fingerprint());
+
+        let other =
+            cached(want, &tags("key:other:v1")).expect("the beat and waveform tags still match");
+        assert_eq!(other.key(), None, "another key configuration is a key miss");
+        assert_eq!(other.fingerprint().key(), None);
+        assert_eq!(other.fingerprint().beat(), Some(crate::consts::BEAT_TAG));
+        assert_eq!(
+            other.beat().map(BeatSnapshot::artifact),
+            Some(&beat()),
+            "the beat result stays usable"
+        );
     }
 }

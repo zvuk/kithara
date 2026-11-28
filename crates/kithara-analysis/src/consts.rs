@@ -1,20 +1,4 @@
-use std::{
-    mem::size_of,
-    num::{NonZeroU32, NonZeroUsize},
-};
-
-use kithara_resampler::ResamplerQuality;
-
-pub(crate) const DEFAULT_BEAT_BLOCK_FRAMES: usize = 1024;
-pub(crate) const DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS: u32 = 10;
-pub(crate) const DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS: u32 = 2;
-pub(crate) const DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS: u32 = 30;
-pub(crate) const DEFAULT_BEAT_RESAMPLER_QUALITY: ResamplerQuality = ResamplerQuality::High;
-pub(crate) const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
-pub(crate) const FINGERPRINT_MAX: usize = 1024;
-pub(crate) const INDEX_ENTRY_LEN: usize = 1;
-pub(crate) const HEADER_FIELDS_LEN: usize = 88;
-pub(crate) const HEADER_LEN: usize = HEADER_FIELDS_LEN + 3 * (size_of::<u32>() + FINGERPRINT_MAX);
+use std::mem::size_of;
 
 #[cfg(all(
     test,
@@ -31,12 +15,6 @@ pub(crate) const RESUME_TESTS_CHUNK_FRAMES: u64 = 128;
     not(target_arch = "wasm32")
 ))]
 pub(crate) const RESUME_TESTS_EXTENT: u64 = 4 * RESUME_TESTS_CHUNK_FRAMES;
-
-#[cfg(test)]
-pub(crate) const ARCHIVE_EXTENT: u64 = 64;
-
-#[cfg(test)]
-pub(crate) const ARCHIVE_CHUNK_FRAMES: u64 = 16;
 
 pub(crate) const FRAME_BYTES: usize = size_of::<u64>() + size_of::<u32>() + size_of::<f32>();
 pub(crate) const LEN_PREFIX_BYTES: usize = size_of::<u64>();
@@ -116,7 +94,6 @@ pub(crate) const EXTEND_RATE: u32 = 44_100;
 #[cfg(test)]
 pub(crate) const EXTEND_BEAT: u64 = 22_050;
 
-pub(crate) const ANALYSIS_PROGRESS_BYTES_VERSION: u32 = 0x4b41_5001;
 pub(crate) const TRACK_ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0009;
 
 #[cfg(test)]
@@ -177,21 +154,13 @@ pub(crate) const V9_FIXTURE: &[u8] = &[
     0x00, 0x60, 0x3f,
 ];
 
-pub(crate) const RESUME_VERSION: u32 = 0x4b41_5205;
-
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) const MARKER_TOLERANCE: u64 = 64;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const FIXTURES_SR: u32 = 44_100;
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const CH: u16 = 2;
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-pub(crate) const HOLD_FOLD: NonZeroU32 = NonZeroU32::MIN;
+pub(crate) const HOLD_FOLD: std::num::NonZeroU32 = std::num::NonZeroU32::MIN;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -219,26 +188,11 @@ pub(crate) const TICK_LIMIT: u64 = 1 << 20;
 
 #[cfg(feature = "analysis-waveform")]
 #[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const NODE_FOLD: NonZeroU32 = NonZeroU32::MIN;
+pub(crate) const NODE_FOLD: std::num::NonZeroU32 = std::num::NonZeroU32::MIN;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[cfg(feature = "beat-backend")]
 pub(crate) const PROBE_CHUNK_FRAMES: u64 = 8820;
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const CHUNK: u64 = 8820;
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const SCHEDULE_EXTENT: u64 = 4 * 44_100;
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const TICKS: usize = 8192;
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const SCHEDULE_TOKEN: &str = "scheduled-track";
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const SCHEDULE_WINDOW_SECONDS: u32 = 1;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -247,34 +201,3 @@ pub(crate) const ARTIFACTS_WINDOW_SECONDS: u32 = 2;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub(crate) const ARTIFACTS_EXTENT: u64 = 12 * 44_100;
-
-pub(crate) const CAPACITY: NonZeroUsize = match NonZeroUsize::new(64) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-
-pub(crate) const CONFIG_CHUNK_SECONDS: NonZeroU32 = match NonZeroU32::new(16) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-
-pub(crate) const FAIRNESS_YIELD_INTERVAL: NonZeroU32 = match NonZeroU32::new(16) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-
-pub(crate) const PRODUCER_DRAIN_LIMIT: NonZeroUsize = match NonZeroUsize::new(8) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-
-pub(crate) const PUBLISH_SECONDS: NonZeroU32 = match NonZeroU32::new(5) {
-    Some(value) => value,
-    None => unreachable!(),
-};
-
-#[cfg(test)]
-pub(crate) const WORKER_SCHEDULE_EXTENT: u64 = 1000;
-
-#[cfg(test)]
-pub(crate) const WINDOW: u64 = 200;

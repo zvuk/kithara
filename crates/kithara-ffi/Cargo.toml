@@ -48,22 +48,11 @@ uniffi-bindgen-cli = [
     "tls-rustls",
 ]
 standard = ["stretch-signalsmith"]
-# A device reads analysis artifacts and talks to the analysis server, so the
-# analysis contracts ship; no beat detector (`beat-dsp`, `beat-nn`) runs there.
-apple = [
-    "kithara/apple-fused-src",
-    "kithara/apple-net",
-    "stretch-signalsmith",
-    "stretch-glide",
-    "analysis-beat",
-]
-android = [
-    "kithara/android",
-    "kithara/resample-glide",
-    "stretch-signalsmith",
-    "stretch-glide",
-    "analysis-beat",
-]
+# A device computes no analysis: neither `analysis-beat` nor
+# `analysis-waveform` is on, so no detector, analyzer or key estimator is
+# compiled there.
+apple = ["kithara/apple-fused-src", "kithara/apple-net", "stretch-signalsmith", "stretch-glide"]
+android = ["kithara/android", "kithara/resample-glide", "stretch-signalsmith", "stretch-glide"]
 analysis = ["analysis-waveform", "beat-dsp"]
 analysis-beat = ["kithara/analysis-beat"]
 analysis-waveform = ["kithara/analysis-waveform"]

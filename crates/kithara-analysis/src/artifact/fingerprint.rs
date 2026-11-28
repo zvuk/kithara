@@ -32,19 +32,4 @@ impl AnalysisFingerprint {
     pub fn key(&self) -> Option<&str> {
         self.key.as_deref()
     }
-
-    /// Whether a result made under these tags serves where `active` is in
-    /// force: a pass opened for part of what `active` produces. At least one
-    /// tag is present, and each present tag equals the active one.
-    pub(crate) fn serves(&self, active: &Self) -> bool {
-        let tags = [
-            (self.beat(), active.beat()),
-            (self.waveform(), active.waveform()),
-            (self.key(), active.key()),
-        ];
-        tags.iter().any(|(own, _)| own.is_some())
-            && tags
-                .iter()
-                .all(|(own, active)| own.is_none() || own == active)
-    }
 }

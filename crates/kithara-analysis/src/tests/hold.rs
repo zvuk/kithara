@@ -9,7 +9,10 @@ use kithara_platform::{CancelToken, tokio::sync::watch};
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::{AudioSpec, FrameSpan};
 use kithara_test_fixtures::analysis_fixtures::analysis_silence;
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{Pools, TestPools, pools},
+    kithara,
+};
 use kithara_worker::TickResult;
 
 use super::{
@@ -23,11 +26,8 @@ use super::{
     track::Track,
 };
 use crate::{
-    AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, TrackAnalysis,
-    beat::GridParams,
-    consts,
-    slots::beat::detect,
-    test_pools::{Pools, TestPools, pools},
+    AnalysisProgress, BeatAnalysisConfig, BeatSnapshot, BeatState, TrackAnalysis, beat::GridParams,
+    consts, slots::beat::detect,
 };
 
 fn rate() -> NonZeroU32 {

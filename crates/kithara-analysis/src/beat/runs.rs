@@ -519,13 +519,13 @@ mod tests {
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_signal::FrameCoverage;
     use kithara_test_fixtures::analysis_beat_fixtures::{fragments, run_ramp};
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{
+        bufpool::{Pools, pools, pools_with},
+        kithara,
+    };
 
     use super::{Intake, Opens, Runs};
-    use crate::{
-        BeatAnalysisConfig, consts,
-        test_pools::{Pools, pools, pools_with},
-    };
+    use crate::{BeatAnalysisConfig, consts};
 
     #[derive(derive_more::Deref, derive_more::DerefMut)]
     struct TestRuns {

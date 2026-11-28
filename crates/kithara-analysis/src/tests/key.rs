@@ -8,22 +8,23 @@ use kithara_key::{KeyEstimate, Mode, MusicalKey, PitchClass};
 use kithara_platform::{CancelToken, time::Duration, tokio::sync::watch};
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{
+    bufpool::{Pools, TestPools, pools, pools_with_budget, sample_buffer},
+    kithara,
+};
 use kithara_worker::TickResult;
 use num_traits::cast::ToPrimitive;
 
-use super::fixtures::{FakeReader, idle_ingest, spec};
+use super::fixtures::{self, FakeReader, idle_ingest, spec};
 use crate::{
     AnalysisFile, AnalysisFileSpec, AnalysisProgress, TrackAnalysis,
     analyzer::{AnalysisDemand, AnalyzerBuilder, Extent, TrackAnalyzers},
     archive::tests::apply,
-    consts,
-    test_pools::{Pools, TestPools, pools, pools_with_budget, sample_buffer},
     worker::{AnalysisTask, Job},
 };
 
 fn rate() -> NonZeroU32 {
-    NonZeroU32::new(consts::FIXTURES_SR).expect("the fixture rate is non-zero")
+    NonZeroU32::new(fixtures::consts::FIXTURES_SR).expect("the fixture rate is non-zero")
 }
 
 /// Three seconds each of A minor, D minor, E minor and A minor, every note
@@ -34,8 +35,8 @@ fn a_minor() -> Vec<f32> {
     const GAIN: f64 = 0.1;
     const CHORD_SECONDS: u32 = 3;
 
-    let rate = f64::from(consts::FIXTURES_SR);
-    let chord_frames = consts::FIXTURES_SR * CHORD_SECONDS;
+    let rate = f64::from(fixtures::consts::FIXTURES_SR);
+    let chord_frames = fixtures::consts::FIXTURES_SR * CHORD_SECONDS;
     let mut out = Vec::new();
     let mut n = 0.0;
     for chord in CHORDS {
@@ -86,8 +87,10 @@ fn offer(
 }
 
 fn chunks(frames: u64) -> Vec<Range<u64>> {
-    (0..frames.div_ceil(consts::CHUNK))
-        .map(|index| index * consts::CHUNK..((index + 1) * consts::CHUNK).min(frames))
+    (0..frames.div_ceil(fixtures::consts::CHUNK))
+        .map(|index| {
+            index * fixtures::consts::CHUNK..((index + 1) * fixtures::consts::CHUNK).min(frames)
+        })
         .collect()
 }
 
@@ -137,7 +140,7 @@ fn out_of_order_coverage_settles_on_the_in_order_key() {
     for &index in first.iter().filter(|&&index| index % 5 == 2).chain(rest) {
         offer(&pools, &mut shuffled, &pcm, ranges[index].clone());
     }
-    let straddle = consts::CHUNK / 2..consts::CHUNK * 5 / 2;
+    let straddle = fixtures::consts::CHUNK / 2..fixtures::consts::CHUNK * 5 / 2;
     offer(&pools, &mut shuffled, &pcm, straddle);
     offer(&pools, &mut shuffled, &pcm, ranges[3].clone());
     let shuffled = key_of(&settled(&mut shuffled, frames));
@@ -166,7 +169,7 @@ fn a_stored_pass_resumes_to_the_uninterrupted_key() {
     let frames = u64::try_from(pcm.len()).unwrap_or(0);
     let ranges = chunks(frames);
     let (head, tail) = ranges.split_at(ranges.len() / 2);
-    let chunk_frames = NonZeroU64::new(consts::CHUNK).expect("the chunk is non-zero");
+    let chunk_frames = NonZeroU64::new(fixtures::consts::CHUNK).expect("the chunk is non-zero");
     let pools = pools();
     let builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools.clone()).with_key();
 
@@ -212,7 +215,7 @@ fn a_pass_whose_key_estimator_fails_ends_unsettled_without_publishing() {
 
     let builder =
         AnalyzerBuilder::<NoResamplerBackend, _>::new(pools_with_budget(BUDGET)).with_key();
-    let silence = vec![0.0; usize::from(consts::CH) * FRAMES];
+    let silence = vec![0.0; usize::from(fixtures::consts::CH) * FRAMES];
     let (tx, results) = watch::channel::<Option<AnalysisProgress>>(None);
     let job = Job {
         tx,
