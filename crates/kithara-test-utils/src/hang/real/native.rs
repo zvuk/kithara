@@ -300,6 +300,7 @@ impl PreKillGuard {
         let spawn = Builder::new()
             .name("kithara-prekill".to_owned())
             .spawn(move || {
+                let _exclusion = crate::memory::exclude_current_thread();
                 if prekill_elapsed(&cancelled, timeout) {
                     let diagnostic = format!(
                         "test `{test_name}` still running after {timeout:?}; outer termination is imminent"

@@ -2,9 +2,10 @@
 //! Heap budget of the desktop application's composition root, one line per
 //! subsystem.
 //!
-//! This binary installs its own counting allocator, keeping that overhead out
-//! of the `app` suite. Measurements are local to the thread constructing each
-//! subsystem, so unrelated runtime threads cannot enter its budget.
+//! This binary installs its own counting allocator, so it is kept apart from
+//! the `app` suite: every test in a binary shares its allocator, and the
+//! measurements here only mean anything while nothing else allocates beside
+//! them.
 
 use kithara_test_dylib as _;
 

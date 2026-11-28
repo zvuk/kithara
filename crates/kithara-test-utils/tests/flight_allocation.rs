@@ -123,12 +123,11 @@ fn folded_flight_events_do_not_allocate_and_unique_events_still_do() {
         assert_eq!(calls.get(), 3);
         assert!(
             !folded_thread_allocated,
-            "the folded emitter allocated; thread-local heap: {folded:?}"
+            "the folded emitter allocated; process-wide heap: {folded:?}"
         );
-        assert_eq!(
-            (folded.held, folded.peak),
-            (0, 0),
-            "foreign-thread allocations entered the folded event measurement"
+        assert!(
+            folded.held >= 144 && folded.peak >= folded.held,
+            "the foreign-thread allocation control was observed: {folded:?}"
         );
         assert!(unique.held > 0 && unique.peak >= unique.held);
         assert!(

@@ -29,6 +29,7 @@ impl LoadGuard {
                 let spinner = thread::Builder::new()
                     .name("kithara-test-load".into())
                     .spawn(move || {
+                        let _exclusion = crate::memory::exclude_current_thread();
                         while matches!(stopped.try_recv(), Err(TryRecvError::Empty)) {
                             hint::spin_loop();
                         }
