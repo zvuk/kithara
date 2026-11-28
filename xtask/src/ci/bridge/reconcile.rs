@@ -211,45 +211,26 @@ impl Bridge {
     fn verify_open_pulls(&self, base_sha: &str) -> Result<()> {
         let ledger = Ledger::new(&self.config.state_dir)?;
         let pulls = self.github.open_pull_requests()?;
-        let mut live = Vec::with_capacity(pulls.len());
         let mut workspace = None;
-        for pull in &pulls {
-            let verified_base = self.base_for(&ledger, &mut workspace, pull, base_sha)?;
-            let source = checks::SourceCi::observe(&self.github, pull);
-            if let Err(error) =
-                self.verify_pull(&ledger, pull, &verified_base, base_sha, source.failed())
-            {
-                warn!(
-                    pull_number = pull.number,
-                    head_sha = %pull.head_sha,
-                    base_sha = %verified_base,
-                    %error,
-                    "GitLab verification tick failed without changing its verdict"
-                );
-            }
-            let entry = ledger.get(&pull.head_sha, &verified_base)?;
-            let scope = entry.as_ref().map_or(pull.scope, |entry| entry.scope);
-            if let Err(error) = checks::report_pull(
-                &self.github,
-                &self.gitlab,
-                pull,
-                source,
-                ledger.answering_pipeline(&pull.head_sha, &verified_base)?,
-                scope,
-            ) {
-                warn!(
-                    pull_number = pull.number,
-                    head_sha = %pull.head_sha,
-                    %error,
-                    "pull-request job statuses could not be published"
-                );
-            }
-            live.push(LiveVerification {
-                head_sha: pull.head_sha.clone(),
-                base_sha: verified_base,
-                scope,
-            });
-        }
+        let live = judge_each(
+            &pulls,
+            |pull| {
+                self.base_for(&ledger, &mut workspace, pull, base_sha)
+                    .inspect_err(|error| {
+                        warn!(
+                            pull_number = pull.number,
+                            head_sha = %pull.head_sha,
+                            %error,
+                            "GitLab verification tick failed without changing its verdict"
+                        );
+                    })
+                    .ok()
+            },
+            |pull, verified_base| self.judge_pull(&ledger, pull, verified_base, base_sha),
+        )?;
+        let Some(live) = live else {
+            return Ok(());
+        };
         if let Err(error) = sweep_quarantine_refs(
             &live,
             || self.repo.gitlab_quarantine_refs(&self.gitlab),
@@ -265,8 +246,51 @@ impl Bridge {
         Ok(())
     }
 
+    fn judge_pull(
+        &self,
+        ledger: &Ledger,
+        pull: &PullRequest,
+        verified_base: String,
+        base_sha: &str,
+    ) -> Result<LiveVerification> {
+        let source = checks::SourceCi::observe(&self.github, pull);
+        if let Err(error) =
+            self.verify_pull(ledger, pull, &verified_base, base_sha, source.failed())
+        {
+            warn!(
+                pull_number = pull.number,
+                head_sha = %pull.head_sha,
+                base_sha = %verified_base,
+                %error,
+                "GitLab verification tick failed without changing its verdict"
+            );
+        }
+        let entry = ledger.get(&pull.head_sha, &verified_base)?;
+        let scope = entry.as_ref().map_or(pull.scope, |entry| entry.scope);
+        if let Err(error) = checks::report_pull(
+            &self.github,
+            &self.gitlab,
+            pull,
+            source,
+            ledger.answering_pipeline(&pull.head_sha, &verified_base)?,
+            scope,
+        ) {
+            warn!(
+                pull_number = pull.number,
+                head_sha = %pull.head_sha,
+                %error,
+                "pull-request job statuses could not be published"
+            );
+        }
+        Ok(LiveVerification {
+            head_sha: pull.head_sha.clone(),
+            base_sha: verified_base,
+            scope,
+        })
+    }
+
     /// The base this tick judges `pull` against. A move that cannot be weighed
-    /// leaves the head where its verdict is.
+    /// is an error: the verdict on the old base does not stand for the new tree.
     fn base_for(
         &self,
         ledger: &Ledger,
@@ -276,21 +300,7 @@ impl Bridge {
     ) -> Result<String> {
         match verification_base(pull.scope, ledger.latest_base(&pull.head_sha)?, current) {
             BaseChoice::On(base) => Ok(base),
-            BaseChoice::Moved(latest) => {
-                let from = latest.base.clone();
-                Ok(self
-                    .moved_base(ledger, workspace, pull, latest, current)
-                    .unwrap_or_else(|error| {
-                        warn!(
-                            pull_number = pull.number,
-                            head_sha = %pull.head_sha,
-                            %from,
-                            %error,
-                            "the default branch's move was not weighed; the verdict stays"
-                        );
-                        from
-                    }))
-            }
+            BaseChoice::Moved(latest) => self.moved_base(ledger, workspace, pull, latest, current),
         }
     }
 
@@ -761,6 +771,26 @@ fn moved_base(
         },
         _ => Ok(latest.base),
     }
+}
+
+/// Judges every pull request on the base its verdict moves to. A pull whose
+/// base could not be weighed is neither judged nor reported this tick, so its
+/// published status stays; what is live is then unknown, so no verification
+/// branch can be swept and the answer is `None`.
+fn judge_each<P>(
+    pulls: &[P],
+    mut base_for: impl FnMut(&P) -> Option<String>,
+    mut judge: impl FnMut(&P, String) -> Result<LiveVerification>,
+) -> Result<Option<Vec<LiveVerification>>> {
+    let mut live = Vec::with_capacity(pulls.len());
+    let mut weighed = true;
+    for pull in pulls {
+        match base_for(pull) {
+            Some(base) => live.push(judge(pull, base)?),
+            None => weighed = false,
+        }
+    }
+    Ok(weighed.then_some(live))
 }
 
 /// A status description, marked when it speaks for a draft's narrower run.
@@ -2776,6 +2806,28 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// A move of main that could not be weighed once kept the old verdict, so
+    /// an unchecked merge tree could reach main on a stale pass.
+    #[test]
+    fn an_unweighed_move_of_main_judges_and_sweeps_nothing_for_that_head() {
+        let judged = RefCell::new(Vec::new());
+        let live = judge_each(
+            &[consts::PULL_HEAD, consts::RETIRED_HEAD],
+            |head| (*head == consts::RETIRED_HEAD).then(|| consts::CURRENT_BASE.to_owned()),
+            |head, base| {
+                judged.borrow_mut().push(*head);
+                Ok(LiveVerification {
+                    head_sha: (*head).to_owned(),
+                    base_sha: base,
+                    scope: Scope::Full,
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(judged.into_inner(), [consts::RETIRED_HEAD]);
+        assert!(live.is_none(), "an unknown live set sweeps no branch");
     }
 
     #[test]
