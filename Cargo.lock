@@ -6515,6 +6515,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-sync-oracle-tests"
+version = "0.0.1-alpha5"
+dependencies = [
+ "kithara",
+ "kithara-integration-tests",
+ "kithara-test-dylib",
+ "kithara-test-fixtures",
+ "kithara-test-utils",
+]
+
+[[package]]
 name = "kithara-sync-tests"
 version = "0.0.1-alpha5"
 dependencies = [

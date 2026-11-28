@@ -1,0 +1,5 @@
+[binaries]
+"kithara-sync-tests::sync" = [
+  "kithara-sync-tests::sync",
+  "kithara-sync-oracle-tests::sync",
+]
