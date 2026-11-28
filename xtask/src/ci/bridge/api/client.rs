@@ -390,25 +390,23 @@ fn pipeline_form(
         form.push(("variables[][key]".into(), key.into()));
         form.push(("variables[][value]".into(), value.into()));
     };
-    match run.scope {
-        Scope::Draft => {
-            variable("KITHARA_QUARANTINE_DRAFT", "1");
-            if let Some(block) = run.pr_tests {
+    if run.scope == Scope::Draft {
+        variable("KITHARA_QUARANTINE_DRAFT", "1");
+        if let Some(block) = run.pr_tests {
+            variable(PR_TESTS_ENV, block);
+        }
+    }
+    match (run.scope, run.repeat) {
+        (_, Some(Repeat::Failed { jobs, .. })) => {
+            variable(consts::QUARANTINE_JOBS_ENV, &partial::pattern(jobs));
+        }
+        (Scope::Full, Some(Repeat::RestOfDraft { tests })) => {
+            variable(consts::QUARANTINE_REUSED_ENV, "1");
+            if let Some(block) = tests {
                 variable(PR_TESTS_ENV, block);
             }
         }
-        Scope::Full => match run.repeat {
-            None => {}
-            Some(Repeat::RestOfDraft { tests }) => {
-                variable(consts::QUARANTINE_REUSED_ENV, "1");
-                if let Some(block) = tests {
-                    variable(PR_TESTS_ENV, block);
-                }
-            }
-            Some(Repeat::Failed { jobs, .. }) => {
-                variable(consts::QUARANTINE_JOBS_ENV, &partial::pattern(jobs));
-            }
-        },
+        (_, None) | (Scope::Draft, Some(Repeat::RestOfDraft { .. })) => {}
     }
     form
 }
@@ -852,6 +850,20 @@ mod tests {
                 named("KITHARA_QUARANTINE_DRAFT", "1"),
             ],
             "a draft leaves nothing out"
+        );
+        assert_eq!(
+            variables(Run {
+                scope: Scope::Draft,
+                repeat: Some(&failed),
+                ..Run::default()
+            }),
+            [
+                named("KITHARA_QUARANTINE_SHA", "head"),
+                named("KITHARA_QUARANTINE_BASE_SHA", "base"),
+                named("KITHARA_QUARANTINE_DRAFT", "1"),
+                named("KITHARA_QUARANTINE_JOBS", "/^(apple:test|verdict)$/"),
+            ],
+            "a stopped draft runs again only what it had not passed"
         );
     }
 

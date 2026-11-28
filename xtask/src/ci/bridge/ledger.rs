@@ -502,17 +502,28 @@ impl Ledger {
     /// because the branch a verification runs on is named after it, and the
     /// pipeline query that recovers a lost create would otherwise hand back the
     /// stopped run.
+    ///
+    /// What the stopped run passed on this merge tree stays answered for: the
+    /// next attempt runs again only the `unpassed` jobs. A run stopped before
+    /// any job of it existed leaves the attempt's plan as it was.
     pub(super) fn release(
         &self,
         head_sha: &str,
         base_sha: &str,
         attempt: u64,
         pipeline_id: u64,
+        unpassed: Vec<String>,
     ) -> Result<()> {
         self.with_locked_data(|data| {
             let key = ledger_key(head_sha, base_sha);
             let entry = owned_pipeline(data, &key, attempt, pipeline_id)?;
             reopen(entry)?;
+            if !unpassed.is_empty() {
+                entry.repeats = Some(Repeat::Failed {
+                    from: key.clone(),
+                    jobs: unpassed,
+                });
+            }
             self.write(data)
         })
     }
@@ -1202,7 +1213,7 @@ mod tests {
                 .is_err()
         );
         assert!(ledger.attach("head", "base", 1, 43).is_err());
-        ledger.release("head", "base", 1, 42).unwrap();
+        ledger.release("head", "base", 1, 42, Vec::new()).unwrap();
         assert_eq!(ledger.get("head", "base").unwrap().unwrap().attempt, 2);
     }
 
@@ -1234,8 +1245,8 @@ mod tests {
         ledger.attach("head", "base", 1, 42).unwrap();
         ledger.announce("head", "base", 1, 42).unwrap();
 
-        assert!(ledger.release("head", "base", 1, 43).is_err());
-        ledger.release("head", "base", 1, 42).unwrap();
+        assert!(ledger.release("head", "base", 1, 43, Vec::new()).is_err());
+        ledger.release("head", "base", 1, 42, Vec::new()).unwrap();
 
         let entry = ledger.get("head", "base").unwrap().unwrap();
         assert_eq!(entry.state, VerificationState::Testing);
@@ -1243,6 +1254,37 @@ mod tests {
         assert_eq!(entry.pipeline_id, None);
         assert!(!entry.announced);
         assert_eq!(entry.detail, None);
+    }
+
+    /// GitHub CI passing again after the bridge stopped the run must not start
+    /// the merge tree over: what passed before the stop is not run again.
+    #[test]
+    fn a_released_attempt_runs_again_only_what_the_stopped_run_had_not_passed() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        ledger.reserve("head", "base", Scope::Full).unwrap();
+        ledger.attach("head", "base", 1, 42).unwrap();
+
+        ledger
+            .release("head", "base", 1, 42, vec!["apple:test".into()])
+            .unwrap();
+
+        let entry = ledger.get("head", "base").unwrap().unwrap();
+        assert_eq!(
+            entry.repeats,
+            Some(Repeat::Failed {
+                from: ledger_key("head", "base"),
+                jobs: vec!["apple:test".into()],
+            })
+        );
+
+        ledger.attach("head", "base", 2, 43).unwrap();
+        ledger.release("head", "base", 2, 43, Vec::new()).unwrap();
+        assert_eq!(
+            ledger.get("head", "base").unwrap().unwrap().repeats,
+            entry.repeats,
+            "a run stopped before any job existed keeps the plan it had"
+        );
     }
 
     #[test]

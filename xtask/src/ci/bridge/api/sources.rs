@@ -100,9 +100,11 @@ impl Gitlab {
         self.pipeline_entries(pipeline_id, "bridges?")
     }
 
-    /// The jobs that turned a finished verification red, as [`red_jobs`]
-    /// reads them from its downstream pipeline.
-    pub(in crate::ci::bridge) fn failed_jobs(&self, pipeline_id: u64) -> Result<Vec<String>> {
+    /// The jobs of a verification's downstream pipelines.
+    pub(in crate::ci::bridge) fn downstream_jobs(
+        &self,
+        pipeline_id: u64,
+    ) -> Result<DownstreamJobs> {
         let mut jobs = Vec::new();
         for bridge in self.pipeline_bridges(pipeline_id)? {
             if bridge["downstream_pipeline"].is_null() {
@@ -114,7 +116,7 @@ impl Gitlab {
                 .context("GitLab child pipeline has no id")?;
             jobs.extend(self.pipeline_jobs(id)?);
         }
-        red_jobs(&jobs)
+        Ok(DownstreamJobs(jobs))
     }
 
     fn pipeline_entries(&self, pipeline_id: u64, entries: &str) -> Result<Vec<Value>> {
@@ -131,32 +133,58 @@ impl Gitlab {
     }
 }
 
-/// Every failed job that gates and, when the verdict is one of them, every
-/// judged lane that failed beside it: the verdict read their reports, and a
-/// lane it did not hold against the change is red only on its own.
-fn red_jobs(jobs: &[Value]) -> Result<Vec<String>> {
-    let mut gating = Vec::new();
-    let mut judged = Vec::new();
-    for job in jobs {
-        if job["status"].as_str() != Some("failed") {
-            continue;
+/// The jobs a verification ran below its parent pipeline.
+pub(in crate::ci::bridge) struct DownstreamJobs(Vec<Value>);
+
+impl DownstreamJobs {
+    /// Every failed job that gates and, when the verdict is one of them, every
+    /// judged lane that failed beside it: the verdict read their reports, and a
+    /// lane it did not hold against the change is red only on its own.
+    pub(in crate::ci::bridge) fn failed(&self) -> Result<Vec<String>> {
+        let mut gating = Vec::new();
+        let mut judged = Vec::new();
+        for job in &self.0 {
+            if job["status"].as_str() != Some("failed") {
+                continue;
+            }
+            let name = job["name"]
+                .as_str()
+                .context("GitLab job has no name")?
+                .to_owned();
+            if job["allow_failure"].as_bool() == Some(true) {
+                judged.push(name);
+            } else {
+                gating.push(name);
+            }
         }
-        let name = job["name"]
-            .as_str()
-            .context("GitLab job has no name")?
-            .to_owned();
-        if job["allow_failure"].as_bool() == Some(true) {
-            judged.push(name);
-        } else {
-            gating.push(name);
+        if gating.iter().any(|name| name == consts::VERDICT_JOB) {
+            gating.extend(judged);
         }
+        gating.sort();
+        gating.dedup();
+        Ok(gating)
     }
-    if gating.iter().any(|name| name == consts::VERDICT_JOB) {
-        gating.extend(judged);
+
+    /// Every job of a stopped run that did not pass: failed, stopped or never
+    /// started. A judged lane that failed is among them, since the verdict that
+    /// would have weighed it runs again and expects only the lanes named to it.
+    pub(in crate::ci::bridge) fn unpassed(&self) -> Result<Vec<String>> {
+        let mut names = Vec::new();
+        for job in &self.0 {
+            if job["status"].as_str() == Some("success") {
+                continue;
+            }
+            names.push(
+                job["name"]
+                    .as_str()
+                    .context("GitLab job has no name")?
+                    .to_owned(),
+            );
+        }
+        names.sort();
+        names.dedup();
+        Ok(names)
     }
-    gating.sort();
-    gating.dedup();
-    Ok(gating)
 }
 
 pub(super) fn pull_request(value: &Value) -> Result<PullRequest> {
@@ -203,11 +231,28 @@ mod tests {
             job("linux:lint", "failed", false),
             job("apple:lint", "success", false),
         ];
-        assert_eq!(red_jobs(&lanes).unwrap(), ["linux:lint"]);
+        assert_eq!(
+            DownstreamJobs(lanes.to_vec()).failed().unwrap(),
+            ["linux:lint"]
+        );
 
         let judged = [lanes.as_slice(), &[job("verdict", "failed", false)]].concat();
         assert_eq!(
-            red_jobs(&judged).unwrap(),
+            DownstreamJobs(judged).failed().unwrap(),
+            ["apple:test", "linux:lint", "verdict"]
+        );
+    }
+
+    #[test]
+    fn a_stopped_run_answers_only_for_the_jobs_that_passed() {
+        let jobs = [
+            job("apple:lint", "success", false),
+            job("apple:test", "failed", true),
+            job("linux:lint", "canceled", false),
+            job("verdict", "created", false),
+        ];
+        assert_eq!(
+            DownstreamJobs(jobs.to_vec()).unpassed().unwrap(),
             ["apple:test", "linux:lint", "verdict"]
         );
     }

@@ -215,7 +215,10 @@ impl Bridge {
         let mut workspace = None;
         for pull in &pulls {
             let verified_base = self.base_for(&ledger, &mut workspace, pull, base_sha)?;
-            if let Err(error) = self.verify_pull(&ledger, pull, &verified_base, base_sha) {
+            let source = checks::SourceCi::observe(&self.github, pull);
+            if let Err(error) =
+                self.verify_pull(&ledger, pull, &verified_base, base_sha, source.failed())
+            {
                 warn!(
                     pull_number = pull.number,
                     head_sha = %pull.head_sha,
@@ -230,6 +233,7 @@ impl Bridge {
                 &self.github,
                 &self.gitlab,
                 pull,
+                source,
                 ledger.answering_pipeline(&pull.head_sha, &verified_base)?,
                 scope,
             ) {
@@ -319,7 +323,7 @@ impl Bridge {
                 let Some(pipeline) = ledger.answering_pipeline(&pull.head_sha, &from)? else {
                     return Ok(None);
                 };
-                let jobs = self.gitlab.failed_jobs(pipeline)?;
+                let jobs = self.gitlab.downstream_jobs(pipeline)?.failed()?;
                 for job in &jobs {
                     if !intersection::touches(job, &moved, workspace)? {
                         return Ok(None);
@@ -346,6 +350,7 @@ impl Bridge {
         pull: &PullRequest,
         base_sha: &str,
         target_sha: &str,
+        source_failed: bool,
     ) -> Result<()> {
         require_sha("GitHub pull request", &pull.head_sha)?;
         let review_lines = self
@@ -399,80 +404,24 @@ impl Bridge {
             config: &self.config,
             ready_follows: entry.turned_ready,
         };
-        let Some(pipeline_id) = entry.pipeline_id else {
-            let pr_tests = match (entry.scope, &pull.tests) {
-                (Scope::Full, _) => None,
-                (Scope::Draft, Ok(tests)) => tests.as_deref(),
-                (Scope::Draft, Err(error)) => {
-                    let detail = format!("GitHub PR #{}: {error}", pull.number);
-                    self.github
-                        .report_status(&pull.head_sha, "failure", &detail, None)?;
-                    return ledger.reject(&pull.head_sha, base_sha, entry.attempt, detail);
-                }
-            };
-            let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt, entry.scope);
-            // The base is merged in either way; trust decides only whether the
-            // pull request keeps its own CI configuration on top of it.
-            let judged = match self
-                .repo
-                .judged_commit(base_sha, &pull.head_sha, !trusted)?
-            {
-                Judged::Commit(judged) => judged,
-                Judged::Conflict => {
-                    return reject_unmergeable(
-                        pull.number,
-                        &pull.head_sha,
-                        base_sha,
-                        &entry,
-                        |sha, state, detail, url| {
-                            self.github.report_status(sha, state, detail, url)
-                        },
-                        |attempt, detail| ledger.reject(&pull.head_sha, base_sha, attempt, detail),
-                    );
-                }
-            };
-            let tree = self.repo.tree_of(&judged)?;
-            ledger.record_tree(&pull.head_sha, base_sha, entry.attempt, &tree)?;
-            if let Some(tests) = pr_tests {
-                ledger.record_tests(&pull.head_sha, base_sha, entry.attempt, tests)?;
-            }
-            if carry_verified_tree(
+        let release = |id| {
+            let unpassed = self.gitlab.downstream_jobs(id)?.unpassed()?;
+            ledger.release(&pull.head_sha, base_sha, entry.attempt, id, unpassed)
+        };
+        if source_failed
+            && hold_for_source(
                 &attempt,
-                ledger.verified_tree(&tree)?,
+                entry.pipeline_id,
+                |id| self.gitlab.pipeline_observation(id, entry.scope.kind()),
+                |reference| self.gitlab.cancel_pipelines(reference),
+                release,
                 |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
-                |from, detail| ledger.carry(&pull.head_sha, base_sha, entry.attempt, from, detail),
-            )? {
-                return Ok(());
-            }
-            self.repo.push_gitlab(&self.gitlab, &judged, &reference)?;
-            let discovered =
-                self.gitlab
-                    .verification_pipelines(&reference, &pull.head_sha, base_sha)?;
-            start_verification(
-                &attempt,
-                &discovered,
-                ledger.last_pass(&pull.head_sha, base_sha)?.as_deref(),
-                || {
-                    self.gitlab.create_pipeline(
-                        &reference,
-                        &pull.head_sha,
-                        base_sha,
-                        Run {
-                            scope: entry.scope,
-                            pr_tests,
-                            repeat: entry.repeats.as_ref(),
-                        },
-                    )
-                },
-                |attempt, pipeline_id| {
-                    ledger.attach(&pull.head_sha, base_sha, attempt, pipeline_id)
-                },
-                |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
-                |attempt, pipeline_id| {
-                    ledger.announce(&pull.head_sha, base_sha, attempt, pipeline_id)
-                },
-            )?;
+            )?
+        {
             return Ok(());
+        }
+        let Some(pipeline_id) = entry.pipeline_id else {
+            return self.start_pull(ledger, pull, base_sha, &entry, &attempt, trusted);
         };
 
         if !entry.announced {
@@ -499,8 +448,89 @@ impl Bridge {
             |id, state, detail| {
                 ledger.finish(&pull.head_sha, base_sha, entry.attempt, id, state, detail)
             },
-            |id| ledger.release(&pull.head_sha, base_sha, entry.attempt, id),
+            release,
         )
+    }
+
+    /// Push the merge an open attempt judges and start its pipeline, unless
+    /// the attempt is settled before that: a draft whose test block cannot be
+    /// read, a merge that conflicts, or a tree already verified.
+    fn start_pull(
+        &self,
+        ledger: &Ledger,
+        pull: &PullRequest,
+        base_sha: &str,
+        entry: &LedgerEntry,
+        attempt: &VerificationAttempt<'_>,
+        trusted: bool,
+    ) -> Result<()> {
+        let pr_tests = match (entry.scope, &pull.tests) {
+            (Scope::Full, _) => None,
+            (Scope::Draft, Ok(tests)) => tests.as_deref(),
+            (Scope::Draft, Err(error)) => {
+                let detail = format!("GitHub PR #{}: {error}", pull.number);
+                self.github
+                    .report_status(&pull.head_sha, "failure", &detail, None)?;
+                return ledger.reject(&pull.head_sha, base_sha, entry.attempt, detail);
+            }
+        };
+        let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt, entry.scope);
+        // The base is merged in either way; trust decides only whether the
+        // pull request keeps its own CI configuration on top of it.
+        let judged = match self
+            .repo
+            .judged_commit(base_sha, &pull.head_sha, !trusted)?
+        {
+            Judged::Commit(judged) => judged,
+            Judged::Conflict => {
+                return reject_unmergeable(
+                    pull.number,
+                    &pull.head_sha,
+                    base_sha,
+                    entry,
+                    |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
+                    |attempt, detail| ledger.reject(&pull.head_sha, base_sha, attempt, detail),
+                );
+            }
+        };
+        let tree = self.repo.tree_of(&judged)?;
+        ledger.record_tree(&pull.head_sha, base_sha, entry.attempt, &tree)?;
+        if let Some(tests) = pr_tests {
+            ledger.record_tests(&pull.head_sha, base_sha, entry.attempt, tests)?;
+        }
+        if carry_verified_tree(
+            attempt,
+            ledger.verified_tree(&tree)?,
+            |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
+            |from, detail| ledger.carry(&pull.head_sha, base_sha, entry.attempt, from, detail),
+        )? {
+            return Ok(());
+        }
+        self.repo.push_gitlab(&self.gitlab, &judged, &reference)?;
+        let discovered =
+            self.gitlab
+                .verification_pipelines(&reference, &pull.head_sha, base_sha)?;
+        start_verification(
+            attempt,
+            &discovered,
+            ledger.last_pass(&pull.head_sha, base_sha)?.as_deref(),
+            || {
+                self.gitlab.create_pipeline(
+                    &reference,
+                    &pull.head_sha,
+                    base_sha,
+                    Run {
+                        scope: entry.scope,
+                        pr_tests,
+                        repeat: entry.repeats.as_ref(),
+                    },
+                )
+            },
+            |attempt, pipeline_id| ledger.attach(&pull.head_sha, base_sha, attempt, pipeline_id),
+            |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
+            |attempt, pipeline_id| ledger.announce(&pull.head_sha, base_sha, attempt, pipeline_id),
+        )?;
+        Ok(())
     }
 }
 
@@ -926,6 +956,47 @@ fn reject_control_changes(
         );
     }
     reject(entry.attempt, detail)?;
+    Ok(true)
+}
+
+/// Keep a head whose GitHub CI failed off the GitLab hosts.
+///
+/// Its verdict is already red, and a GitLab run of it only holds a macOS slot
+/// the heads still in review wait for. A running pipeline is stopped and
+/// released with what it had not passed, so a GitHub CI that passes again
+/// resumes the same merge tree instead of starting it over; no new one starts
+/// meanwhile. A pipeline that is no longer running is left to be read, since
+/// what it settled is a verdict. Returns whether the tick ends here.
+fn hold_for_source(
+    attempt: &VerificationAttempt<'_>,
+    pipeline_id: Option<u64>,
+    observe: impl FnOnce(u64) -> Result<PipelineObservation>,
+    cancel: impl FnOnce(&str) -> Result<()>,
+    release: impl FnOnce(u64) -> Result<()>,
+    report: impl FnOnce(&str, &str, &str, Option<&str>) -> Result<()>,
+) -> Result<bool> {
+    if let Some(id) = pipeline_id {
+        if observe(id)? != PipelineObservation::Running {
+            return Ok(false);
+        }
+        cancel(&quarantine_ref(
+            attempt.head_sha,
+            attempt.base_sha,
+            attempt.attempt,
+            attempt.scope,
+        ))?;
+        release(id)?;
+    }
+    let detail = scoped(
+        attempt.scope,
+        format!(
+            "GitHub CI failed on this head; GitLab verification merged with {} {} resumes once \
+             it passes",
+            attempt.config.github_branch,
+            abbreviate(attempt.base_sha)
+        ),
+    );
+    report(attempt.head_sha, "pending", &detail, None)?;
     Ok(true)
 }
 
@@ -1717,6 +1788,7 @@ mod tests {
         Finish(VerificationState),
         Release(u64),
         Reject(u64),
+        Cancel(String),
     }
 
     #[test]
@@ -2111,6 +2183,92 @@ mod tests {
                 VerificationAction::Report("head".into(), "pending".into()),
                 VerificationAction::Release(42),
             ]
+        );
+    }
+
+    fn held(
+        pipeline_id: Option<u64>,
+        observation: PipelineObservation,
+    ) -> (bool, Vec<VerificationAction>) {
+        let actions = RefCell::new(Vec::new());
+        let ends = hold_for_source(
+            &VerificationAttempt {
+                head_sha: "head",
+                base_sha: "base",
+                attempt: 1,
+                scope: Scope::Full,
+                config: &status_config(),
+                ready_follows: false,
+            },
+            pipeline_id,
+            |id| {
+                actions.borrow_mut().push(VerificationAction::Observe(id));
+                Ok(observation)
+            },
+            |reference| {
+                actions
+                    .borrow_mut()
+                    .push(VerificationAction::Cancel(reference.into()));
+                Ok(())
+            },
+            |id| {
+                actions.borrow_mut().push(VerificationAction::Release(id));
+                Ok(())
+            },
+            |sha, state, _, _| {
+                actions
+                    .borrow_mut()
+                    .push(VerificationAction::Report(sha.into(), state.into()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        (ends, actions.into_inner())
+    }
+
+    /// A head whose GitHub CI is red keeps no macOS slot: its running GitLab
+    /// run is stopped and released with what it had not passed.
+    #[test]
+    fn a_red_github_ci_stops_the_running_verification() {
+        assert_eq!(
+            held(Some(42), PipelineObservation::Running),
+            (
+                true,
+                vec![
+                    VerificationAction::Observe(42),
+                    VerificationAction::Cancel(quarantine_ref("head", "base", 1, Scope::Full)),
+                    VerificationAction::Release(42),
+                    VerificationAction::Report("head".into(), "pending".into()),
+                ]
+            )
+        );
+    }
+
+    /// Pipeline 2338577 was stopped by hand on a head whose GitHub CI had
+    /// failed, and the bridge opened attempt-2 on it a minute later. The
+    /// released attempt now waits for GitHub CI instead of starting a run.
+    #[test]
+    fn a_stopped_head_whose_github_ci_failed_gets_no_new_attempt() {
+        assert_eq!(
+            held(Some(42), PipelineObservation::Cancelled),
+            (false, vec![VerificationAction::Observe(42)]),
+            "the stopped run is released the usual way"
+        );
+        assert_eq!(
+            held(None, PipelineObservation::Running),
+            (
+                true,
+                vec![VerificationAction::Report("head".into(), "pending".into())]
+            ),
+            "the released attempt starts nothing"
+        );
+    }
+
+    #[test]
+    fn a_settled_run_is_read_even_when_github_ci_failed() {
+        assert_eq!(
+            held(Some(42), PipelineObservation::Succeeded),
+            (false, vec![VerificationAction::Observe(42)])
         );
     }
 

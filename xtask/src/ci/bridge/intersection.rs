@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn unrelated_members_do_not_meet() {
         assert!(!reaches(
-            &paths(&["crates/kithara-ui/src/lib.rs", "docs/guide.md"]),
+            &paths(&["crates/kithara-ui/src/lib.rs", "docs/README.md"]),
             &paths(&["crates/kithara-audio/src/lib.rs", "README.md"]),
             &workspace(),
         ));
