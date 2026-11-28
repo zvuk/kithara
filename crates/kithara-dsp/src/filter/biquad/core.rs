@@ -132,6 +132,36 @@ impl Biquad {
         Ok(())
     }
 
+    /// Filters interleaved lane frames from zero history, then resets;
+    /// arithmetic can differ from streaming.
+    ///
+    /// # Errors
+    /// [`FilterError::Shape`] for frame shape/range or [`FilterError::Parameters`]
+    /// for nonfinite input, before any mutation.
+    pub fn process_window(
+        &mut self,
+        samples: &mut [f32],
+        range: Range<usize>,
+    ) -> Result<(), FilterError> {
+        let channels = self.scratch.len();
+        if !samples.len().is_multiple_of(channels) {
+            return Err(FilterError::Shape);
+        }
+        let start = range
+            .start
+            .checked_mul(channels)
+            .ok_or(FilterError::Shape)?;
+        let end = range.end.checked_mul(channels).ok_or(FilterError::Shape)?;
+        let samples = samples.get_mut(start..end).ok_or(FilterError::Shape)?;
+        if !backend::all_finite(samples) {
+            return Err(FilterError::Parameters);
+        }
+        self.reset();
+        let result = self.cascade.process_window(samples);
+        self.reset();
+        result
+    }
+
     fn quiet_run<P: DerefMut<Target = [f32]>>(
         &mut self,
         planes: &mut [P],

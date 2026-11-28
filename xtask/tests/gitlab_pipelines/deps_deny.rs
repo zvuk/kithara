@@ -10,14 +10,20 @@ fn review_advisories_compare_dependency_inputs_to_their_verified_base() {
     let rules = config.definition("deps:advisories")["rules"]
         .as_sequence()
         .expect("advisory scheduling rules are a sequence");
-    assert_eq!(rules.len(), 6);
-    assert!(
-        matches!(&rules[0], Value::Tagged(switch) if switch.value
-            == serde_yaml_ng::from_str::<Value>("[.linux-pool, rules]").unwrap()),
-        "the pool switch comes first"
-    );
+    assert_eq!(rules.len(), 8);
+    for (rule, owner) in [
+        (&rules[0], ".linux-pool"),
+        (&rules[1], ".reused-from-draft"),
+        (&rules[2], ".repeated-jobs"),
+    ] {
+        assert!(
+            matches!(rule, Value::Tagged(switch) if switch.value
+                == serde_yaml_ng::from_str::<Value>(&format!("[{owner}, rules]")).unwrap()),
+            "the pool switch, the draft reuse and the repeat come first"
+        );
+    }
 
-    for (rule, kind) in [(&rules[1], "weekly"), (&rules[2], "main")] {
+    for (rule, kind) in [(&rules[3], "weekly"), (&rules[4], "main")] {
         let rule = rule.as_mapping().expect("a full-kind rule is a mapping");
         assert_eq!(
             rule.get("if").and_then(Value::as_str),
@@ -26,7 +32,7 @@ fn review_advisories_compare_dependency_inputs_to_their_verified_base() {
         assert!(!rule.contains_key("changes"), "{kind} audits every run");
     }
 
-    let unverified = rules[3].as_mapping().expect("the base guard is a mapping");
+    let unverified = rules[5].as_mapping().expect("the base guard is a mapping");
     assert_eq!(
         unverified.get("if").and_then(Value::as_str),
         Some("$KITHARA_QUARANTINE_BASE_SHA == null")
@@ -36,7 +42,7 @@ fn review_advisories_compare_dependency_inputs_to_their_verified_base() {
         Some("never")
     );
 
-    for (rule, kind) in [(&rules[4], "quarantine"), (&rules[5], "branch")] {
+    for (rule, kind) in [(&rules[6], "quarantine"), (&rules[7], "branch")] {
         let rule = rule.as_mapping().expect("a review rule is a mapping");
         assert_eq!(
             rule.get("if").and_then(Value::as_str),

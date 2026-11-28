@@ -3374,8 +3374,16 @@ steps = [
   ], label = "Safari WASM tests" },
 ]
 role = "platforms"
-kinds_gitlab = ["nightly"]
+# A review runs it only for a change to what drives the browser: the runner,
+# its fixture, the xtask owner that launches it, and the target configuration.
+kinds_gitlab = ["branch", "quarantine", "nightly"]
 kinds_github = []
+path_globs = [
+  "tests/wasm-runner/**",
+  "tests/wasm-runner-fixture/**",
+  "xtask/src/wasm/**",
+  ".cargo/config.toml",
+]
 timeout_minutes = 60
 
 

@@ -75,6 +75,8 @@ async fn runner_silent_wav_yields_all_zero_envelope(
     .store(memory_store(pools.clone()))
     .build();
 
+    // A silent 1s WAV must decode end to end and finalise to a native-column
+    // envelope at factor 1. No frames are loud, so nothing normalises up to 1.0.
     let analysis = run_analysis(&CancelToken::never(), config, pools, NonZeroU32::MIN)
         .await
         .expect("silent WAV must decode to a finalised analysis");
@@ -83,16 +85,12 @@ async fn runner_silent_wav_yields_all_zero_envelope(
         .cloned()
         .expect("the registered waveform analyzer must fill its slot");
 
-    assert_eq!(
-        waveform.len(),
-        40,
-        "one second carries 40 complete native windows"
-    );
-    assert_eq!(waveform.span_frames().get(), 1024);
+    assert_eq!(waveform.len(), 44_100_usize.div_ceil(64));
+    assert_eq!(waveform.span_frames().get(), 64);
     assert!(
-        waveform.buckets().iter().all(|b| *b == Bucket::default()),
+        waveform.buckets().all(|b| b == Bucket::default()),
         "a silent source must yield all-zero buckets: {:?}",
-        waveform.buckets()
+        waveform
     );
 }
 
@@ -117,4 +115,17 @@ async fn runner_returns_nothing_when_cancelled_upfront(
             .is_none(),
         "a pre-cancelled analysis must not return an envelope"
     );
+}
+
+#[kithara::test]
+fn envelope_boundaries_equal_adjacent_four_band_eq_centres() {
+    let layout = kithara::effects::eq::generate_log_spaced_bands(4);
+    let edges = kithara::analysis::AnalysisParams::default().band_edges_hz();
+    for (edge, centres) in edges.into_iter().zip(layout.windows(2)) {
+        let expected = f64::from((centres[0].frequency() * centres[1].frequency()).sqrt());
+        assert!(
+            (edge - expected).abs() <= expected * 0.000_001,
+            "{edge} differs from {expected}"
+        );
+    }
 }

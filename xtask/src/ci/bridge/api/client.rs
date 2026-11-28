@@ -9,12 +9,16 @@ use serde_json::Value;
 use super::{
     super::{
         command::BridgeConfig,
+        ledger::Repeat,
         model::{PipelineObservation, PullRequest, Scope, pipeline_observation},
     },
     http::{Api, Payload, paginated},
     sources::pull_request,
 };
-use crate::ci::run::PipelineKind;
+use crate::{
+    ci::{partial, run::PipelineKind},
+    consts,
+};
 
 pub(in crate::ci::bridge) struct Github {
     pub(super) config: BridgeConfig,
@@ -152,10 +156,9 @@ impl Gitlab {
         reference: &str,
         head_sha: &str,
         base_sha: &str,
-        scope: Scope,
-        pr_tests: Option<&str>,
+        run: Run<'_>,
     ) -> Result<u64> {
-        let form = pipeline_form(reference, head_sha, base_sha, scope, pr_tests);
+        let form = pipeline_form(reference, head_sha, base_sha, run);
         let payload = Payload::Form(&form);
         let response = self.request(&Method::POST, "pipeline", Some(&payload))?;
         response["id"]
@@ -351,15 +354,27 @@ impl Gitlab {
     }
 }
 
+/// What one verification run checks.
+#[derive(Clone, Copy, Default)]
+pub(in crate::ci::bridge) struct Run<'a> {
+    pub(in crate::ci::bridge) scope: Scope,
+    /// A draft's test block.
+    pub(in crate::ci::bridge) pr_tests: Option<&'a str>,
+    /// What an earlier run of the same head already answered for.
+    pub(in crate::ci::bridge) repeat: Option<&'a Repeat>,
+}
+
 /// The form that starts a verification run. A draft says so, and the parent
 /// pipeline dispatches it as a branch; its test block, when it has one, reaches
-/// every job of the run as `KITHARA_PR_TESTS`.
+/// every job of the run as `KITHARA_PR_TESTS`. A full run that follows its
+/// passed draft says so and hands down the draft's block, so the jobs that
+/// draft ran whole are not created and its suites run less its scope. A repeat
+/// of failed jobs names them, and no other job is created.
 fn pipeline_form(
     reference: &str,
     head_sha: &str,
     base_sha: &str,
-    scope: Scope,
-    pr_tests: Option<&str>,
+    run: Run<'_>,
 ) -> Vec<(String, String)> {
     let mut form = vec![
         ("ref".into(), reference.into()),
@@ -371,13 +386,27 @@ fn pipeline_form(
         ),
         ("variables[][value]".into(), base_sha.into()),
     ];
-    if scope == Scope::Draft {
-        form.push(("variables[][key]".into(), "KITHARA_QUARANTINE_DRAFT".into()));
-        form.push(("variables[][value]".into(), "1".into()));
-        if let Some(block) = pr_tests {
-            form.push(("variables[][key]".into(), PR_TESTS_ENV.into()));
-            form.push(("variables[][value]".into(), block.into()));
+    let mut variable = |key: &str, value: &str| {
+        form.push(("variables[][key]".into(), key.into()));
+        form.push(("variables[][value]".into(), value.into()));
+    };
+    if run.scope == Scope::Draft {
+        variable("KITHARA_QUARANTINE_DRAFT", "1");
+        if let Some(block) = run.pr_tests {
+            variable(PR_TESTS_ENV, block);
         }
+    }
+    match (run.scope, run.repeat) {
+        (_, Some(Repeat::Failed { jobs, .. })) => {
+            variable(consts::QUARANTINE_JOBS_ENV, &partial::pattern(jobs));
+        }
+        (Scope::Full, Some(Repeat::RestOfDraft { tests })) => {
+            variable(consts::QUARANTINE_REUSED_ENV, "1");
+            if let Some(block) = tests {
+                variable(PR_TESTS_ENV, block);
+            }
+        }
+        (_, None) | (Scope::Draft, Some(Repeat::RestOfDraft { .. })) => {}
     }
     form
 }
@@ -709,7 +738,16 @@ mod tests {
 
     #[test]
     fn a_draft_run_carries_its_test_block() {
-        let form = pipeline_form("ref", "head", "base", Scope::Draft, Some("filter = \"x\""));
+        let form = pipeline_form(
+            "ref",
+            "head",
+            "base",
+            Run {
+                scope: Scope::Draft,
+                pr_tests: Some("filter = \"x\""),
+                ..Run::default()
+            },
+        );
         let keys: Vec<&str> = form.iter().map(|(_, value)| value.as_str()).collect();
 
         assert!(
@@ -717,20 +755,36 @@ mod tests {
                 .any(|pair| pair == ["KITHARA_PR_TESTS", "filter = \"x\""])
         );
         assert!(
-            !pipeline_form("ref", "head", "base", Scope::Full, Some("filter = \"x\""))
-                .iter()
-                .any(|(_, value)| value == "KITHARA_PR_TESTS")
+            !pipeline_form(
+                "ref",
+                "head",
+                "base",
+                Run {
+                    pr_tests: Some("filter = \"x\""),
+                    ..Run::default()
+                }
+            )
+            .iter()
+            .any(|(_, value)| value == "KITHARA_PR_TESTS")
         );
     }
 
     #[test]
     fn a_draft_run_is_marked_for_the_dispatcher() {
         assert_eq!(
-            pipeline_form("ref", "head", "base", Scope::Draft, None)
-                .iter()
-                .filter(|(key, _)| key == "variables[][key]")
-                .map(|(_, value)| value.as_str())
-                .collect::<Vec<_>>(),
+            pipeline_form(
+                "ref",
+                "head",
+                "base",
+                Run {
+                    scope: Scope::Draft,
+                    ..Run::default()
+                }
+            )
+            .iter()
+            .filter(|(key, _)| key == "variables[][key]")
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>(),
             [
                 "KITHARA_QUARANTINE_SHA",
                 "KITHARA_QUARANTINE_BASE_SHA",
@@ -738,9 +792,78 @@ mod tests {
             ]
         );
         assert!(
-            !pipeline_form("ref", "head", "base", Scope::Full, None)
+            !pipeline_form("ref", "head", "base", Run::default())
                 .iter()
                 .any(|(_, value)| value == "KITHARA_QUARANTINE_DRAFT")
+        );
+    }
+
+    #[test]
+    fn only_a_full_run_names_what_an_earlier_run_answered_for() {
+        let variables = |run| {
+            pipeline_form("ref", "head", "base", run)[1..]
+                .chunks(2)
+                .map(|pair| (pair[0].1.clone(), pair[1].1.clone()))
+                .collect::<Vec<_>>()
+        };
+        let named = |key: &str, value: &str| (key.to_owned(), value.to_owned());
+        let rest = Repeat::RestOfDraft {
+            tests: Some("filter = \"x\"".into()),
+        };
+        let failed = Repeat::Failed {
+            from: "head:old".into(),
+            jobs: vec!["apple:test".into(), "verdict".into()],
+        };
+
+        assert_eq!(
+            variables(Run {
+                repeat: Some(&rest),
+                ..Run::default()
+            }),
+            [
+                named("KITHARA_QUARANTINE_SHA", "head"),
+                named("KITHARA_QUARANTINE_BASE_SHA", "base"),
+                named("KITHARA_QUARANTINE_REUSED", "1"),
+                named("KITHARA_PR_TESTS", "filter = \"x\""),
+            ]
+        );
+        assert_eq!(
+            variables(Run {
+                repeat: Some(&failed),
+                ..Run::default()
+            }),
+            [
+                named("KITHARA_QUARANTINE_SHA", "head"),
+                named("KITHARA_QUARANTINE_BASE_SHA", "base"),
+                named("KITHARA_QUARANTINE_JOBS", "/^(apple:test|verdict)$/"),
+            ]
+        );
+        assert_eq!(
+            variables(Run {
+                scope: Scope::Draft,
+                repeat: Some(&rest),
+                ..Run::default()
+            }),
+            [
+                named("KITHARA_QUARANTINE_SHA", "head"),
+                named("KITHARA_QUARANTINE_BASE_SHA", "base"),
+                named("KITHARA_QUARANTINE_DRAFT", "1"),
+            ],
+            "a draft leaves nothing out"
+        );
+        assert_eq!(
+            variables(Run {
+                scope: Scope::Draft,
+                repeat: Some(&failed),
+                ..Run::default()
+            }),
+            [
+                named("KITHARA_QUARANTINE_SHA", "head"),
+                named("KITHARA_QUARANTINE_BASE_SHA", "base"),
+                named("KITHARA_QUARANTINE_DRAFT", "1"),
+                named("KITHARA_QUARANTINE_JOBS", "/^(apple:test|verdict)$/"),
+            ],
+            "a stopped draft runs again only what it had not passed"
         );
     }
 

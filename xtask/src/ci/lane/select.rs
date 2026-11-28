@@ -4,7 +4,7 @@ use std::{
     process::Command,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::{Args, ValueEnum};
 use kithara_devtools::Ctx;
 use serde::{Deserialize, Serialize};
@@ -167,23 +167,12 @@ fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -
     if !membership.contains(kind) {
         return Ok(false);
     }
-    if lane.path_globs.is_empty() || args.kind.is_full() {
+    if args.kind.is_full() {
         return Ok(true);
     }
-    let Some(changed_paths) = args.changed_paths.as_deref() else {
-        return Ok(true);
-    };
-    for glob in &lane.path_globs {
-        let glob = glob::Pattern::new(glob)
-            .with_context(|| format!("invalid path glob for CI lane `{name}`"))?;
-        if changed_paths
-            .iter()
-            .any(|path| glob.matches_path(Path::new(path)))
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    args.changed_paths
+        .as_deref()
+        .map_or(Ok(true), |changed| lane.scheduled_by(name, changed))
 }
 
 /// Whether some full pipeline kind schedules a lane with this membership.

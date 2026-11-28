@@ -16,6 +16,7 @@ deep:rtsan:
   extends: .deep-job
   timeout: 120 minutes
   rules:
+    - !reference [.repeated-jobs, rules]
     - if: $KITHARA_PIPELINE_KIND == "branch"
       when: manual
       allow_failure: true
@@ -49,6 +50,7 @@ deep:bench:
   timeout: 120 minutes
   interruptible: false
   rules:
+    - !reference [.repeated-jobs, rules]
     - if: $KITHARA_PIPELINE_KIND == "branch"
       when: manual
       allow_failure: true
@@ -88,6 +90,7 @@ deep:bench:
   interruptible: true
   rules:
     - !reference [.linux-pool, rules]
+    - !reference [.reused-from-draft, rules]
     - !reference [.rules-verify-and-branch, rules]
     - !reference [.rules-weekly, rules]
 
@@ -113,6 +116,8 @@ deps:advisories:
   interruptible: true
   rules:
     - !reference [.linux-pool, rules]
+    - !reference [.reused-from-draft, rules]
+    - !reference [.repeated-jobs, rules]
     - if: $KITHARA_PIPELINE_KIND == "weekly"
       interruptible: false
     - if: $KITHARA_PIPELINE_KIND == "main"

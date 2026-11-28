@@ -24,6 +24,46 @@ pub(super) struct LedgerEntry {
     #[serde(default)]
     pub(super) scope: Scope,
     updated_at: u64,
+    /// The tree of the merge commit the verification judged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) tree: Option<String>,
+    /// What this full run leaves out because an earlier run of the same head
+    /// already answered for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) repeats: Option<Repeat>,
+    /// The test block a draft's run was given, which the rest of that draft
+    /// run leaves out once it turns ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) tests: Option<String>,
+    /// The verification whose verdict this one stands on without a pipeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) carried_from: Option<String>,
+    /// The pull request was marked ready while this draft's run was going;
+    /// its full run follows the draft's verdict.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) turned_ready: bool,
+}
+
+/// The part of a full verification that an earlier run of the same head did
+/// not already answer for.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum Repeat {
+    /// The draft's passed run of the same merge ran its jobs whole and its
+    /// suites for its own scope, `tests` included: a ready run creates none of
+    /// the former and runs the latter less that scope.
+    RestOfDraft { tests: Option<String> },
+    /// The default branch moved past a rejection, by ledger key, and reached
+    /// every job that failed there: only those run again.
+    Failed { from: String, jobs: Vec<String> },
+}
+
+/// The verification of a head that changed last.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct Latest {
+    pub(super) base: String,
+    pub(super) state: VerificationState,
+    pub(super) scope: Scope,
 }
 
 /// What the bridge last posted on one default-branch commit.
@@ -111,20 +151,21 @@ impl Ledger {
 
     /// The base of the verification of this head that changed last, whatever
     /// its scope or state. Equal timestamps choose the later ledger key.
-    pub(super) fn latest_base(
-        &self,
-        head_sha: &str,
-    ) -> Result<Option<(String, VerificationState)>> {
+    pub(super) fn latest_base(&self, head_sha: &str) -> Result<Option<Latest>> {
         self.with_locked_data(|data| {
             Ok(data
                 .verifications
                 .iter()
                 .filter_map(|(key, entry)| {
                     let (head, base) = key.split_once(':')?;
-                    (head == head_sha).then_some((entry.updated_at, key, base, entry.state))
+                    (head == head_sha).then_some((entry.updated_at, key, base, entry))
                 })
                 .max_by_key(|(updated_at, key, _, _)| (*updated_at, *key))
-                .map(|(_, _, base, state)| (base.to_owned(), state)))
+                .map(|(_, _, base, entry)| Latest {
+                    base: base.to_owned(),
+                    state: entry.state,
+                    scope: entry.scope,
+                }))
         })
     }
 
@@ -136,13 +177,18 @@ impl Ledger {
                 && data
                     .verifications
                     .get(&ledger_key(head_sha, base_sha))
-                    .is_some_and(|entry| entry.scope == Scope::Draft))
+                    .is_some_and(|entry| entry.scope == Scope::Draft && !entry.turned_ready))
         })
     }
 
     /// The verification of this head against this base, opened when there is
-    /// none. A full verification answers for a draft; a draft that turned
-    /// ready opens its next attempt as a full one.
+    /// none. A full verification answers for a draft.
+    ///
+    /// A draft that turned ready while its run is going keeps answering until
+    /// that run's verdict: the run is the same merge, and stopping it threw
+    /// its work away. A passed draft then opens its next attempt as a full one
+    /// that runs only what the draft did not; a rejected one, or one with no
+    /// run, opens it whole.
     pub(super) fn reserve(
         &self,
         head_sha: &str,
@@ -153,26 +199,179 @@ impl Ledger {
             let key = ledger_key(head_sha, base_sha);
             if let Some(entry) = data.verifications.get_mut(&key) {
                 if entry.scope == Scope::Draft && scope == Scope::Full {
-                    reopen(entry)?;
-                    entry.scope = Scope::Full;
+                    match (entry.state, entry.pipeline_id) {
+                        (VerificationState::Testing, Some(_)) => entry.turned_ready = true,
+                        (state, draft) => {
+                            entry.repeats = (state == VerificationState::Verified
+                                && draft.is_some())
+                            .then(|| Repeat::RestOfDraft {
+                                tests: entry.tests.clone(),
+                            });
+                            reopen(entry)?;
+                            entry.scope = Scope::Full;
+                        }
+                    }
                     let entry = entry.clone();
                     self.write(data)?;
                     return Ok(entry);
                 }
                 return Ok(entry.clone());
             }
-            let entry = LedgerEntry {
-                state: VerificationState::Testing,
-                attempt: 1,
-                pipeline_id: None,
-                announced: false,
-                detail: None,
-                scope,
-                updated_at: unix_time()?,
-            };
+            let entry = fresh(scope)?;
             data.verifications.insert(key, entry.clone());
             self.write(data)?;
             Ok(entry)
+        })
+    }
+
+    /// The full verification that passed on this merge tree, by ledger key.
+    /// A repeat of failed jobs ran the rest of the merge on another tree.
+    pub(super) fn verified_tree(&self, tree: &str) -> Result<Option<String>> {
+        self.with_locked_data(|data| {
+            Ok(data
+                .verifications
+                .iter()
+                .find(|(_, entry)| {
+                    entry.state == VerificationState::Verified
+                        && entry.scope == Scope::Full
+                        && entry.tree.as_deref() == Some(tree)
+                        && !matches!(entry.repeats, Some(Repeat::Failed { .. }))
+                })
+                .map(|(key, _)| key.clone()))
+        })
+    }
+
+    pub(super) fn record_tree(
+        &self,
+        head_sha: &str,
+        base_sha: &str,
+        attempt: u64,
+        tree: &str,
+    ) -> Result<()> {
+        self.update(head_sha, base_sha, |data, key| {
+            let entry = testing_attempt(data, key, attempt)?;
+            match entry.tree.as_deref() {
+                Some(recorded) if recorded == tree => Ok(false),
+                Some(recorded) => {
+                    bail!("verification {key} judged tree {recorded}; refusing {tree}")
+                }
+                None => {
+                    entry.tree = Some(tree.to_owned());
+                    Ok(true)
+                }
+            }
+        })
+    }
+
+    /// The test block an open draft attempt runs with.
+    pub(super) fn record_tests(
+        &self,
+        head_sha: &str,
+        base_sha: &str,
+        attempt: u64,
+        tests: &str,
+    ) -> Result<()> {
+        self.update(head_sha, base_sha, |data, key| {
+            let entry = testing_attempt(data, key, attempt)?;
+            if entry.tests.as_deref() == Some(tests) {
+                return Ok(false);
+            }
+            entry.tests = Some(tests.to_owned());
+            Ok(true)
+        })
+    }
+
+    /// Settle an open attempt with the verdict of `from`, which judged the
+    /// same merge, without a pipeline of its own.
+    pub(super) fn carry(
+        &self,
+        head_sha: &str,
+        base_sha: &str,
+        attempt: u64,
+        from: &str,
+        detail: String,
+    ) -> Result<()> {
+        self.update(head_sha, base_sha, |data, key| {
+            let entry = testing_attempt(data, key, attempt)?;
+            if entry.pipeline_id.is_some() {
+                bail!("verification {key} attempt {attempt} already runs a pipeline");
+            }
+            entry.state = VerificationState::Verified;
+            entry.carried_from = Some(from.to_owned());
+            entry.announced = true;
+            entry.detail = Some(detail);
+            Ok(true)
+        })
+    }
+
+    /// The pipeline whose jobs answer for this verification: its own, or that
+    /// of the verification it carried its verdict from.
+    pub(super) fn answering_pipeline(&self, head_sha: &str, base_sha: &str) -> Result<Option<u64>> {
+        self.with_locked_data(|data| {
+            let mut key = ledger_key(head_sha, base_sha);
+            for _ in 0..=data.verifications.len() {
+                let Some(entry) = data.verifications.get(&key) else {
+                    return Ok(None);
+                };
+                match (entry.pipeline_id, &entry.carried_from) {
+                    (Some(id), _) => return Ok(Some(id)),
+                    (None, Some(from)) => key.clone_from(from),
+                    (None, None) => return Ok(None),
+                }
+            }
+            bail!("verification {key} carries its verdict in a cycle")
+        })
+    }
+
+    /// Stand a verified head on a new base whose move reaches none of what
+    /// the head changed.
+    pub(super) fn carry_forward(
+        &self,
+        head_sha: &str,
+        from_base: &str,
+        base_sha: &str,
+        detail: String,
+    ) -> Result<()> {
+        let entry = LedgerEntry {
+            state: VerificationState::Verified,
+            announced: true,
+            detail: Some(detail),
+            carried_from: Some(ledger_key(head_sha, from_base)),
+            ..fresh(Scope::Full)?
+        };
+        self.with_locked_data(|data| {
+            let key = ledger_key(head_sha, base_sha);
+            if data.verifications.contains_key(&key) {
+                bail!("verification {key} is already open");
+            }
+            data.verifications.insert(key, entry);
+            self.write(data)
+        })
+    }
+
+    /// Open a full verification of this head on a new base that runs again
+    /// only the `jobs` that failed against `from_base`.
+    pub(super) fn repeat_failed(
+        &self,
+        head_sha: &str,
+        from_base: &str,
+        base_sha: &str,
+        jobs: Vec<String>,
+    ) -> Result<()> {
+        let entry = LedgerEntry {
+            repeats: Some(Repeat::Failed {
+                from: ledger_key(head_sha, from_base),
+                jobs,
+            }),
+            ..fresh(Scope::Full)?
+        };
+        self.with_locked_data(|data| {
+            let key = ledger_key(head_sha, base_sha);
+            if data.verifications.contains_key(&key) {
+                bail!("verification {key} is already open");
+            }
+            data.verifications.insert(key, entry);
+            self.write(data)
         })
     }
 
@@ -303,17 +502,28 @@ impl Ledger {
     /// because the branch a verification runs on is named after it, and the
     /// pipeline query that recovers a lost create would otherwise hand back the
     /// stopped run.
+    ///
+    /// What the stopped run passed on this merge tree stays answered for: the
+    /// next attempt runs again only the `unpassed` jobs. A run stopped before
+    /// any job of it existed leaves the attempt's plan as it was.
     pub(super) fn release(
         &self,
         head_sha: &str,
         base_sha: &str,
         attempt: u64,
         pipeline_id: u64,
+        unpassed: Vec<String>,
     ) -> Result<()> {
         self.with_locked_data(|data| {
             let key = ledger_key(head_sha, base_sha);
             let entry = owned_pipeline(data, &key, attempt, pipeline_id)?;
             reopen(entry)?;
+            if !unpassed.is_empty() {
+                entry.repeats = Some(Repeat::Failed {
+                    from: key.clone(),
+                    jobs: unpassed,
+                });
+            }
             self.write(data)
         })
     }
@@ -417,8 +627,29 @@ fn reopen(entry: &mut LedgerEntry) -> Result<()> {
     entry.pipeline_id = None;
     entry.announced = false;
     entry.detail = None;
+    entry.tree = None;
+    entry.tests = None;
+    entry.carried_from = None;
     entry.updated_at = unix_time()?;
     Ok(())
+}
+
+/// A first attempt that has run nothing yet.
+fn fresh(scope: Scope) -> Result<LedgerEntry> {
+    Ok(LedgerEntry {
+        state: VerificationState::Testing,
+        attempt: 1,
+        pipeline_id: None,
+        announced: false,
+        detail: None,
+        scope,
+        updated_at: unix_time()?,
+        tree: None,
+        repeats: None,
+        tests: None,
+        carried_from: None,
+        turned_ready: false,
+    })
 }
 
 fn require_attempt(entry: &LedgerEntry, key: &str, attempt: u64) -> Result<()> {
@@ -545,6 +776,249 @@ mod tests {
         assert_eq!(full.state, VerificationState::Testing);
         assert_eq!(full.attempt, draft.attempt + 1);
         assert_eq!(full.pipeline_id, None);
+        assert_eq!(
+            full.repeats,
+            Some(Repeat::RestOfDraft { tests: None }),
+            "the ready run leaves out what the passed draft ran"
+        );
+    }
+
+    /// The ready run leaves out the draft's scope, so it has to be the scope
+    /// the draft ran, whatever the pull request names by then.
+    #[test]
+    fn a_ready_run_leaves_out_the_test_block_its_draft_ran() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let draft = ledger.reserve("head", "base", Scope::Draft).unwrap();
+        ledger
+            .record_tests("head", "base", draft.attempt, "filter = \"x\"")
+            .unwrap();
+        ledger.attach("head", "base", draft.attempt, 42).unwrap();
+        ledger
+            .finish(
+                "head",
+                "base",
+                draft.attempt,
+                42,
+                VerificationState::Verified,
+                None,
+            )
+            .unwrap();
+
+        let full = ledger.reserve("head", "base", Scope::Full).unwrap();
+
+        assert_eq!(
+            (full.repeats, full.tests),
+            (
+                Some(Repeat::RestOfDraft {
+                    tests: Some("filter = \"x\"".into())
+                }),
+                None
+            )
+        );
+    }
+
+    /// A repeat of failed jobs judged only those jobs on its tree, so it
+    /// answers for no other head that merges to the same tree.
+    #[test]
+    fn a_repeat_of_failed_jobs_stands_on_its_base_alone() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        finish_entry(&ledger, "head", "base-one", VerificationState::Rejected);
+
+        ledger
+            .repeat_failed("head", "base-one", "base-two", vec!["linux:lint".into()])
+            .unwrap();
+        assert!(
+            ledger
+                .repeat_failed("head", "base-one", "base-two", Vec::new())
+                .is_err(),
+            "a base is repeated on once"
+        );
+        let repeat = ledger.reserve("head", "base-two", Scope::Full).unwrap();
+        assert_eq!(
+            repeat.repeats,
+            Some(Repeat::Failed {
+                from: "head:base-one".into(),
+                jobs: vec!["linux:lint".into()],
+            })
+        );
+        ledger
+            .record_tree("head", "base-two", repeat.attempt, "tree")
+            .unwrap();
+        ledger
+            .attach("head", "base-two", repeat.attempt, 43)
+            .unwrap();
+        ledger
+            .finish(
+                "head",
+                "base-two",
+                repeat.attempt,
+                43,
+                VerificationState::Verified,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(ledger.verified_tree("tree").unwrap(), None);
+    }
+
+    #[test]
+    fn a_rejected_draft_turning_ready_reuses_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let draft = ledger.reserve("head", "base", Scope::Draft).unwrap();
+        ledger.attach("head", "base", draft.attempt, 42).unwrap();
+        ledger
+            .finish(
+                "head",
+                "base",
+                draft.attempt,
+                42,
+                VerificationState::Rejected,
+                None,
+            )
+            .unwrap();
+
+        let full = ledger.reserve("head", "base", Scope::Full).unwrap();
+
+        assert_eq!(
+            (full.scope, full.state, full.repeats),
+            (Scope::Full, VerificationState::Testing, None)
+        );
+    }
+
+    /// Marking a draft ready cancelled its running pipeline and started the
+    /// same merge from scratch.
+    #[test]
+    fn a_running_draft_turning_ready_runs_to_its_verdict_and_dispatches_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let draft = ledger.reserve("head", "base", Scope::Draft).unwrap();
+        ledger.attach("head", "base", draft.attempt, 42).unwrap();
+
+        assert!(ledger.turns_ready("head", "base", Scope::Full).unwrap());
+        let kept = ledger.reserve("head", "base", Scope::Full).unwrap();
+
+        assert_eq!(
+            (
+                kept.scope,
+                kept.attempt,
+                kept.pipeline_id,
+                kept.turned_ready
+            ),
+            (Scope::Draft, draft.attempt, Some(42), true)
+        );
+        assert!(
+            !ledger.turns_ready("head", "base", Scope::Full).unwrap(),
+            "the ready dispatch fires once"
+        );
+        assert_eq!(ledger.reserve("head", "base", Scope::Full).unwrap(), kept);
+
+        ledger
+            .finish(
+                "head",
+                "base",
+                draft.attempt,
+                42,
+                VerificationState::Verified,
+                None,
+            )
+            .unwrap();
+        let full = ledger.reserve("head", "base", Scope::Full).unwrap();
+        assert_eq!(
+            (full.scope, full.attempt, full.repeats),
+            (
+                Scope::Full,
+                draft.attempt + 1,
+                Some(Repeat::RestOfDraft { tests: None })
+            )
+        );
+    }
+
+    #[test]
+    fn a_merge_tree_verified_once_is_carried_to_another_head() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        let first = ledger.reserve("head", "base", Scope::Full).unwrap();
+        ledger
+            .record_tree("head", "base", first.attempt, "tree")
+            .unwrap();
+        assert!(
+            ledger
+                .record_tree("head", "base", first.attempt, "other")
+                .is_err(),
+            "one attempt judges one tree"
+        );
+        assert_eq!(ledger.verified_tree("tree").unwrap(), None);
+        ledger.attach("head", "base", first.attempt, 42).unwrap();
+        ledger
+            .finish(
+                "head",
+                "base",
+                first.attempt,
+                42,
+                VerificationState::Verified,
+                None,
+            )
+            .unwrap();
+        let from = ledger.verified_tree("tree").unwrap().unwrap();
+
+        let second = ledger.reserve("rebased", "base", Scope::Full).unwrap();
+        ledger
+            .record_tree("rebased", "base", second.attempt, "tree")
+            .unwrap();
+        ledger
+            .carry(
+                "rebased",
+                "base",
+                second.attempt,
+                &from,
+                "same merge".into(),
+            )
+            .unwrap();
+
+        let carried = ledger.get("rebased", "base").unwrap().unwrap();
+        assert_eq!(
+            (carried.state, carried.pipeline_id, carried.announced),
+            (VerificationState::Verified, None, true)
+        );
+        assert_eq!(carried.carried_from.as_deref(), Some(from.as_str()));
+        assert_eq!(
+            ledger.answering_pipeline("rebased", "base").unwrap(),
+            Some(42),
+            "the jobs of the verification it carried answer for it"
+        );
+    }
+
+    #[test]
+    fn a_pass_carried_forward_stands_on_the_new_base() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        finish_entry(&ledger, "head", "base-one", VerificationState::Verified);
+
+        ledger
+            .carry_forward("head", "base-one", "base-two", "untouched".into())
+            .unwrap();
+
+        assert_eq!(
+            ledger.latest_base("head").unwrap(),
+            Some(Latest {
+                base: "base-two".into(),
+                state: VerificationState::Verified,
+                scope: Scope::Full,
+            })
+        );
+        assert_eq!(
+            ledger.answering_pipeline("head", "base-two").unwrap(),
+            Some(42)
+        );
+        assert!(
+            ledger
+                .carry_forward("head", "base-one", "base-two", "again".into())
+                .is_err(),
+            "a base is carried to once"
+        );
     }
 
     #[test]
@@ -603,7 +1077,11 @@ mod tests {
 
         assert_eq!(
             ledger.latest_base("head").unwrap(),
-            Some(("base-one".into(), VerificationState::Testing))
+            Some(Latest {
+                base: "base-one".into(),
+                state: VerificationState::Testing,
+                scope: Scope::Draft,
+            })
         );
     }
 
@@ -735,7 +1213,7 @@ mod tests {
                 .is_err()
         );
         assert!(ledger.attach("head", "base", 1, 43).is_err());
-        ledger.release("head", "base", 1, 42).unwrap();
+        ledger.release("head", "base", 1, 42, Vec::new()).unwrap();
         assert_eq!(ledger.get("head", "base").unwrap().unwrap().attempt, 2);
     }
 
@@ -767,8 +1245,8 @@ mod tests {
         ledger.attach("head", "base", 1, 42).unwrap();
         ledger.announce("head", "base", 1, 42).unwrap();
 
-        assert!(ledger.release("head", "base", 1, 43).is_err());
-        ledger.release("head", "base", 1, 42).unwrap();
+        assert!(ledger.release("head", "base", 1, 43, Vec::new()).is_err());
+        ledger.release("head", "base", 1, 42, Vec::new()).unwrap();
 
         let entry = ledger.get("head", "base").unwrap().unwrap();
         assert_eq!(entry.state, VerificationState::Testing);
@@ -776,6 +1254,37 @@ mod tests {
         assert_eq!(entry.pipeline_id, None);
         assert!(!entry.announced);
         assert_eq!(entry.detail, None);
+    }
+
+    /// GitHub CI passing again after the bridge stopped the run must not start
+    /// the merge tree over: what passed before the stop is not run again.
+    #[test]
+    fn a_released_attempt_runs_again_only_what_the_stopped_run_had_not_passed() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::new(directory.path()).unwrap();
+        ledger.reserve("head", "base", Scope::Full).unwrap();
+        ledger.attach("head", "base", 1, 42).unwrap();
+
+        ledger
+            .release("head", "base", 1, 42, vec!["apple:test".into()])
+            .unwrap();
+
+        let entry = ledger.get("head", "base").unwrap().unwrap();
+        assert_eq!(
+            entry.repeats,
+            Some(Repeat::Failed {
+                from: ledger_key("head", "base"),
+                jobs: vec!["apple:test".into()],
+            })
+        );
+
+        ledger.attach("head", "base", 2, 43).unwrap();
+        ledger.release("head", "base", 2, 43, Vec::new()).unwrap();
+        assert_eq!(
+            ledger.get("head", "base").unwrap().unwrap().repeats,
+            entry.repeats,
+            "a run stopped before any job existed keeps the plan it had"
+        );
     }
 
     #[test]

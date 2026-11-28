@@ -1,20 +1,13 @@
-use kithara_dsp::spectrum::FftLen;
-
 use crate::band::Band;
 
+pub(crate) const BAND_GAIN: [f32; Band::COUNT] = [1.0; Band::COUNT];
+pub(crate) const BAND_EDGES_HZ: [f64; 3] =
+    [155.2404142063467, 1039.2304845413262, 6956.951290818225];
+pub(crate) const COLUMNS: usize = 48;
 #[cfg(feature = "dsp")]
-#[cfg(all(test, not(target_arch = "wasm32")))]
-pub(crate) const EPS: f32 = 1e-6;
+pub(crate) const WINDOW_COLUMNS: usize = 64;
+#[cfg(feature = "dsp")]
+pub(crate) const MAX_PARTIAL: usize = 256;
 
-#[cfg(feature = "dsp")]
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "dsp", not(target_arch = "wasm32")))]
 pub(crate) const SR: u32 = 44_100;
-
-pub(crate) const BAND_GAIN: [f32; Band::COUNT] = [1.0, 2.5, 12.0];
-pub(crate) const ENERGY_FLOOR: f32 = 1e-4;
-pub(crate) const FFT_SIZE: FftLen = match FftLen::new(4096) {
-    Ok(len) => len,
-    Err(_) => unreachable!(),
-};
-pub(crate) const LOW_MID_HZ: f32 = 250.0;
-pub(crate) const MID_HIGH_HZ: f32 = 2500.0;

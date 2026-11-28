@@ -9,11 +9,12 @@ use kithara_devtools::lock::{FileLock, Wait};
 use tracing::{info, warn};
 
 use super::{
-    api::{Github, Gitlab},
+    api::{Github, Gitlab, Run},
     checks,
     command::BridgeConfig,
     git::{GitRepo, Judged},
-    ledger::{DefaultBranchStatus, Ledger, LedgerEntry},
+    intersection::{self, Workspace},
+    ledger::{DefaultBranchStatus, Latest, Ledger, LedgerEntry},
     model::{
         Branches, Direction, PipelineObservation, PullRequest, Scope, VerificationState,
         direction_for, validate_sha,
@@ -37,6 +38,9 @@ struct VerificationAttempt<'a> {
     attempt: u64,
     scope: Scope,
     config: &'a BridgeConfig,
+    /// A draft's run whose pull request turned ready: a pass leaves the
+    /// full run of the same merge to follow, not a verdict.
+    ready_follows: bool,
 }
 
 /// A verification an open pull request stands on: its head, the base it is
@@ -207,41 +211,34 @@ impl Bridge {
     fn verify_open_pulls(&self, base_sha: &str) -> Result<()> {
         let ledger = Ledger::new(&self.config.state_dir)?;
         let pulls = self.github.open_pull_requests()?;
-        let mut live = Vec::with_capacity(pulls.len());
-        for pull in &pulls {
-            let verified_base =
-                verification_base(pull.scope, ledger.latest_base(&pull.head_sha)?, base_sha);
-            if let Err(error) = self.verify_pull(&ledger, pull, &verified_base, base_sha) {
+        let mut workspace = None;
+        let live = judge_each(
+            &pulls,
+            |pull| self.base_for(&ledger, &mut workspace, pull, base_sha),
+            |pull, verified_base| self.judge_pull(&ledger, pull, verified_base, base_sha),
+            |pull, error, (state, detail)| {
                 warn!(
                     pull_number = pull.number,
                     head_sha = %pull.head_sha,
-                    base_sha = %verified_base,
                     %error,
                     "GitLab verification tick failed without changing its verdict"
                 );
-            }
-            let entry = ledger.get(&pull.head_sha, &verified_base)?;
-            let scope = entry.as_ref().map_or(pull.scope, |entry| entry.scope);
-            if let Err(error) = checks::report_pull(
-                &self.github,
-                &self.gitlab,
-                pull,
-                entry.as_ref().and_then(|entry| entry.pipeline_id),
-                scope,
-            ) {
-                warn!(
-                    pull_number = pull.number,
-                    head_sha = %pull.head_sha,
-                    %error,
-                    "pull-request job statuses could not be published"
-                );
-            }
-            live.push(LiveVerification {
-                head_sha: pull.head_sha.clone(),
-                base_sha: verified_base,
-                scope,
-            });
-        }
+                if let Err(error) = self
+                    .github
+                    .report_status(&pull.head_sha, state, &detail, None)
+                {
+                    warn!(
+                        pull_number = pull.number,
+                        head_sha = %pull.head_sha,
+                        %error,
+                        "an unweighed head's verification status could not be published"
+                    );
+                }
+            },
+        )?;
+        let Some(live) = live else {
+            return Ok(());
+        };
         if let Err(error) = sweep_quarantine_refs(
             &live,
             || self.repo.gitlab_quarantine_refs(&self.gitlab),
@@ -257,12 +254,121 @@ impl Bridge {
         Ok(())
     }
 
+    fn judge_pull(
+        &self,
+        ledger: &Ledger,
+        pull: &PullRequest,
+        verified_base: String,
+        base_sha: &str,
+    ) -> Result<LiveVerification> {
+        let source = checks::SourceCi::observe(&self.github, pull);
+        if let Err(error) =
+            self.verify_pull(ledger, pull, &verified_base, base_sha, source.failed())
+        {
+            warn!(
+                pull_number = pull.number,
+                head_sha = %pull.head_sha,
+                base_sha = %verified_base,
+                %error,
+                "GitLab verification tick failed without changing its verdict"
+            );
+        }
+        let entry = ledger.get(&pull.head_sha, &verified_base)?;
+        let scope = entry.as_ref().map_or(pull.scope, |entry| entry.scope);
+        if let Err(error) = checks::report_pull(
+            &self.github,
+            &self.gitlab,
+            pull,
+            source,
+            ledger.answering_pipeline(&pull.head_sha, &verified_base)?,
+            scope,
+        ) {
+            warn!(
+                pull_number = pull.number,
+                head_sha = %pull.head_sha,
+                %error,
+                "pull-request job statuses could not be published"
+            );
+        }
+        Ok(LiveVerification {
+            head_sha: pull.head_sha.clone(),
+            base_sha: verified_base,
+            scope,
+        })
+    }
+
+    /// The base this tick judges `pull` against. A move that cannot be weighed
+    /// is an error: the verdict on the old base does not stand for the new tree.
+    fn base_for(
+        &self,
+        ledger: &Ledger,
+        workspace: &mut Option<Workspace>,
+        pull: &PullRequest,
+        current: &str,
+    ) -> Result<String> {
+        match verification_base(pull.scope, ledger.latest_base(&pull.head_sha)?, current) {
+            BaseChoice::On(base) => Ok(base),
+            BaseChoice::Moved(latest) => self.moved_base(ledger, workspace, pull, latest, current),
+        }
+    }
+
+    fn moved_base(
+        &self,
+        ledger: &Ledger,
+        workspace: &mut Option<Workspace>,
+        pull: &PullRequest,
+        latest: Latest,
+        current: &str,
+    ) -> Result<String> {
+        let workspace = match workspace {
+            Some(workspace) => workspace,
+            None => workspace.insert(self.repo.workspace(current)?),
+        };
+        let from = latest.base.clone();
+        let moved = self.repo.moved_paths(&from, current)?;
+        let branch = &self.config.github_branch;
+        moved_base(
+            current,
+            latest,
+            || {
+                Ok(intersection::reaches(
+                    &moved,
+                    &self.repo.pull_paths(&from, &pull.head_sha)?,
+                    &workspace.members,
+                ))
+            },
+            || {
+                let Some(pipeline) = ledger.answering_pipeline(&pull.head_sha, &from)? else {
+                    return Ok(None);
+                };
+                let jobs = self.gitlab.downstream_jobs(pipeline)?.failed()?;
+                for job in &jobs {
+                    if !intersection::touches(job, &moved, workspace)? {
+                        return Ok(None);
+                    }
+                }
+                Ok((!jobs.is_empty()).then_some(jobs))
+            },
+            || {
+                let detail = format!(
+                    "GitLab verification with {branch} {from} stands: {branch} {current} changed \
+                     nothing this pull request touches"
+                );
+                self.github
+                    .report_status(&pull.head_sha, "success", &detail, None)?;
+                ledger.carry_forward(&pull.head_sha, &from, current, detail)
+            },
+            |jobs| ledger.repeat_failed(&pull.head_sha, &from, current, jobs),
+        )
+    }
+
     fn verify_pull(
         &self,
         ledger: &Ledger,
         pull: &PullRequest,
         base_sha: &str,
         target_sha: &str,
+        source_failed: bool,
     ) -> Result<()> {
         require_sha("GitHub pull request", &pull.head_sha)?;
         let review_lines = self
@@ -314,65 +420,26 @@ impl Bridge {
             attempt: entry.attempt,
             scope: entry.scope,
             config: &self.config,
+            ready_follows: entry.turned_ready,
         };
-        let Some(pipeline_id) = entry.pipeline_id else {
-            let pr_tests = match (entry.scope, &pull.tests) {
-                (Scope::Full, _) => None,
-                (Scope::Draft, Ok(tests)) => tests.as_deref(),
-                (Scope::Draft, Err(error)) => {
-                    let detail = format!("GitHub PR #{}: {error}", pull.number);
-                    self.github
-                        .report_status(&pull.head_sha, "failure", &detail, None)?;
-                    return ledger.reject(&pull.head_sha, base_sha, entry.attempt, detail);
-                }
-            };
-            let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt, entry.scope);
-            // The base is merged in either way; trust decides only whether the
-            // pull request keeps its own CI configuration on top of it.
-            let judged = match self
-                .repo
-                .judged_commit(base_sha, &pull.head_sha, !trusted)?
-            {
-                Judged::Commit(judged) => judged,
-                Judged::Conflict => {
-                    return reject_unmergeable(
-                        pull.number,
-                        &pull.head_sha,
-                        base_sha,
-                        &entry,
-                        |sha, state, detail, url| {
-                            self.github.report_status(sha, state, detail, url)
-                        },
-                        |attempt, detail| ledger.reject(&pull.head_sha, base_sha, attempt, detail),
-                    );
-                }
-            };
-            self.repo.push_gitlab(&self.gitlab, &judged, &reference)?;
-            let discovered =
-                self.gitlab
-                    .verification_pipelines(&reference, &pull.head_sha, base_sha)?;
-            start_verification(
+        let release = |id| {
+            let unpassed = self.gitlab.downstream_jobs(id)?.unpassed()?;
+            ledger.release(&pull.head_sha, base_sha, entry.attempt, id, unpassed)
+        };
+        if source_failed
+            && hold_for_source(
                 &attempt,
-                &discovered,
-                ledger.last_pass(&pull.head_sha, base_sha)?.as_deref(),
-                || {
-                    self.gitlab.create_pipeline(
-                        &reference,
-                        &pull.head_sha,
-                        base_sha,
-                        entry.scope,
-                        pr_tests,
-                    )
-                },
-                |attempt, pipeline_id| {
-                    ledger.attach(&pull.head_sha, base_sha, attempt, pipeline_id)
-                },
+                entry.pipeline_id,
+                |id| self.gitlab.pipeline_observation(id, entry.scope.kind()),
+                |reference| self.gitlab.cancel_pipelines(reference),
+                release,
                 |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
-                |attempt, pipeline_id| {
-                    ledger.announce(&pull.head_sha, base_sha, attempt, pipeline_id)
-                },
-            )?;
+            )?
+        {
             return Ok(());
+        }
+        let Some(pipeline_id) = entry.pipeline_id else {
+            return self.start_pull(ledger, pull, base_sha, &entry, &attempt, trusted);
         };
 
         if !entry.announced {
@@ -399,8 +466,89 @@ impl Bridge {
             |id, state, detail| {
                 ledger.finish(&pull.head_sha, base_sha, entry.attempt, id, state, detail)
             },
-            |id| ledger.release(&pull.head_sha, base_sha, entry.attempt, id),
+            release,
         )
+    }
+
+    /// Push the merge an open attempt judges and start its pipeline, unless
+    /// the attempt is settled before that: a draft whose test block cannot be
+    /// read, a merge that conflicts, or a tree already verified.
+    fn start_pull(
+        &self,
+        ledger: &Ledger,
+        pull: &PullRequest,
+        base_sha: &str,
+        entry: &LedgerEntry,
+        attempt: &VerificationAttempt<'_>,
+        trusted: bool,
+    ) -> Result<()> {
+        let pr_tests = match (entry.scope, &pull.tests) {
+            (Scope::Full, _) => None,
+            (Scope::Draft, Ok(tests)) => tests.as_deref(),
+            (Scope::Draft, Err(error)) => {
+                let detail = format!("GitHub PR #{}: {error}", pull.number);
+                self.github
+                    .report_status(&pull.head_sha, "failure", &detail, None)?;
+                return ledger.reject(&pull.head_sha, base_sha, entry.attempt, detail);
+            }
+        };
+        let reference = quarantine_ref(&pull.head_sha, base_sha, entry.attempt, entry.scope);
+        // The base is merged in either way; trust decides only whether the
+        // pull request keeps its own CI configuration on top of it.
+        let judged = match self
+            .repo
+            .judged_commit(base_sha, &pull.head_sha, !trusted)?
+        {
+            Judged::Commit(judged) => judged,
+            Judged::Conflict => {
+                return reject_unmergeable(
+                    pull.number,
+                    &pull.head_sha,
+                    base_sha,
+                    entry,
+                    |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
+                    |attempt, detail| ledger.reject(&pull.head_sha, base_sha, attempt, detail),
+                );
+            }
+        };
+        let tree = self.repo.tree_of(&judged)?;
+        ledger.record_tree(&pull.head_sha, base_sha, entry.attempt, &tree)?;
+        if let Some(tests) = pr_tests {
+            ledger.record_tests(&pull.head_sha, base_sha, entry.attempt, tests)?;
+        }
+        if carry_verified_tree(
+            attempt,
+            ledger.verified_tree(&tree)?,
+            |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
+            |from, detail| ledger.carry(&pull.head_sha, base_sha, entry.attempt, from, detail),
+        )? {
+            return Ok(());
+        }
+        self.repo.push_gitlab(&self.gitlab, &judged, &reference)?;
+        let discovered =
+            self.gitlab
+                .verification_pipelines(&reference, &pull.head_sha, base_sha)?;
+        start_verification(
+            attempt,
+            &discovered,
+            ledger.last_pass(&pull.head_sha, base_sha)?.as_deref(),
+            || {
+                self.gitlab.create_pipeline(
+                    &reference,
+                    &pull.head_sha,
+                    base_sha,
+                    Run {
+                        scope: entry.scope,
+                        pr_tests,
+                        repeat: entry.repeats.as_ref(),
+                    },
+                )
+            },
+            |attempt, pipeline_id| ledger.attach(&pull.head_sha, base_sha, attempt, pipeline_id),
+            |sha, state, detail, url| self.github.report_status(sha, state, detail, url),
+            |attempt, pipeline_id| ledger.announce(&pull.head_sha, base_sha, attempt, pipeline_id),
+        )?;
+        Ok(())
     }
 }
 
@@ -563,27 +711,106 @@ const fn attempt_name(scope: Scope) -> &'static str {
     }
 }
 
+/// Where a pull request's verification stands before this tick judges it.
+#[derive(Debug, Eq, PartialEq)]
+enum BaseChoice {
+    /// The verification against this base goes on, or opens.
+    On(String),
+    /// The default branch moved past a ready head's settled verdict; whether
+    /// the move reaches what the head changed decides.
+    Moved(Latest),
+}
+
 /// The base a pull request is judged against.
 ///
-/// A verification runs to its verdict against the base it started on, and a
-/// pass there stands for the head: a full run outlasts the default branch's
-/// pace, so following every move would leave a pull request without a verdict.
-/// A rejected ready pull request is judged again on the current base; a draft
-/// stays where it was judged until its author pushes.
-fn verification_base(
-    scope: Scope,
-    latest: Option<(String, VerificationState)>,
+/// A verification runs to its verdict against the base it started on: a full
+/// run outlasts the default branch's pace, so following every move would leave
+/// a pull request without a verdict. A draft stays where it was judged until
+/// its author pushes, and a passed draft that turns ready runs its full
+/// verification of the same merge there. Only a settled full verdict on an
+/// older base is weighed against the move.
+fn verification_base(scope: Scope, latest: Option<Latest>, current: &str) -> BaseChoice {
+    let Some(latest) = latest else {
+        return BaseChoice::On(current.to_owned());
+    };
+    match (scope, latest.state, latest.scope) {
+        (Scope::Draft, ..)
+        | (Scope::Full, VerificationState::Testing, _)
+        | (Scope::Full, VerificationState::Verified, Scope::Draft) => BaseChoice::On(latest.base),
+        _ if latest.base == current => BaseChoice::On(latest.base),
+        (Scope::Full, ..) => BaseChoice::Moved(latest),
+    }
+}
+
+/// The base a ready head moves to when the default branch moved past its
+/// settled verdict.
+///
+/// A move that reaches none of what the head changed leaves the verdict where
+/// it is: a pass stands on the new base, and a rejection waits for its author.
+/// A move that reaches a pass judges the head again on the new base, in full.
+/// One that reaches a full rejection runs again only the jobs that failed, and
+/// only when it reached every one of them: the others would fail the same way,
+/// so the rejection waits for its author, whose next push runs everything. A
+/// draft rejected before its pull request turned ready never ran the full set,
+/// so it runs whole.
+fn moved_base(
     current: &str,
-) -> String {
-    match (scope, latest) {
-        (Scope::Draft, Some((latest, _)))
-        | (Scope::Full, Some((latest, VerificationState::Testing | VerificationState::Verified))) => {
-            latest
+    latest: Latest,
+    reaches: impl FnOnce() -> Result<bool>,
+    repeatable: impl FnOnce() -> Result<Option<Vec<String>>>,
+    carry_forward: impl FnOnce() -> Result<()>,
+    repeat_failed: impl FnOnce(Vec<String>) -> Result<()>,
+) -> Result<String> {
+    let reached = reaches()?;
+    match (latest.state, latest.scope) {
+        (VerificationState::Verified, _) => {
+            if !reached {
+                carry_forward()?;
+            }
+            Ok(current.to_owned())
         }
-        (Scope::Draft, None) | (Scope::Full, None | Some((_, VerificationState::Rejected))) => {
-            current.to_owned()
+        (_, Scope::Draft) if reached => Ok(current.to_owned()),
+        (_, Scope::Full) if reached => match repeatable()? {
+            Some(jobs) => {
+                repeat_failed(jobs)?;
+                Ok(current.to_owned())
+            }
+            None => Ok(latest.base),
+        },
+        _ => Ok(latest.base),
+    }
+}
+
+/// Judges every pull request on the base its verdict moves to. A pull whose
+/// base could not be weighed is not judged this tick, and its verification
+/// status turns pending so an old pass does not read as one for the new tree;
+/// its ledger verdict stays. What is live is then unknown, so no verification
+/// branch can be swept and the answer is `None`.
+fn judge_each<P>(
+    pulls: &[P],
+    mut base_for: impl FnMut(&P) -> Result<String>,
+    mut judge: impl FnMut(&P, String) -> Result<LiveVerification>,
+    mut hold: impl FnMut(&P, &anyhow::Error, (&'static str, String)),
+) -> Result<Option<Vec<LiveVerification>>> {
+    let mut live = Vec::with_capacity(pulls.len());
+    let mut weighed = true;
+    for pull in pulls {
+        match base_for(pull) {
+            Ok(base) => live.push(judge(pull, base)?),
+            Err(error) => {
+                weighed = false;
+                let status = unweighed(&error);
+                hold(pull, &error, status);
+            }
         }
     }
+    Ok(weighed.then_some(live))
+}
+
+/// The status of a head whose base move could not be weighed.
+fn unweighed(error: &anyhow::Error) -> (&'static str, String) {
+    let detail = format!("Main moved and the move was not weighed: {error}");
+    ("pending", detail.chars().take(140).collect())
 }
 
 /// A status description, marked when it speaks for a draft's narrower run.
@@ -655,6 +882,28 @@ fn sweep_quarantine_refs(
         "verification branches nothing will name again cancelled and removed"
     );
     Ok(())
+}
+
+/// Settle a verification whose merge tree already passed in full, without a
+/// pipeline. The same tree is the same code under the same CI, whichever head
+/// and base produced it.
+fn carry_verified_tree(
+    attempt: &VerificationAttempt<'_>,
+    verified: Option<String>,
+    report: impl FnOnce(&str, &str, &str, Option<&str>) -> Result<()>,
+    carry: impl FnOnce(&str, String) -> Result<()>,
+) -> Result<bool> {
+    let Some(from) = verified else {
+        return Ok(false);
+    };
+    let detail = format!(
+        "GitLab verification of {from} judged the same merge with {} {} and passed",
+        attempt.config.github_branch,
+        abbreviate(attempt.base_sha)
+    );
+    report(attempt.head_sha, "success", &detail, None)?;
+    carry(&from, detail)?;
+    Ok(true)
 }
 
 fn resolve_pipeline(pipeline_ids: &[u64]) -> Result<Option<u64>> {
@@ -760,6 +1009,47 @@ fn reject_control_changes(
     Ok(true)
 }
 
+/// Keep a head whose GitHub CI failed off the GitLab hosts.
+///
+/// Its verdict is already red, and a GitLab run of it only holds a macOS slot
+/// the heads still in review wait for. A running pipeline is stopped and
+/// released with what it had not passed, so a GitHub CI that passes again
+/// resumes the same merge tree instead of starting it over; no new one starts
+/// meanwhile. A pipeline that is no longer running is left to be read, since
+/// what it settled is a verdict. Returns whether the tick ends here.
+fn hold_for_source(
+    attempt: &VerificationAttempt<'_>,
+    pipeline_id: Option<u64>,
+    observe: impl FnOnce(u64) -> Result<PipelineObservation>,
+    cancel: impl FnOnce(&str) -> Result<()>,
+    release: impl FnOnce(u64) -> Result<()>,
+    report: impl FnOnce(&str, &str, &str, Option<&str>) -> Result<()>,
+) -> Result<bool> {
+    if let Some(id) = pipeline_id {
+        if observe(id)? != PipelineObservation::Running {
+            return Ok(false);
+        }
+        cancel(&quarantine_ref(
+            attempt.head_sha,
+            attempt.base_sha,
+            attempt.attempt,
+            attempt.scope,
+        ))?;
+        release(id)?;
+    }
+    let detail = scoped(
+        attempt.scope,
+        format!(
+            "GitHub CI failed on this head; GitLab verification merged with {} {} resumes once \
+             it passes",
+            attempt.config.github_branch,
+            abbreviate(attempt.base_sha)
+        ),
+    );
+    report(attempt.head_sha, "pending", &detail, None)?;
+    Ok(true)
+}
+
 /// One tick of a verification that already owns a pipeline.
 ///
 /// A stopped run is released rather than recorded. Six pull requests were
@@ -806,7 +1096,16 @@ fn observe_verification(
                 attempt.scope,
                 format!("GitLab pipeline {pipeline_id} passed merged with {branch} {base}"),
             );
-            report(attempt.head_sha, "success", &detail, Some(&url))?;
+            // A ready pull request is never green on its draft's narrower run.
+            let (state, detail) = if attempt.ready_follows {
+                (
+                    "pending",
+                    format!("{detail}; the full run of the same merge follows"),
+                )
+            } else {
+                ("success", detail)
+            };
+            report(attempt.head_sha, state, &detail, Some(&url))?;
             finish(pipeline_id, VerificationState::Verified, Some(detail))
         }
         PipelineObservation::Cancelled => {
@@ -964,6 +1263,7 @@ mod tests {
                     attempt: 1,
                     scope: Scope::Full,
                     config: &status_config(),
+                    ready_follows: false,
                 },
                 &discovered,
                 None,
@@ -1014,6 +1314,7 @@ mod tests {
                     attempt: 1,
                     scope: Scope::Full,
                     config: &status_config(),
+                    ready_follows: false,
                 },
                 &discovered,
                 Some(consts::STATUS_OLD_BASE),
@@ -1058,6 +1359,7 @@ mod tests {
                 attempt: 1,
                 scope: Scope::Full,
                 config: &status_config(),
+                ready_follows: false,
             },
             42,
             VerificationState::Testing,
@@ -1536,6 +1838,7 @@ mod tests {
         Finish(VerificationState),
         Release(u64),
         Reject(u64),
+        Cancel(String),
     }
 
     #[test]
@@ -1616,6 +1919,7 @@ mod tests {
                 attempt: 3,
                 scope: Scope::Full,
                 config: &status_config(),
+                ready_follows: false,
             },
             &[],
             None,
@@ -1666,6 +1970,7 @@ mod tests {
                 attempt: 1,
                 scope: Scope::Full,
                 config: &status_config(),
+                ready_follows: false,
             },
             42,
             VerificationState::Testing,
@@ -1710,6 +2015,7 @@ mod tests {
                     attempt: entry.attempt,
                     scope: entry.scope,
                     config: &config,
+                    ready_follows: false,
                 },
                 42,
                 entry.state,
@@ -1737,41 +2043,102 @@ mod tests {
         assert_eq!(entry.attempt, 1);
     }
 
+    /// A draft's pass is posted as success before it is recorded, unless its
+    /// pull request turned ready: then the full run of the same merge still
+    /// follows, and the pull request is never green on the draft's narrower run.
     #[test]
     fn success_is_posted_before_verified() {
-        let actions = RefCell::new(Vec::new());
-        observe_verification(
-            &VerificationAttempt {
-                head_sha: "head",
-                base_sha: "base",
-                attempt: 1,
-                scope: Scope::Full,
-                config: &status_config(),
-            },
-            42,
-            VerificationState::Testing,
-            |id| {
-                actions.borrow_mut().push(VerificationAction::Observe(id));
-                Ok(PipelineObservation::Succeeded)
-            },
-            |sha, state, _, _| {
-                actions
-                    .borrow_mut()
-                    .push(VerificationAction::Report(sha.into(), state.into()));
-                Ok(())
-            },
-            |_, state, _| {
-                actions.borrow_mut().push(VerificationAction::Finish(state));
-                Ok(())
-            },
-            |_| panic!("a passing pipeline was not stopped"),
-        )
-        .unwrap();
+        for (ready_follows, github_state) in [(false, "success"), (true, "pending")] {
+            let actions = RefCell::new(Vec::new());
+            observe_verification(
+                &VerificationAttempt {
+                    head_sha: "head",
+                    base_sha: "base",
+                    attempt: 1,
+                    scope: Scope::Full,
+                    config: &status_config(),
+                    ready_follows,
+                },
+                42,
+                VerificationState::Testing,
+                |id| {
+                    actions.borrow_mut().push(VerificationAction::Observe(id));
+                    Ok(PipelineObservation::Succeeded)
+                },
+                |sha, state, _, _| {
+                    actions
+                        .borrow_mut()
+                        .push(VerificationAction::Report(sha.into(), state.into()));
+                    Ok(())
+                },
+                |_, state, _| {
+                    actions.borrow_mut().push(VerificationAction::Finish(state));
+                    Ok(())
+                },
+                |_| panic!("a passing pipeline was not stopped"),
+            )
+            .unwrap();
 
+            assert_eq!(
+                *actions.borrow(),
+                [
+                    VerificationAction::Observe(42),
+                    VerificationAction::Report("head".into(), github_state.into()),
+                    VerificationAction::Finish(VerificationState::Verified),
+                ],
+                "ready follows: {ready_follows}"
+            );
+        }
+    }
+
+    /// A rebased head whose merge equals one already verified is the same code
+    /// under the same CI: it passes without a pipeline, and only then.
+    #[test]
+    fn a_verified_merge_tree_is_carried_without_a_pipeline() {
+        let config = status_config();
+        let attempt = VerificationAttempt {
+            head_sha: "head",
+            base_sha: "base",
+            attempt: 1,
+            scope: Scope::Full,
+            config: &config,
+            ready_follows: false,
+        };
+        let actions = RefCell::new(Vec::new());
+
+        assert!(
+            !carry_verified_tree(
+                &attempt,
+                None,
+                |_, _, _, _| panic!("an unverified tree reports nothing"),
+                |_, _| panic!("an unverified tree carries nothing"),
+            )
+            .unwrap()
+        );
+        assert!(
+            carry_verified_tree(
+                &attempt,
+                Some("other:base".into()),
+                |sha, state, _, url| {
+                    assert_eq!(url, None);
+                    actions
+                        .borrow_mut()
+                        .push(VerificationAction::Report(sha.into(), state.into()));
+                    Ok(())
+                },
+                |from, _| {
+                    assert_eq!(from, "other:base");
+                    actions
+                        .borrow_mut()
+                        .push(VerificationAction::Finish(VerificationState::Verified));
+                    Ok(())
+                },
+            )
+            .unwrap()
+        );
         assert_eq!(
             *actions.borrow(),
             [
-                VerificationAction::Observe(42),
                 VerificationAction::Report("head".into(), "success".into()),
                 VerificationAction::Finish(VerificationState::Verified),
             ]
@@ -1795,6 +2162,7 @@ mod tests {
                     attempt: 1,
                     scope: Scope::Full,
                     config: &status_config(),
+                    ready_follows: false,
                 },
                 42,
                 VerificationState::Testing,
@@ -1836,6 +2204,7 @@ mod tests {
                 attempt: 1,
                 scope: Scope::Full,
                 config: &status_config(),
+                ready_follows: false,
             },
             42,
             VerificationState::Testing,
@@ -1867,6 +2236,92 @@ mod tests {
         );
     }
 
+    fn held(
+        pipeline_id: Option<u64>,
+        observation: PipelineObservation,
+    ) -> (bool, Vec<VerificationAction>) {
+        let actions = RefCell::new(Vec::new());
+        let ends = hold_for_source(
+            &VerificationAttempt {
+                head_sha: "head",
+                base_sha: "base",
+                attempt: 1,
+                scope: Scope::Full,
+                config: &status_config(),
+                ready_follows: false,
+            },
+            pipeline_id,
+            |id| {
+                actions.borrow_mut().push(VerificationAction::Observe(id));
+                Ok(observation)
+            },
+            |reference| {
+                actions
+                    .borrow_mut()
+                    .push(VerificationAction::Cancel(reference.into()));
+                Ok(())
+            },
+            |id| {
+                actions.borrow_mut().push(VerificationAction::Release(id));
+                Ok(())
+            },
+            |sha, state, _, _| {
+                actions
+                    .borrow_mut()
+                    .push(VerificationAction::Report(sha.into(), state.into()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        (ends, actions.into_inner())
+    }
+
+    /// A head whose GitHub CI is red keeps no macOS slot: its running GitLab
+    /// run is stopped and released with what it had not passed.
+    #[test]
+    fn a_red_github_ci_stops_the_running_verification() {
+        assert_eq!(
+            held(Some(42), PipelineObservation::Running),
+            (
+                true,
+                vec![
+                    VerificationAction::Observe(42),
+                    VerificationAction::Cancel(quarantine_ref("head", "base", 1, Scope::Full)),
+                    VerificationAction::Release(42),
+                    VerificationAction::Report("head".into(), "pending".into()),
+                ]
+            )
+        );
+    }
+
+    /// Pipeline 2338577 was stopped by hand on a head whose GitHub CI had
+    /// failed, and the bridge opened attempt-2 on it a minute later. The
+    /// released attempt now waits for GitHub CI instead of starting a run.
+    #[test]
+    fn a_stopped_head_whose_github_ci_failed_gets_no_new_attempt() {
+        assert_eq!(
+            held(Some(42), PipelineObservation::Cancelled),
+            (false, vec![VerificationAction::Observe(42)]),
+            "the stopped run is released the usual way"
+        );
+        assert_eq!(
+            held(None, PipelineObservation::Running),
+            (
+                true,
+                vec![VerificationAction::Report("head".into(), "pending".into())]
+            ),
+            "the released attempt starts nothing"
+        );
+    }
+
+    #[test]
+    fn a_settled_run_is_read_even_when_github_ci_failed() {
+        assert_eq!(
+            held(Some(42), PipelineObservation::Succeeded),
+            (false, vec![VerificationAction::Observe(42)])
+        );
+    }
+
     #[test]
     fn transient_observation_errors_do_not_manufacture_rejection() {
         let error = observe_verification(
@@ -1876,6 +2331,7 @@ mod tests {
                 attempt: 1,
                 scope: Scope::Full,
                 config: &status_config(),
+                ready_follows: false,
             },
             42,
             VerificationState::Testing,
@@ -2206,6 +2662,18 @@ mod tests {
         );
     }
 
+    fn latest(base: &str, state: VerificationState, scope: Scope) -> Latest {
+        Latest {
+            base: base.to_owned(),
+            state,
+            scope,
+        }
+    }
+
+    fn on(base: &str) -> BaseChoice {
+        BaseChoice::On(base.to_owned())
+    }
+
     /// The default branch moving re-queued every open pull request on the one
     /// Mac host, drafts included. A draft stays where it was judged until its
     /// author pushes.
@@ -2219,48 +2687,185 @@ mod tests {
             assert_eq!(
                 verification_base(
                     Scope::Draft,
-                    Some((consts::OLDER_BASE.into(), state)),
+                    Some(latest(consts::OLDER_BASE, state, Scope::Draft)),
                     consts::CURRENT_BASE
                 ),
-                consts::OLDER_BASE
+                on(consts::OLDER_BASE)
             );
         }
         assert_eq!(
             verification_base(Scope::Draft, None, consts::CURRENT_BASE),
-            consts::CURRENT_BASE
+            on(consts::CURRENT_BASE)
         );
     }
 
     /// A full verification runs 75-85 minutes and main moves every 30-90, so
     /// restarting it on every move left a long-lived pull request without a
     /// verdict all day. A verification runs to its verdict against the base it
-    /// started on, and a pass there stands; only a rejection, or a new head,
-    /// sends it to the current base.
+    /// started on, and a passed draft turning ready completes the same merge.
+    /// Only a settled full verdict on an older base is weighed against the
+    /// move.
     #[test]
-    fn a_ready_verification_keeps_its_base_until_it_is_rejected() {
-        for state in [VerificationState::Testing, VerificationState::Verified] {
+    fn a_ready_verification_keeps_its_base_until_its_verdict_is_settled() {
+        for (state, scope) in [
+            (VerificationState::Testing, Scope::Full),
+            (VerificationState::Testing, Scope::Draft),
+            (VerificationState::Verified, Scope::Draft),
+        ] {
             assert_eq!(
                 verification_base(
                     Scope::Full,
-                    Some((consts::OLDER_BASE.into(), state)),
+                    Some(latest(consts::OLDER_BASE, state, scope)),
                     consts::CURRENT_BASE
                 ),
-                consts::OLDER_BASE,
-                "{state:?}"
+                on(consts::OLDER_BASE),
+                "{state:?} {scope:?}"
+            );
+        }
+        for (state, scope) in [
+            (VerificationState::Verified, Scope::Full),
+            (VerificationState::Rejected, Scope::Full),
+            (VerificationState::Rejected, Scope::Draft),
+        ] {
+            assert_eq!(
+                verification_base(
+                    Scope::Full,
+                    Some(latest(consts::OLDER_BASE, state, scope)),
+                    consts::CURRENT_BASE
+                ),
+                BaseChoice::Moved(latest(consts::OLDER_BASE, state, scope)),
+                "{state:?} {scope:?}"
+            );
+            assert_eq!(
+                verification_base(
+                    Scope::Full,
+                    Some(latest(consts::CURRENT_BASE, state, scope)),
+                    consts::CURRENT_BASE
+                ),
+                on(consts::CURRENT_BASE),
+                "a verdict on the current base has nothing to weigh"
             );
         }
         assert_eq!(
-            verification_base(
-                Scope::Full,
-                Some((consts::OLDER_BASE.into(), VerificationState::Rejected)),
-                consts::CURRENT_BASE
-            ),
-            consts::CURRENT_BASE
+            verification_base(Scope::Full, None, consts::CURRENT_BASE),
+            on(consts::CURRENT_BASE)
+        );
+    }
+
+    /// Head e2c83ee641 ran four full verifications on four bases in sixteen
+    /// hours, all failing the same way, while a passed head was never checked
+    /// again whatever main changed under it.
+    #[test]
+    fn a_settled_verdict_moves_only_with_a_move_that_reaches_it() {
+        let choose = |state, scope, reached: bool, failed: Option<&[&str]>| {
+            let settled = RefCell::new(Vec::new());
+            let base = moved_base(
+                consts::CURRENT_BASE,
+                latest(consts::OLDER_BASE, state, scope),
+                || Ok(reached),
+                || Ok(failed.map(|jobs| jobs.iter().map(|job| (*job).to_owned()).collect())),
+                || {
+                    settled.borrow_mut().push("carried".to_owned());
+                    Ok(())
+                },
+                |jobs| {
+                    settled.borrow_mut().push(jobs.join(","));
+                    Ok(())
+                },
+            )
+            .unwrap();
+            (base, settled.into_inner())
+        };
+        let lint: Option<&[&str]> = Some(&["linux:lint", "verdict"]);
+        let (verified, rejected) = (VerificationState::Verified, VerificationState::Rejected);
+        let current = consts::CURRENT_BASE.to_owned();
+        let older = consts::OLDER_BASE.to_owned();
+
+        assert_eq!(
+            choose(verified, Scope::Full, false, None),
+            (current.clone(), vec!["carried".to_owned()]),
+            "a pass the move does not reach stands on the new base"
         );
         assert_eq!(
-            verification_base(Scope::Full, None, consts::CURRENT_BASE),
-            consts::CURRENT_BASE
+            choose(verified, Scope::Full, true, None),
+            (current.clone(), Vec::new()),
+            "a move that reaches a pass judges the head again in full"
         );
+        assert_eq!(
+            choose(rejected, Scope::Full, false, lint),
+            (older.clone(), Vec::new()),
+            "a rejection the move does not reach waits for its author"
+        );
+        assert_eq!(
+            choose(rejected, Scope::Full, true, lint),
+            (current.clone(), vec!["linux:lint,verdict".to_owned()]),
+            "a rejection the move reaches runs again only the jobs that failed"
+        );
+        assert_eq!(
+            choose(rejected, Scope::Full, true, None),
+            (older.clone(), Vec::new()),
+            "a failed job the move did not reach would fail again"
+        );
+        assert_eq!(
+            choose(rejected, Scope::Draft, true, lint),
+            (current, Vec::new()),
+            "a rejected draft turned ready never ran the full set"
+        );
+        assert_eq!(
+            choose(rejected, Scope::Draft, false, lint),
+            (older, Vec::new())
+        );
+        assert!(
+            moved_base(
+                consts::CURRENT_BASE,
+                latest(consts::OLDER_BASE, verified, Scope::Full),
+                || bail!("metadata unreadable"),
+                || panic!("nothing is repeated without an answer"),
+                || panic!("nothing is carried without an answer"),
+                |_| panic!("nothing is repeated without an answer"),
+            )
+            .is_err()
+        );
+    }
+
+    /// A move of main that could not be weighed once kept the old verdict, so
+    /// an unchecked merge tree could reach main on a stale pass.
+    #[test]
+    fn an_unweighed_move_of_main_judges_and_sweeps_nothing_for_that_head() {
+        let judged = RefCell::new(Vec::new());
+        let held = RefCell::new(Vec::new());
+        let live = judge_each(
+            &[consts::PULL_HEAD, consts::RETIRED_HEAD],
+            |head| {
+                if *head == consts::RETIRED_HEAD {
+                    Ok(consts::CURRENT_BASE.to_owned())
+                } else {
+                    bail!("cargo metadata failed")
+                }
+            },
+            |head, base| {
+                judged.borrow_mut().push(*head);
+                Ok(LiveVerification {
+                    head_sha: (*head).to_owned(),
+                    base_sha: base,
+                    scope: Scope::Full,
+                })
+            },
+            |head, _, status| held.borrow_mut().push((*head, status)),
+        )
+        .unwrap();
+        assert_eq!(judged.into_inner(), [consts::RETIRED_HEAD]);
+        let held = held.into_inner();
+        assert_eq!(held.len(), 1);
+        let (head, (state, detail)) = &held[0];
+        assert_eq!(*head, consts::PULL_HEAD);
+        assert_eq!(
+            *state, "pending",
+            "an old pass must not stand for the new tree"
+        );
+        assert!(detail.contains("not weighed") && detail.contains("cargo metadata failed"));
+        assert!(detail.chars().count() <= 140);
+        assert!(live.is_none(), "an unknown live set sweeps no branch");
     }
 
     #[test]

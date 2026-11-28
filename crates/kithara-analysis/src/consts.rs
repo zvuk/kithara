@@ -177,7 +177,7 @@ pub(crate) const V9_FIXTURE: &[u8] = &[
     0x00, 0x60, 0x3f,
 ];
 
-pub(crate) const RESUME_VERSION: u32 = 0x4b41_5204;
+pub(crate) const RESUME_VERSION: u32 = 0x4b41_5205;
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 #[cfg(all(test, not(target_arch = "wasm32")))]

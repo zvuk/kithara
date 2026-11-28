@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
     num::NonZeroU64,
@@ -7,14 +8,16 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use cargo_metadata::MetadataCommand;
 use tempfile::NamedTempFile;
 
 use super::{
     api::{Github, Gitlab},
     command::BridgeConfig,
     control::{ControlChange, classify},
+    intersection::{Member, Workspace},
 };
-use crate::consts;
+use crate::{config::KitharaExt, consts};
 
 pub(super) struct GitRepo {
     root: PathBuf,
@@ -183,6 +186,30 @@ impl GitRepo {
     /// moment anything lands, and the accusation would name files its author
     /// never opened.
     pub(super) fn changed_control_paths(&self, base: &str, head: &str) -> Result<Vec<String>> {
+        self.diff_names(
+            &["--merge-base", base, head],
+            consts::CONTROL_PATHS
+                .iter()
+                .map(|path| path.trim_end_matches('/')),
+        )
+    }
+
+    /// What the default branch changed from `from` to `to`.
+    pub(super) fn moved_paths(&self, from: &str, to: &str) -> Result<Vec<String>> {
+        self.diff_names(&[from, to], [])
+    }
+
+    /// What `head` changed since it forked from `base`, for the reason
+    /// [`Self::changed_control_paths`] gives.
+    pub(super) fn pull_paths(&self, base: &str, head: &str) -> Result<Vec<String>> {
+        self.diff_names(&["--merge-base", base, head], [])
+    }
+
+    fn diff_names<'a>(
+        &self,
+        range: &[&str],
+        pathspec: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Vec<String>> {
         let output = Command::new("git")
             .current_dir(&self.root)
             .args([
@@ -191,25 +218,86 @@ impl GitRepo {
                 "--no-renames",
                 "--ignore-submodules=none",
                 "-z",
-                "--merge-base",
-                base,
-                head,
-                "--",
             ])
-            .args(
-                consts::CONTROL_PATHS
-                    .iter()
-                    .map(|path| path.trim_end_matches('/')),
-            )
+            .args(range)
+            .arg("--")
+            .args(pathspec)
             .output()
-            .context("running git diff for CI control paths")?;
-        let paths = String::from_utf8(checked(output, "git diff for CI control paths")?)
-            .context("git diff returned a non-UTF-8 control path")?;
+            .context("running git diff for changed paths")?;
+        let paths = String::from_utf8(checked(output, "git diff for changed paths")?)
+            .context("git diff returned a non-UTF-8 path")?;
         Ok(paths
             .split('\0')
             .filter(|path| !path.is_empty())
             .map(str::to_owned)
             .collect())
+    }
+
+    /// The workspace at `commit`: its members as `cargo metadata` reads them
+    /// from a checkout of it, and its CI catalog. The checkout stays between
+    /// ticks, so the next one rewrites only what the default branch changed.
+    pub(super) fn workspace(&self, commit: &str) -> Result<Workspace> {
+        let tree = self.root.join("metadata-worktree");
+        if tree.exists() {
+            git_in(
+                &tree,
+                &["checkout", "--detach", "--force", "--quiet", commit],
+            )?;
+        } else {
+            self.run(
+                &[
+                    "worktree",
+                    "add",
+                    "--detach",
+                    "--force",
+                    path_text(&tree)?,
+                    commit,
+                ],
+                None,
+            )?;
+        }
+        let metadata = MetadataCommand::new()
+            .current_dir(&tree)
+            .no_deps()
+            .other_options(["--offline".to_owned()])
+            .exec()
+            .with_context(|| format!("reading the workspace members at {commit}"))?;
+        let root = metadata.workspace_root.as_std_path();
+        let members = metadata
+            .workspace_packages()
+            .into_iter()
+            .map(|package| {
+                let manifest = package.manifest_path.as_std_path();
+                let dir = manifest
+                    .parent()
+                    .and_then(|dir| dir.strip_prefix(root).ok())
+                    .and_then(Path::to_str)
+                    .with_context(|| format!("locating {} in the workspace", package.name))?;
+                Ok(Member {
+                    name: package.name.to_string(),
+                    dir: dir.to_owned(),
+                    dependencies: package
+                        .dependencies
+                        .iter()
+                        .map(|dependency| dependency.name.clone())
+                        .collect(),
+                })
+            })
+            .collect::<Result<_>>()?;
+        let ci = KitharaExt::load(&tree)
+            .with_context(|| format!("reading the CI catalog at {commit}"))?
+            .ci;
+        let mut jobs: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (entrypoint, lanes) in ci.planning.bindings {
+            if let Some((_, job)) = entrypoint.split_once("::") {
+                jobs.entry(job.to_owned()).or_default().extend(lanes);
+            }
+        }
+        Ok(Workspace {
+            members,
+            jobs,
+            lanes: ci.lanes,
+        })
     }
 
     /// The subset of [`Self::changed_control_paths`] that does not survive the
@@ -373,6 +461,11 @@ impl GitRepo {
             .output()
             .context("running git cat-file for a control path")?;
         Ok(output.status.success())
+    }
+
+    /// The tree a verification commit judges.
+    pub(super) fn tree_of(&self, commit: &str) -> Result<String> {
+        self.rev_parse(&format!("{commit}^{{tree}}"))
     }
 
     fn rev_parse(&self, reference: &str) -> Result<String> {

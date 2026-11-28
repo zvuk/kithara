@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use kithara::{
-    analysis::Waveform, platform::tokio::runtime::Handle, play::Pitch, ui::render::WaveBucket,
+    analysis::{Band, Waveform},
+    platform::tokio::runtime::Handle,
+    play::Pitch,
+    ui::render::WaveBucket,
 };
 use num_traits::cast::ToPrimitive;
 
@@ -244,10 +247,17 @@ fn format_remain(deck: &DeckSnapshot) -> String {
 }
 
 fn waveform_buckets(wave: &Waveform) -> impl Iterator<Item = WaveBucket> + '_ {
-    wave.buckets().iter().map(|bucket| WaveBucket {
-        low: bucket.low(),
-        mid: bucket.mid(),
-        high: bucket.high(),
+    wave.buckets().map(|bucket| {
+        let left = bucket.left();
+        let right = bucket.right();
+        WaveBucket {
+            low: left[Band::Low.idx()].max(right[Band::Low.idx()]),
+            mid: left[Band::LowMid.idx()]
+                .max(left[Band::HighMid.idx()])
+                .max(right[Band::LowMid.idx()])
+                .max(right[Band::HighMid.idx()]),
+            high: left[Band::High.idx()].max(right[Band::High.idx()]),
+        }
     })
 }
 
@@ -314,7 +324,7 @@ mod tests {
     }
 
     fn wave_of(height: f32) -> Waveform {
-        Waveform::try_new(vec![Bucket::new(height, height, height)], NonZeroU64::MIN)
+        Waveform::try_new(vec![Bucket::new([height; 4], [height; 4])], NonZeroU64::MIN)
             .expect("hand-built buckets are valid")
     }
 

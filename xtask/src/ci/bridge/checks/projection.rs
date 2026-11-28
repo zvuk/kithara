@@ -19,10 +19,32 @@ pub(super) struct Snapshot {
     pub(super) target_url: Option<String>,
 }
 
+/// What GitHub CI reports on a pull request's head, read once a tick for both
+/// the verification and the checks it publishes.
+pub(in crate::ci::bridge) struct SourceCi(Result<Snapshot>);
+
+impl SourceCi {
+    pub(in crate::ci::bridge) fn observe(github: &Github, pull: &PullRequest) -> Self {
+        Self(github::observe(github, pull))
+    }
+
+    /// Whether the finished GitHub CI of the head is red. A run still going or
+    /// one that could not be read says nothing yet.
+    pub(in crate::ci::bridge) fn failed(&self) -> bool {
+        self.0.as_ref().is_ok_and(|snapshot| {
+            snapshot
+                .statuses
+                .iter()
+                .any(|status| status.context == "kithara/github-ci" && status.state == "failure")
+        })
+    }
+}
+
 pub(in crate::ci::bridge) fn report_pull(
     github: &Github,
     gitlab: &Gitlab,
     pull: &PullRequest,
+    source: SourceCi,
     pipeline_id: Option<u64>,
     scope: Scope,
 ) -> Result<()> {
@@ -48,11 +70,7 @@ pub(in crate::ci::bridge) fn report_pull(
         }
     };
     let sources = [
-        (
-            "GitHub / ",
-            "kithara/github-ci",
-            github::observe(github, pull),
-        ),
+        ("GitHub / ", "kithara/github-ci", source.0),
         (
             "GitLab / ",
             "GitLab / pipeline",
@@ -193,6 +211,21 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn only_a_finished_red_github_ci_holds_the_verification() {
+        let source = |state| {
+            SourceCi(Ok(Snapshot {
+                statuses: vec![check("kithara/github-ci", state, "", None)],
+                complete: state != "pending",
+                target_url: None,
+            }))
+        };
+        assert!(source("failure").failed());
+        assert!(!source("pending").failed());
+        assert!(!source("success").failed());
+        assert!(!SourceCi(Err(anyhow!("unreadable"))).failed());
+    }
 
     #[test]
     fn source_read_errors_log_the_transport_cause_and_remain_errors() {

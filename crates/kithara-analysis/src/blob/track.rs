@@ -299,7 +299,7 @@ mod tests {
     }
 
     fn active() -> AnalysisFingerprint {
-        fingerprint("wave:fold1:v2", consts::BEAT_TAG)
+        fingerprint("wave:fold1:v3", consts::BEAT_TAG)
     }
 
     fn rate() -> NonZeroU32 {
@@ -307,7 +307,7 @@ mod tests {
     }
 
     fn wave() -> Waveform {
-        Waveform::try_new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
+        Waveform::try_new(vec![Bucket::new([0.5; 4], [0.5; 4])], NonZeroU64::MIN)
             .expect("hand-built buckets are valid")
     }
 
@@ -511,10 +511,7 @@ mod tests {
             assert_eq!(got.revision(), want.revision());
             assert_eq!(got.is_settled(), want.is_settled());
             assert_eq!(got.fingerprint(), want.fingerprint());
-            assert_eq!(
-                got.waveform().map(Waveform::buckets),
-                want.waveform().map(Waveform::buckets)
-            );
+            assert_eq!(got.waveform(), want.waveform());
             assert_eq!(
                 got.beat().map(BeatSnapshot::artifact),
                 want.beat().map(BeatSnapshot::artifact)
@@ -543,7 +540,7 @@ mod tests {
         let tagged = |key: &str| {
             AnalysisFingerprint::builder()
                 .beat(consts::BEAT_TAG)
-                .waveform("wave:fold1:v2")
+                .waveform("wave:fold1:v3")
                 .key(key)
                 .build()
         };

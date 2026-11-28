@@ -3,4 +3,4 @@ mod http;
 mod sources;
 mod statuses;
 
-pub(super) use client::{Github, Gitlab};
+pub(super) use client::{Github, Gitlab, Run};

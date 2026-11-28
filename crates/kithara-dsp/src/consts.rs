@@ -26,5 +26,11 @@ pub(crate) const SILENT_PEAK: f32 = 1.0e-9;
 /// Consecutive stream frames required to retire a quiet biquad state.
 pub(crate) const SECTION_MEMORY: usize = 2;
 
+pub(crate) const BIQUAD_IDENTITY: [f32; 5] = [1.0, 0.0, 0.0, 0.0, 0.0];
 /// Reciprocal Butterworth Q, preserving the crossover design's rounding.
 pub(crate) const CROSSOVER_DAMPING: f64 = 1.0 / std::f64::consts::FRAC_1_SQRT_2;
+
+/// Sections filtered in one pass over the frames. A section's recurrence
+/// waits on the previous frame's result, so one section per pass is bound by
+/// FMA latency; running four in the same loop overlaps their chains.
+pub(crate) const WINDOW_FUSED_SECTIONS: usize = 4;

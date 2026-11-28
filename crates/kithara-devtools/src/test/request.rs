@@ -25,6 +25,9 @@ pub(super) struct TestRequest {
     /// Run only the lane's share of the draft scope: the required packages and
     /// what the pull request names.
     pub(super) draft: bool,
+    /// Run what a passed draft of the same merge left of the lane: the
+    /// lane's tests outside the draft scope.
+    pub(super) rest_of_draft: bool,
 }
 
 impl TestRequest {
@@ -42,6 +45,7 @@ impl TestRequest {
             passthrough: Vec::new(),
             flash: None,
             draft: false,
+            rest_of_draft: false,
         };
         let mut iter = args.iter();
         while let Some(arg) = iter.next() {
@@ -71,6 +75,7 @@ impl TestRequest {
                     request.load = Some(parse_toggle("load", value)?);
                 }
                 "--draft" => request.draft = true,
+                "--rest-of-draft" => request.rest_of_draft = true,
                 "--loom=off" | "--loom=false" | "--no-loom" => request.loom = Some(false),
                 "--loom=on" | "--loom=true" => request.loom = Some(true),
                 "--loom" => {
@@ -140,6 +145,9 @@ impl TestRequest {
                 _ => request.passthrough.push(arg.clone()),
             }
         }
+        if request.draft && request.rest_of_draft {
+            bail!("--draft and --rest-of-draft name the two halves of one selection");
+        }
         if request.expected_tests.is_some() {
             request.validate_expected_selection()?;
         }
@@ -182,8 +190,11 @@ impl TestRequest {
     }
 
     fn validate_expected_selection(&self) -> Result<()> {
-        if self.draft {
-            bail!("--expected-tests requires one lane and cannot be combined with --draft");
+        if self.draft || self.rest_of_draft {
+            bail!(
+                "--expected-tests requires one lane and cannot be combined with --draft or \
+                 --rest-of-draft"
+            );
         }
         super::inventory::inventory_args(&self.passthrough)?;
         Ok(())

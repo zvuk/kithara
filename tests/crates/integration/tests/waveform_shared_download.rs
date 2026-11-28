@@ -144,8 +144,8 @@ async fn waveform_and_player_share_one_get(audio_wav_44100: &'static [u8]) {
     let player_ok = player_drain.await.expect("player drain task");
 
     assert!(player_ok, "player must decode the shared WAV to EOF");
-    assert_eq!(envelope.len(), 40, "one second carries 40 native windows");
-    assert_eq!(envelope.span_frames().get(), 1024);
+    assert_eq!(envelope.len(), 690, "one second carries 690 native columns");
+    assert_eq!(envelope.span_frames().get(), 64);
     assert_eq!(
         gets.load(Ordering::SeqCst),
         1,

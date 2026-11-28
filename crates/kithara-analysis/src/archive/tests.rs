@@ -607,10 +607,10 @@ fn a_stored_waveform_is_served_only_for_its_requested_factor() {
     };
     let native = fingerprint(NonZeroU32::MIN);
     let folded = fingerprint(NonZeroU32::new(4).unwrap());
-    assert_eq!(native.waveform(), Some("wave:fold1:v2"));
-    assert_eq!(folded.waveform(), Some("wave:fold4:v2"));
+    assert_eq!(native.waveform(), Some("wave:fold1:v3"));
+    assert_eq!(folded.waveform(), Some("wave:fold4:v3"));
     let waveform = Waveform::try_new(
-        vec![Bucket::new(0.5, 1.0, 0.0)],
+        vec![Bucket::new([0.5; 4], [0.5; 4])],
         NonZeroU64::new(1024).unwrap(),
     )
     .unwrap();
