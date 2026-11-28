@@ -583,12 +583,9 @@ fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
     case::android_pair_1(DecoderBackend::default(), 2..4),
     case::android_pair_2(DecoderBackend::default(), 4..6)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_pair_0(DecoderBackend::Apple, 0..2),
-    case::apple_pair_1(DecoderBackend::Apple, 2..4),
-    case::apple_pair_2(DecoderBackend::Apple, 4..6)
-)]
+#[case::apple_pair_0(platform = apple, DecoderBackend::Apple, 0..2)]
+#[case::apple_pair_1(platform = apple, DecoderBackend::Apple, 2..4)]
+#[case::apple_pair_2(platform = apple, DecoderBackend::Apple, 4..6)]
 async fn manual_quality_switches_match_time_aligned_no_switch_pcm(
     #[case] backend: DecoderBackend,
     #[case] transitions: std::ops::Range<usize>,

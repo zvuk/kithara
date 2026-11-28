@@ -217,12 +217,9 @@ fn best_lag_correlation(switched: &[f32], source: &[f32], start_frame: usize) ->
     case::android_pair_1(DecoderBackend::default(), 2..4),
     case::android_pair_2(DecoderBackend::default(), 4..6)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_pair_0(DecoderBackend::Apple, 0..2),
-    case::apple_pair_1(DecoderBackend::Apple, 2..4),
-    case::apple_pair_2(DecoderBackend::Apple, 4..6)
-)]
+#[case::apple_pair_0(platform = apple, DecoderBackend::Apple, 0..2)]
+#[case::apple_pair_1(platform = apple, DecoderBackend::Apple, 2..4)]
+#[case::apple_pair_2(platform = apple, DecoderBackend::Apple, 4..6)]
 async fn decoder_recreation_preserves_sweep_timeline_against_no_switch_control(
     #[case] backend: DecoderBackend,
     #[case] transitions: std::ops::Range<usize>,

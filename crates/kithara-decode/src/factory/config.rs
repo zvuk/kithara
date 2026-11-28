@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[cfg(apple_backend)]
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn decoder_config_custom_apple_backend_preserves_fields() {
         let handle = Arc::new(AtomicU64::new(1000));
         let builder = TestDecoderConfig::builder()

@@ -109,19 +109,13 @@ async fn stress_offline_crossfade_no_gaps(
 /// and report correct duration — with and without extension/hint.
 #[kithara::test(tokio, timeout(Short), hang_timeout_secs(5))]
 #[cfg_attr(not(target_os = "android"), case::with_extension_symphonia(mp3_extension().await, DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::with_extension_apple(mp3_extension().await, DecoderBackend::Apple)
-)]
+#[case::with_extension_apple(platform = apple, mp3_extension().await, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::with_extension_android(mp3_extension().await, DecoderBackend::Android)
 )]
 #[cfg_attr(not(target_os = "android"), case::no_extension_symphonia(mp3_no_extension().await, DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::no_extension_apple(mp3_no_extension().await, DecoderBackend::Apple)
-)]
+#[case::no_extension_apple(platform = apple, mp3_no_extension().await, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::no_extension_android(mp3_no_extension().await, DecoderBackend::Android)
@@ -213,19 +207,13 @@ async fn resource_mp3_no_hint_decodes_with_duration(
 /// regular suite: no VPN, no internet.
 #[kithara::test(tokio, timeout(Medium), hang_timeout_secs(10))]
 #[cfg_attr(not(target_os = "android"), case::mp3_symphonia(local_mp3().await, DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple(local_mp3().await, DecoderBackend::Apple)
-)]
+#[case::mp3_apple(platform = apple, local_mp3().await, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::mp3_android(local_mp3().await, DecoderBackend::Android)
 )]
 #[cfg_attr(not(target_os = "android"), case::hls_aac_symphonia(local_hls().await, DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hls_aac_apple(local_hls().await, DecoderBackend::Apple)
-)]
+#[case::hls_aac_apple(platform = apple, local_hls().await, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::hls_aac_android(local_hls().await, DecoderBackend::Android)

@@ -108,10 +108,7 @@ async fn play_paced(player: &mut OfflinePlayer, windows: u64, window_secs: f64) 
 #[kithara::test(tokio, multi_thread, flash(true), timeout(Heavy), flash_timeout(Short))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn flac_swallow_fixture(
     #[case] backend: DecoderBackend,
     #[future(awt)] flac_source: (TestServerHelper, Url),

@@ -153,14 +153,8 @@ impl Capture {
     ObservedBackend::Symphonia,
     GaplessMode::MediaOnly
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_disabled(DecoderBackend::Apple, ObservedBackend::Apple, GaplessMode::Disabled)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_media_only(DecoderBackend::Apple, ObservedBackend::Apple, GaplessMode::MediaOnly)
-)]
+#[case::apple_disabled(platform = apple, DecoderBackend::Apple, ObservedBackend::Apple, GaplessMode::Disabled)]
+#[case::apple_media_only(platform = apple, DecoderBackend::Apple, ObservedBackend::Apple, GaplessMode::MediaOnly)]
 async fn original_and_sought_markers_expose_the_raw_media_basis(
     #[case] backend: DecoderBackend,
     #[case] expected: ObservedBackend,

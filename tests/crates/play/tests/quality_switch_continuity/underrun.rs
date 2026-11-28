@@ -725,22 +725,14 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     SLOW_TARGET_SEGMENT_DELAY_MS,
     "manual AAC-to-FLAC switch"
 , slow_source().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::delayed_apple(
-        DecoderBackend::Apple,
+#[case::delayed_apple(platform = apple, DecoderBackend::Apple,
         TARGET_SEGMENT_DELAY_MS,
         "delayed target rebuild"
-    , target_source().await)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::slow_apple(
-        DecoderBackend::Apple,
+    , target_source().await)]
+#[case::slow_apple(platform = apple, DecoderBackend::Apple,
         SLOW_TARGET_SEGMENT_DELAY_MS,
         "manual AAC-to-FLAC switch"
-    , slow_source().await)
-)]
+    , slow_source().await)]
 async fn target_rebuild_keeps_player_output_continuous(
     #[case] backend: DecoderBackend,
     #[case] delay_ms: u64,
@@ -812,12 +804,9 @@ async fn target_rebuild_keeps_player_output_continuous(
     case::android_pair_1(DecoderBackend::default(), 2..4),
     case::android_pair_2(DecoderBackend::default(), 4..6)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_pair_0(DecoderBackend::Apple, 0..2),
-    case::apple_pair_1(DecoderBackend::Apple, 2..4),
-    case::apple_pair_2(DecoderBackend::Apple, 4..6)
-)]
+#[case::apple_pair_0(platform = apple, DecoderBackend::Apple, 0..2)]
+#[case::apple_pair_1(platform = apple, DecoderBackend::Apple, 2..4)]
+#[case::apple_pair_2(platform = apple, DecoderBackend::Apple, 4..6)]
 async fn cold_target_variant_switch_keeps_playback_uninterrupted(
     #[case] backend: DecoderBackend,
     #[case] transitions: Range<usize>,
@@ -918,10 +907,7 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn aac_lane_packets_carry_the_render_quantum(
     #[case] backend: DecoderBackend,
     #[future(awt)] aac_source: (TestServerHelper, CreatedHls),

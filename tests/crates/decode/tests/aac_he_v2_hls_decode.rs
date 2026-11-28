@@ -21,10 +21,7 @@ const CHANNELS: u16 = 2;
 #[kithara::test(tokio, native, serial, hang_timeout_secs(3), timeout(Short))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn aac_he_v2_hls_produces_pcm(
     temp_dir: TestTempDir,
     #[case] backend: DecoderBackend,

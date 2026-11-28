@@ -490,15 +490,12 @@ async fn wait_for_post_seek_advance(
     case::symphonia_with_sidx_10_19(DecoderBackend::Symphonia, sidx_hls().await, 10..20),
     case::symphonia_with_sidx_20_29(DecoderBackend::Symphonia, sidx_hls().await, 20..30)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_no_sidx_00_09(DecoderBackend::Apple, plain_hls().await, 0..10),
-    case::apple_no_sidx_10_19(DecoderBackend::Apple, plain_hls().await, 10..20),
-    case::apple_no_sidx_20_29(DecoderBackend::Apple, plain_hls().await, 20..30),
-    case::apple_with_sidx_00_09(DecoderBackend::Apple, sidx_hls().await, 0..10),
-    case::apple_with_sidx_10_19(DecoderBackend::Apple, sidx_hls().await, 10..20),
-    case::apple_with_sidx_20_29(DecoderBackend::Apple, sidx_hls().await, 20..30)
-)]
+#[case::apple_no_sidx_00_09(platform = apple, DecoderBackend::Apple, plain_hls().await, 0..10)]
+#[case::apple_no_sidx_10_19(platform = apple, DecoderBackend::Apple, plain_hls().await, 10..20)]
+#[case::apple_no_sidx_20_29(platform = apple, DecoderBackend::Apple, plain_hls().await, 20..30)]
+#[case::apple_with_sidx_00_09(platform = apple, DecoderBackend::Apple, sidx_hls().await, 0..10)]
+#[case::apple_with_sidx_10_19(platform = apple, DecoderBackend::Apple, sidx_hls().await, 10..20)]
+#[case::apple_with_sidx_20_29(platform = apple, DecoderBackend::Apple, sidx_hls().await, 20..30)]
 #[cfg_attr(
     target_os = "android",
     case::android_no_sidx_00_09(DecoderBackend::Android, plain_hls().await, 0..10),

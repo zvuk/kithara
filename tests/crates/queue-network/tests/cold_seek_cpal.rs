@@ -92,10 +92,7 @@ async fn wait_for_position_at_least(
     timeout(Long)
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]

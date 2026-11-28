@@ -94,15 +94,11 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::silvercomet_mp3_apple(
-        "https://stream.silvercomet.top/track.mp3",
+#[case::silvercomet_mp3_apple(platform = apple, "https://stream.silvercomet.top/track.mp3",
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
-    )
-)]
+    )]
 #[cfg_attr(
     target_os = "android",
     case::silvercomet_mp3_android(
@@ -130,33 +126,21 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     DecoderBackend::Symphonia,
     AbrMode::manual(2)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::silvercomet_hls_apple_auto(
-        "https://stream.silvercomet.top/hls/master.m3u8",
+#[case::silvercomet_hls_apple_auto(platform = apple, "https://stream.silvercomet.top/hls/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::silvercomet_hls_apple_locked_low(
-        "https://stream.silvercomet.top/hls/master.m3u8",
+    )]
+#[case::silvercomet_hls_apple_locked_low(platform = apple, "https://stream.silvercomet.top/hls/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::manual(0)
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::silvercomet_hls_apple_locked_high(
-        "https://stream.silvercomet.top/hls/master.m3u8",
+    )]
+#[case::silvercomet_hls_apple_locked_high(platform = apple, "https://stream.silvercomet.top/hls/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::manual(2)
-    )
-)]
+    )]
 #[cfg_attr(
     target_os = "android",
     case::silvercomet_hls_android(
@@ -184,33 +168,21 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     DecoderBackend::Symphonia,
     AbrMode::manual(2)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::silvercomet_drm_apple_auto(
-        "https://stream.silvercomet.top/drm/master.m3u8",
+#[case::silvercomet_drm_apple_auto(platform = apple, "https://stream.silvercomet.top/drm/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::silvercomet_drm_apple_locked_low(
-        "https://stream.silvercomet.top/drm/master.m3u8",
+    )]
+#[case::silvercomet_drm_apple_locked_low(platform = apple, "https://stream.silvercomet.top/drm/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::manual(0)
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::silvercomet_drm_apple_locked_high(
-        "https://stream.silvercomet.top/drm/master.m3u8",
+    )]
+#[case::silvercomet_drm_apple_locked_high(platform = apple, "https://stream.silvercomet.top/drm/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::manual(2)
-    )
-)]
+    )]
 #[cfg_attr(
     target_os = "android",
     case::silvercomet_drm_android(
@@ -226,15 +198,11 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::zvuk_drm_1_apple(
-        "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8",
+#[case::zvuk_drm_1_apple(platform = apple, "https://cdn-hls-slicer.zvuk.com/drm/track/5807750_3/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
-    )
-)]
+    )]
 #[cfg_attr(
     target_os = "android",
     case::zvuk_drm_1_android(
@@ -250,15 +218,11 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::zvuk_drm_2_apple(
-        "https://cdn-hls-slicer.zvuk.com/drm/track/160830411_2/master.m3u8",
+#[case::zvuk_drm_2_apple(platform = apple, "https://cdn-hls-slicer.zvuk.com/drm/track/160830411_2/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
-    )
-)]
+    )]
 #[cfg_attr(
     target_os = "android",
     case::zvuk_drm_2_android(
@@ -268,15 +232,11 @@ fn assert_monotonic_nondecreasing(samples: &[f64], url: &str) {
         AbrMode::Auto(None)
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::zvuk_prod_drm_flac_apple(
-        "https://cdn-hls-slicer.zvuk.com/drm/track/125895892_2/master.m3u8",
+#[case::zvuk_prod_drm_flac_apple(platform = apple, "https://cdn-hls-slicer.zvuk.com/drm/track/125895892_2/master.m3u8",
         42,
         DecoderBackend::Apple,
         AbrMode::manual(3)
-    )
-)]
+    )]
 async fn track_plays_end_to_end(
     #[case] url: &str,
     #[case] rng_seed: u64,
@@ -383,10 +343,7 @@ where
 // flash(false): real-CDN e2e; sleeps are wall-clock pause/gain windows racing real sockets.
 #[kithara::test(tokio, tracing("kithara_test::playlist_progress=info"))]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -609,8 +566,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 /// on-device startup is ~4.5s, dominated by serialized variant-playlist
 /// fetches.
 // flash(false): real zvuk prod CDN/keyserver e2e; wall-clock latency IS the assertion.
-#[kithara::test(tokio)]
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[kithara::test(tokio, platform = apple)]
 #[kithara_test_utils::kithara::flash(io)]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn prod_tracks_sequential_startup_latency() {
@@ -808,10 +764,7 @@ async fn seam_out_of(
 // flash(false): real-CDN e2e; the outgoing track is played through in wall clock.
 #[kithara::test(tokio)]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn hls_hands_over_to_mpeg_at_its_own_end(#[case] backend: DecoderBackend) {
     /// Sixty seconds of tones in ten segments, the shortest real HLS

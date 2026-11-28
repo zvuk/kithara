@@ -703,34 +703,29 @@ async fn user_sim_three_track_bounce_with_seeks(#[case] kinds: PreparedTracks) {
 // ─── Apple decoder backend (macOS/iOS) ─────────────────────────────────────
 // Hardware-decoder path. Production users on Mac/iOS see the
 // AudioToolbox path — repro the seek bugs on this backend too.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-mod apple_backend {
-    use super::*;
+#[kithara::test(tokio, multi_thread, platform = apple, timeout(Short))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+async fn user_sim_seek_storm_apple(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
+    kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
+    run_single_backend(kind, abr, DecoderBackend::Apple, scenarios::seek_storm()).await;
+}
 
-    #[kithara::test(tokio, multi_thread, timeout(Short))]
-    #[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
-    #[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
-    async fn user_sim_seek_storm_apple(#[case] kind: PreparedTrack, #[case] abr: AbrMode) {
-        kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
-        run_single_backend(kind, abr, DecoderBackend::Apple, scenarios::seek_storm()).await;
-    }
-
-    #[kithara::test(tokio, multi_thread, timeout(Medium))]
-    #[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
-    #[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
-    async fn user_sim_long_play_then_seek_backward_apple(
-        #[case] kind: PreparedTrack,
-        #[case] abr: AbrMode,
-    ) {
-        kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
-        run_single_backend(
-            kind,
-            abr,
-            DecoderBackend::Apple,
-            scenarios::long_play_then_seek_backward(),
-        )
-        .await;
-    }
+#[kithara::test(tokio, multi_thread, platform = apple, timeout(Medium))]
+#[case::aac_abr_auto(track_hls_aac_lc_abr4().await, AbrMode::Auto(None))]
+#[case::aac_drm_auto(track_hls_aac_lc_drm_abr4().await, AbrMode::Auto(None))]
+async fn user_sim_long_play_then_seek_backward_apple(
+    #[case] kind: PreparedTrack,
+    #[case] abr: AbrMode,
+) {
+    kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
+    run_single_backend(
+        kind,
+        abr,
+        DecoderBackend::Apple,
+        scenarios::long_play_then_seek_backward(),
+    )
+    .await;
 }
 
 #[kithara::fixture]

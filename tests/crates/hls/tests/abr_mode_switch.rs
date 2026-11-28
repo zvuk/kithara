@@ -2562,10 +2562,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof(
 )]
 #[cfg_attr(not(target_os = "android"), case::sw(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hw(DecoderBackend::Apple)
-)]
+#[case::hw(platform = apple, DecoderBackend::Apple)]
 async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     #[case] backend: DecoderBackend,
     #[future(awt)] retained_mixed: CreatedHls,
@@ -2770,14 +2767,8 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     target_os = "android",
     case::sw_cross_codec_aac_to_flac_android(DecoderBackend::default(), 3usize)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hw_same_codec_aac_low_to_high(DecoderBackend::Apple, 2usize)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hw_cross_codec_aac_to_flac(DecoderBackend::Apple, 3usize)
-)]
+#[case::hw_same_codec_aac_low_to_high(platform = apple, DecoderBackend::Apple, 2usize)]
+#[case::hw_cross_codec_aac_to_flac(platform = apple, DecoderBackend::Apple, 3usize)]
 async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     #[case] backend: DecoderBackend,
     #[case] target_variant: usize,

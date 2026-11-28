@@ -28,10 +28,7 @@ const SEGMENT_COUNT: usize = 40;
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Medium))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn cold_seek_far_segment_hls_offline(
     #[case] backend: DecoderBackend,

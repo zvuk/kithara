@@ -29,6 +29,17 @@ nondefault ignored selection cannot be combined with the guard. Compilation
 still follows the configured Cargo selection, and Run reuses its normal build
 artifacts. An unguarded run keeps its existing behavior.
 
+### Platform-declared tests
+
+A test, or one of its cases, that exercises platform-only code declares the
+platform in the test macro: `#[kithara::test(platform = apple)]` or
+`#[case::name(platform = apple, ...)]`. The macro compiles it only for that
+platform and prefixes the emitted name with `platform_apple_`; do not gate such
+tests with `cfg` or `cfg_attr` chains. `just test run --platform=apple` runs
+only the declared tests, intersected with the lane, `--narrow`, and `--draft`
+selection. `[test.platforms]` in `.config/xtask.toml` names each platform's
+filterset. Mac review CI runs the `apple` lane restricted this way.
+
 ### Package-split census
 
 Generate complete nextest JSON inventories at the base and candidate revisions

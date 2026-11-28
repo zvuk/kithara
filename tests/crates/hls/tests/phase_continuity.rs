@@ -302,90 +302,62 @@ async fn run_case_paced(
         "info,kithara_render::lane=debug,render_refill=trace,kithara_hls=debug,kithara_decode=debug"
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v1_apple_eph_manual_multi(
-        Fixture::Single(Codec::AacHe),
+#[case::aac_he_v1_apple_eph_manual_multi(platform = apple, Fixture::Single(Codec::AacHe),
         DecoderBackend::Apple,
         true,
         false,
         multi_switch(),
         None,
         he_v1_source().await,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::sentinel_aac_he_v2_apple_eph_manual_multi(
-        Fixture::Single(Codec::AacHeV2),
+    )]
+#[case::sentinel_aac_he_v2_apple_eph_manual_multi(platform = apple, Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
         false,
         multi_switch(),
         None,
         he_source().await,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v2_apple_eph_manual_e2e(
-        Fixture::Single(Codec::AacHeV2),
+    )]
+#[case::aac_he_v2_apple_eph_manual_e2e(platform = apple, Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
         false,
         e2e(AbrMode::manual(0)),
         None,
         he_source().await,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_lc_apple_eph_manual_multi(
-        Fixture::Single(Codec::AacLc),
+    )]
+#[case::aac_lc_apple_eph_manual_multi(platform = apple, Fixture::Single(Codec::AacLc),
         DecoderBackend::Apple,
         true,
         false,
         multi_switch(),
         Some(320_000),
         aac_high_source().await,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_lc_apple_eph_manual_e2e(
-        Fixture::Single(Codec::AacLc),
+    )]
+#[case::aac_lc_apple_eph_manual_e2e(platform = apple, Fixture::Single(Codec::AacLc),
         DecoderBackend::Apple,
         true,
         false,
         e2e(AbrMode::manual(0)),
         Some(320_000),
         aac_high_source().await,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::flac_apple_eph_manual_multi(
-        Fixture::Single(Codec::Flac),
+    )]
+#[case::flac_apple_eph_manual_multi(platform = apple, Fixture::Single(Codec::Flac),
         DecoderBackend::Apple,
         true,
         false,
         multi_switch(),
         None,
         flac_source().await,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::flac_apple_eph_manual_e2e(
-        Fixture::Single(Codec::Flac),
+    )]
+#[case::flac_apple_eph_manual_e2e(platform = apple, Fixture::Single(Codec::Flac),
         DecoderBackend::Apple,
         true,
         false,
         e2e(AbrMode::manual(0)),
         None,
         flac_source().await,
-    )
-)]
+    )]
 #[cfg_attr(not(target_os = "android"), case::aac_he_v2_symphonia_eph_manual_multi(
     Fixture::Single(Codec::AacHeV2),
     DecoderBackend::Symphonia,
@@ -431,42 +403,30 @@ async fn run_case_paced(
     Some(320_000),
         aac_high_source().await,
     ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v2_apple_eph_auto_multi(
-        Fixture::Single(Codec::AacHeV2),
+#[case::aac_he_v2_apple_eph_auto_multi(platform = apple, Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
         false,
         seeks_no_switch(auto(1)),
         None,
         he_source().await,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v2_apple_eph_manual_v1_e2e(
-        Fixture::Single(Codec::AacHeV2),
+    )]
+#[case::aac_he_v2_apple_eph_manual_v1_e2e(platform = apple, Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         true,
         false,
         e2e(AbrMode::manual(1)),
         None,
         he_source().await,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_he_v2_apple_mmap_manual_multi(
-        Fixture::Single(Codec::AacHeV2),
+    )]
+#[case::aac_he_v2_apple_mmap_manual_multi(platform = apple, Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         false,
         false,
         multi_switch(),
         None,
         he_source().await,
-    )
-)]
+    )]
 #[cfg_attr(not(target_os = "android"), case::prod_flac_top_sustained_symphonia(
     Fixture::AacWithFlacTop,
     DecoderBackend::Symphonia,
@@ -675,26 +635,18 @@ async fn phase_continuity_hls_diag_paced(
 /// production stream, not a paced offline pull.
 #[kithara::test(tokio, native, serial, timeout(Long), hang_timeout_secs(1))]
 #[ignore = "pins real regression — uncompensated decoder warmup at HLS seek/switch seams (cross-codec AAC→FLAC ~1024 samples, HE-AAC v2→FLAC by the codec delay; he_v2 in-variant seek ~40 samples); unignore when HLS decoder-warmup / per-codec algo-delay fix lands"]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::cross_codec_switch_apple_drm(
-        Fixture::AacWithFlacTop,
+#[case::cross_codec_switch_apple_drm(platform = apple, Fixture::AacWithFlacTop,
         DecoderBackend::Apple,
         true,
         switch_to_top_mid(),
         mixed_encrypted_source().await,
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::cross_codec_switch_apple_plain(
-        Fixture::AacWithFlacTop,
+    )]
+#[case::cross_codec_switch_apple_plain(platform = apple, Fixture::AacWithFlacTop,
         DecoderBackend::Apple,
         false,
         switch_to_top_mid(),
         mixed_high_source().await,
-    )
-)]
+    )]
 #[cfg_attr(not(target_os = "android"), case::cross_codec_switch_symphonia_drm(
     Fixture::AacWithFlacTop,
     DecoderBackend::Symphonia,
@@ -723,16 +675,12 @@ async fn phase_continuity_hls_diag_paced(
     switch_to_top_mid(),
         mixed_high_source().await,
     ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::edit_listed_he_v2_to_flac_switch_apple(
-        Fixture::EditListedHeV2WithFlacTop,
+#[case::edit_listed_he_v2_to_flac_switch_apple(platform = apple, Fixture::EditListedHeV2WithFlacTop,
         DecoderBackend::Apple,
         false,
         switch_to_top_mid(),
         edit_listed_source().await,
-    )
-)]
+    )]
 #[cfg_attr(not(target_os = "android"), case::edit_listed_he_v2_to_flac_switch_symphonia(
     Fixture::EditListedHeV2WithFlacTop,
     DecoderBackend::Symphonia,
@@ -740,16 +688,12 @@ async fn phase_continuity_hls_diag_paced(
     switch_to_top_mid(),
         edit_listed_source().await,
     ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::he_v2_in_variant_seek_apple(
-        Fixture::Single(Codec::AacHeV2),
+#[case::he_v2_in_variant_seek_apple(platform = apple, Fixture::Single(Codec::AacHeV2),
         DecoderBackend::Apple,
         false,
         one_seek(),
         he_source().await,
-    )
-)]
+    )]
 async fn phase_continuity_hls_known_warmup_drift(
     #[case] fixture: Fixture,
     #[case] backend: DecoderBackend,

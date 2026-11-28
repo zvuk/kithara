@@ -111,12 +111,9 @@ async fn measure_leading_silence(
 #[cfg_attr(target_os = "android", case::android_320k(DecoderBackend::default(), SignalAsset::MP3_SAW_2S_320K, saw_320k().await))]
 #[cfg_attr(not(target_os = "android"), case::symphonia_64k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_64K, saw_64k().await))]
 #[cfg_attr(target_os = "android", case::android_64k(DecoderBackend::default(), SignalAsset::MP3_SAW_2S_64K, saw_64k().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_default(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S, saw().await),
-    case::apple_320k(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_320K, saw_320k().await),
-    case::apple_64k(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_64K, saw_64k().await)
-)]
+#[case::apple_default(platform = apple, DecoderBackend::Apple, SignalAsset::MP3_SAW_2S, saw().await)]
+#[case::apple_320k(platform = apple, DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_320K, saw_320k().await)]
+#[case::apple_64k(platform = apple, DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_64K, saw_64k().await)]
 async fn mp3_raw_decoder_shift_vs_reference(
     #[case] backend: DecoderBackend,
     #[case] asset: SignalAsset,
@@ -147,10 +144,7 @@ async fn mp3_raw_decoder_shift_vs_reference(
 #[kithara::test(native, tokio, serial, hang_timeout_secs(1))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn mp3_decoder_reads_lame_enc_delay_or_not(
     #[case] backend: DecoderBackend,
     #[future(awt)] saw: (TestServerHelper, Vec<u8>),

@@ -990,7 +990,7 @@ mod tests {
             let (args, _) = gate("apple-test", kind);
             let mut expected = vec!["test", "run"];
             if review {
-                expected.push("--lane=apple");
+                expected.extend(["--lane=apple", "--platform=apple"]);
             }
             expected.extend(["--flash=on", "--no-block=on", "--profile", "ci"]);
             assert_eq!(args, expected);
@@ -1017,6 +1017,7 @@ mod tests {
                 "run",
                 "--draft",
                 "--lane=apple",
+                "--platform=apple",
                 "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
                 "--flash=on",
                 "--no-block=on",

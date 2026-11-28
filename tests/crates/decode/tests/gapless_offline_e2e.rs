@@ -215,11 +215,8 @@ async fn fused_gapless_tail_compensation_restores_exact_length_at_stitch(
     );
 }
 
-#[cfg(all(
-    feature = "apple-fused-src",
-    any(target_os = "macos", target_os = "ios")
-))]
-#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(1))]
+#[cfg(feature = "apple-fused-src")]
+#[kithara::test(platform = apple, native, tokio, timeout(Long), hang_timeout_secs(1))]
 async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(
     temp_dir: TestTempDir,
     #[future(awt)] apple_probe: (TestServerHelper, CreatedHls),

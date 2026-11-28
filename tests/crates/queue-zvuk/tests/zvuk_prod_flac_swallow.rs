@@ -84,10 +84,7 @@ const COMMIT_DEADLINE: Duration = Duration::from_secs(10);
 // flash(false): real-time paced on purpose (see doc) — sleep paces render at 1x wall clock vs prod CDN.
 #[kithara::test(tokio, timeout(Long))]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);

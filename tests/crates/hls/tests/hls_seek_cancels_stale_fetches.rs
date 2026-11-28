@@ -106,10 +106,7 @@ struct PostSeekObservation {
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(3))]
 async fn hls_seek_near_end_skips_prefix(
     #[future(awt)] prepared_hls: (TestServerHelper, Url),

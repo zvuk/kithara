@@ -251,18 +251,9 @@ async fn run_seek_scenario(
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_low(DecoderBackend::Apple, AbrMode::manual(0))
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
-)]
+#[case::apple_auto(platform = apple, DecoderBackend::Apple, AbrMode::Auto(None))]
+#[case::apple_locked_low(platform = apple, DecoderBackend::Apple, AbrMode::manual(0))]
+#[case::apple_locked_high(platform = apple, DecoderBackend::Apple, AbrMode::manual(2))]
 async fn drm_seek_resumes(
     #[future(awt)] drm_track: (TestServerHelper, Url),
     #[case] backend: DecoderBackend,
@@ -281,18 +272,9 @@ async fn drm_seek_resumes(
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
 #[case::symphonia_locked_high(DecoderBackend::Symphonia, AbrMode::manual(2))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_auto(DecoderBackend::Apple, AbrMode::Auto(None))
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_low(DecoderBackend::Apple, AbrMode::manual(0))
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple_locked_high(DecoderBackend::Apple, AbrMode::manual(2))
-)]
+#[case::apple_auto(platform = apple, DecoderBackend::Apple, AbrMode::Auto(None))]
+#[case::apple_locked_low(platform = apple, DecoderBackend::Apple, AbrMode::manual(0))]
+#[case::apple_locked_high(platform = apple, DecoderBackend::Apple, AbrMode::manual(2))]
 async fn drm_seek_resumes_delayed_cdn(
     #[future(awt)] delayed_drm_track: (TestServerHelper, Url),
     #[case] backend: DecoderBackend,

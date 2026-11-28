@@ -401,16 +401,10 @@ async fn live_real_drm_playback_smoke(#[future(awt)] mixed_encrypted: (TestServe
 )]
 #[cfg_attr(not(target_os = "android"), case::hls_sw("HLS", DecoderBackend::Symphonia, mixed_plain().await))]
 #[cfg_attr(target_os = "android", case::hls_android("HLS", DecoderBackend::default(), mixed_plain().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hls_hw("HLS", DecoderBackend::Apple, mixed_plain().await)
-)]
+#[case::hls_hw(platform = apple, "HLS", DecoderBackend::Apple, mixed_plain().await)]
 #[cfg_attr(not(target_os = "android"), case::drm_sw("DRM", DecoderBackend::Symphonia, mixed_encrypted().await))]
 #[cfg_attr(target_os = "android", case::drm_android("DRM", DecoderBackend::default(), mixed_encrypted().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::drm_hw("DRM", DecoderBackend::Apple, mixed_encrypted().await)
-)]
+#[case::drm_hw(platform = apple, "DRM", DecoderBackend::Apple, mixed_encrypted().await)]
 async fn live_ephemeral_revisit_sequence_regression(
     #[case] label: &str,
     #[case] backend: DecoderBackend,
@@ -1016,16 +1010,10 @@ async fn live_ephemeral_small_cache_playback(
 )]
 #[cfg_attr(not(target_os = "android"), case::hls_sw(false, "HLS", DecoderBackend::Symphonia, mixed_plain().await))]
 #[cfg_attr(target_os = "android", case::hls_android(false, "HLS", DecoderBackend::default(), mixed_plain().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hls_hw(false, "HLS", DecoderBackend::Apple, mixed_plain().await)
-)]
+#[case::hls_hw(platform = apple, false, "HLS", DecoderBackend::Apple, mixed_plain().await)]
 #[cfg_attr(not(target_os = "android"), case::drm_sw(true, "DRM", DecoderBackend::Symphonia, mixed_encrypted().await))]
 #[cfg_attr(target_os = "android", case::drm_android(true, "DRM", DecoderBackend::default(), mixed_encrypted().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::drm_hw(true, "DRM", DecoderBackend::Apple, mixed_encrypted().await)
-)]
+#[case::drm_hw(platform = apple, true, "DRM", DecoderBackend::Apple, mixed_encrypted().await)]
 async fn live_ephemeral_small_cache_seek_stress(
     #[case] encrypted: bool,
     #[case] label: &str,

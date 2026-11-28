@@ -122,10 +122,7 @@ where
 /// plus FLAC decoder construction path.
 #[kithara::test(tokio, timeout(Long))]
 #[case::symphonia(DecoderBackend::Symphonia)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);

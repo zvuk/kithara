@@ -1,9 +1,9 @@
 use kithara_dsp::filter::{Crossover, FilterError, Hertz};
 
-pub(crate) fn build_crossover(
+pub(crate) fn build_crossover<const CHANNELS: usize>(
     frequencies: &[f32],
     sample_rate: u32,
-) -> Result<(Crossover, usize), FilterError> {
+) -> Result<(Crossover<CHANNELS>, usize), FilterError> {
     validate_frequencies(frequencies.iter().copied())?;
     let active_bands = active_band_count(frequencies, sample_rate);
     let nyquist = f64::from(sample_rate.max(1)) * 0.5;

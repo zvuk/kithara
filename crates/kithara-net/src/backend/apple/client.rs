@@ -129,7 +129,7 @@ mod tests {
         types::AcceptEncodingPolicy,
     };
 
-    #[kithara::test(native, tokio)]
+    #[kithara::test(platform = apple, native, tokio)]
     #[case::head_empty(Method::Head, Some(0), true)]
     #[case::head_representation(Method::Head, Some(4096), true)]
     #[case::head_unknown(Method::Head, None, true)]

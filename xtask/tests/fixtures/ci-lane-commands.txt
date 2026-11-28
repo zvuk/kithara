@@ -595,7 +595,7 @@
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just test run --draft --lane=apple --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
+  just test run --draft --lane=apple --platform=apple --selection-output=.ci-artifacts/junit/apple-test.selection.json --flash=on --no-block=on --profile ci
     KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / platforms
   <require os> macos
@@ -609,14 +609,14 @@
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just test run --lane=apple --flash=on --no-block=on --profile ci
+  just test run --lane=apple --platform=apple --flash=on --no-block=on --profile ci
     KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / quarantine
   <require os> macos
   <require tools> cargo just sccache kache swift /usr/bin/xcodebuild xcodegen
   /usr/bin/xcodebuild -version
   /usr/bin/xcodebuild -checkFirstLaunchStatus
-  just test run --lane=apple --flash=on --no-block=on --profile ci
+  just test run --lane=apple --platform=apple --flash=on --no-block=on --profile ci
     KITHARA_HANG_DUMP_DIR=<root>/.ci-artifacts/hang
 # apple-test / main
   <require os> macos
