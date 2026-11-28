@@ -481,7 +481,7 @@ fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String
 /// collapses real time. `wait_for_loader_done` accepts `Loaded |
 /// Consumed` (the loader flips straight to `Consumed` when a
 /// `pending_select` was queued for the same track).
-#[kithara::test(tokio, multi_thread, timeout(Heavy), flash_timeout(Short))]
+#[kithara::test(tokio, multi_thread, timeout(Heavy))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]

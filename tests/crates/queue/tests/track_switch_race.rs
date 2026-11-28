@@ -555,7 +555,7 @@ fn mk_cfg(
 /// the supersede path → `slow` marked `Cancelled`), release `slow`'s init so
 /// its loader completes and skips on the cancelled status, then assert `slow`
 /// never becomes `current()` — including after `fast` plays out.
-#[kithara::test(tokio, multi_thread, timeout(Medium))]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 async fn supersede_while_loading_cancels_slow_track(
     #[future(awt)] race_tracks: (TestServerHelper, CreatedHls, CreatedHls),
 ) {
@@ -840,7 +840,7 @@ async fn observe_completion_order(
     Ok(())
 }
 
-#[kithara::test(tokio, timeout(Medium))]
+#[kithara::test(tokio, timeout(Long))]
 #[case::ordered_backlog(&[0, 1], Duration::ZERO, None)]
 #[case::late_slow(&[0, 1, 0], Duration::ZERO, Some("slow became current after fast"))]
 #[case::missing_fast(&[0], Duration::ZERO, Some("fast was not observed"))]

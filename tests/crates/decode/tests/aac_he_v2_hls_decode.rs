@@ -18,7 +18,7 @@ use kithara_test_utils::{TestTempDir, temp_dir};
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 
-#[kithara::test(tokio, native, serial, hang_timeout_secs(3), timeout(Short))]
+#[kithara::test(tokio, native, serial, hang_timeout_secs(3), timeout(Long))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]

@@ -118,7 +118,7 @@ async fn wait_until_loading(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Medium))]
+#[kithara::test(tokio, multi_thread, timeout(Quick))]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn hung_loads_must_not_starve_user_selected_track(
     #[future(awt)] lane_sources: (TestServerHelper, Vec<Url>, Url),

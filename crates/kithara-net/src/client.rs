@@ -566,7 +566,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio, timeout(Short))]
+    #[kithara::test(tokio, timeout(Quick))]
     async fn get_bytes_aborts_when_body_stalls() {
         let server = server_stalling_body().await;
         let url = server.url("/stall");
@@ -966,7 +966,7 @@ mod tests {
 
     /// A handle derived with its own retry policy retries by that policy, and
     /// the original keeps retrying by its own.
-    #[kithara::test(tokio, timeout(Short))]
+    #[kithara::test(tokio, timeout(Quick))]
     async fn a_retry_policy_handle_leaves_the_original_policy() {
         let (server, counter) = server_post_echo_failing_first_n(u32::MAX).await;
         let client = HttpClient::new(

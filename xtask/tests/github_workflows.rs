@@ -2050,8 +2050,6 @@ fn timeout_source_audit_rejects_duration_literals() {
 fn timeout_source_audit_resolves_named_budgets_from_their_owner() {
     for (name, budget) in [
         ("Quick", TestBudget::Quick),
-        ("Short", TestBudget::Short),
-        ("Medium", TestBudget::Medium),
         ("Long", TestBudget::Long),
         ("Heavy", TestBudget::Heavy),
         ("Network", TestBudget::Network),
@@ -2147,8 +2145,6 @@ fn timeout_seconds(expression: &Expr) -> Option<u64> {
     }
     let budget = match path.path.get_ident()?.to_string().as_str() {
         "Quick" => TestBudget::Quick,
-        "Short" => TestBudget::Short,
-        "Medium" => TestBudget::Medium,
         "Long" => TestBudget::Long,
         "Heavy" => TestBudget::Heavy,
         "Network" => TestBudget::Network,

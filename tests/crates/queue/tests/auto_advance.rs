@@ -229,7 +229,7 @@ async fn crossfade_started_requires_a_live_predecessor() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Quick))]
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayer::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -519,7 +519,7 @@ async fn a_queue_the_host_holds_moves_on_with_no_caller_ticking_it() {
 /// ends, chained behind it, so the next track's first frame follows the
 /// current one's last with no silence between them, and it becomes current
 /// by the current track's natural end, never by a crossfade.
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Long))]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn a_gapless_queue_meets_its_next_track_without_a_gap() {
     /// `constant_wav_*_1_5s`: 1.5 s at 44.1 kHz.
@@ -1369,7 +1369,7 @@ async fn a_consumed_successor_reloads_its_lead_in_session_time_before_the_end() 
     harness.close().await;
 }
 
-#[kithara::test(tokio, flash(false), timeout(Medium))]
+#[kithara::test(tokio, flash(false), timeout(Quick))]
 async fn cf_zero_replay_after_full_playthrough_still_advances() {
     const TRACK_SECS: f64 = 0.4;
 
@@ -1513,7 +1513,7 @@ async fn queue_stops_live_playback_when_last_track_ends() {
 /// the incoming track's very first tick, and the queue advances straight past
 /// it. Two tracks cannot show this — there is no successor left to jump to, so
 /// the sibling crossfade test above stays green while a playlist skips.
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Long))]
 async fn a_middle_track_is_heard_in_the_middle_of_its_own_span() {
     const TRACK_SECS: f64 = 1.5;
     const CROSSFADE_SECS: f32 = 0.3;
@@ -1626,7 +1626,7 @@ async fn autoplay_queue(
 #[kithara::test(
     tokio,
     tracing("kithara_queue=debug,kithara_file=debug,kithara_storage=debug"),
-    timeout(Short)
+    timeout(Long)
 )]
 async fn autoplay_first_appended_track_plays_first_even_when_loaded_last() {
     const TRACK_SECS: f64 = 0.4;

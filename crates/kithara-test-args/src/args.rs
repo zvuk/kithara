@@ -33,8 +33,6 @@ pub struct TestArgs {
     hang_timeout_secs: Option<u64>,
     #[field(get(option_borrow_inner = false))]
     timeout: Option<Ident>,
-    #[field(get(option_borrow_inner = false))]
-    flash_timeout: Option<Ident>,
     tracing_filter: Option<String>,
     soft_fail_patterns: Vec<String>,
     /// The platform every emitted test requires; a case may declare its own.
@@ -44,13 +42,12 @@ pub struct TestArgs {
 
 impl TestArgs {
     fn parse_timeout(input: ParseStream<'_>) -> syn::Result<Ident> {
-        let expected =
-            "timeout requires a TestBudget tier name: Quick, Short, Medium, Long, Heavy or Network";
+        let expected = "timeout requires a TestBudget tier name: Quick, Long, Heavy or Network";
         let budget: Ident = input.parse().map_err(|_| input.error(expected))?;
         if !input.is_empty()
             || !matches!(
                 budget.to_string().as_str(),
-                "Quick" | "Short" | "Medium" | "Long" | "Heavy" | "Network"
+                "Quick" | "Long" | "Heavy" | "Network"
             )
         {
             return Err(Error::new(budget.span(), expected));
@@ -201,11 +198,6 @@ impl Parse for TestArgs {
                     let content;
                     syn::parenthesized!(content in input);
                     args.set_timeout(Some(Self::parse_timeout(&content)?));
-                }
-                "flash_timeout" => {
-                    let content;
-                    syn::parenthesized!(content in input);
-                    args.set_flash_timeout(Some(Self::parse_timeout(&content)?));
                 }
                 "flash" => {
                     let content;

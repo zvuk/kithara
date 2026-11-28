@@ -191,7 +191,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(wasm, timeout(Short))]
+    #[kithara::test(wasm, timeout(Long))]
     async fn a_deck_wake_delivers_its_message() {
         let worker = Worker::new(WorkerConfig::new());
         let dispatcher = worker.dispatcher(

@@ -6,8 +6,6 @@ use kithara_platform::time::Duration;
 pub enum TestBudget {
     #[default]
     Quick,
-    Short,
-    Medium,
     Long,
     Heavy,
     /// A test against a live network or run only by hand, never a gate test.
@@ -18,20 +16,18 @@ impl TestBudget {
     /// Resolve the wall-time allowance for the selected clock and compiled mode.
     #[must_use]
     pub const fn timeout(self, flash: bool) -> Duration {
-        let (real, flash_seconds, rtsan, miri) = match self {
-            Self::Quick => (1, 1, 1, 60),
-            Self::Short => (2, 1, 2, 120),
-            Self::Medium => (5, 1, 5, 300),
-            Self::Long => (30, 1, 30, 480),
-            Self::Heavy => (90, 1, 90, 480),
-            Self::Network => (600, 1, 600, 480),
+        let (real, rtsan, miri) = match self {
+            Self::Quick => (1, 1, 60),
+            Self::Long => (30, 30, 480),
+            Self::Heavy => (90, 90, 480),
+            Self::Network => (600, 600, 480),
         };
         Duration::from_secs(if cfg!(miri) {
             miri
         } else if cfg!(rtsan) {
             rtsan
         } else if flash {
-            flash_seconds
+            1
         } else {
             real
         })
@@ -55,24 +51,22 @@ mod tests {
 
     #[kithara::test]
     fn budgets_are_available_in_constants() {
-        const REAL: Duration = TestBudget::Medium.timeout(false);
-        const FLASH: Duration = TestBudget::Medium.timeout(true);
+        const REAL: Duration = TestBudget::Long.timeout(false);
+        const FLASH: Duration = TestBudget::Long.timeout(true);
 
-        let real_expected = if cfg!(miri) { 300 } else { 5 };
-        let flash_expected = if cfg!(miri) { 300 } else { 1 };
+        let real_expected = if cfg!(miri) { 480 } else { 30 };
+        let flash_expected = if cfg!(miri) { 480 } else { 1 };
         assert_eq!(REAL, Duration::from_secs(real_expected));
         assert_eq!(FLASH, Duration::from_secs(flash_expected));
     }
 
     #[kithara::test]
     fn every_budget_keeps_its_mode_contract() {
-        for (budget, real, flash, rtsan, miri) in [
-            (TestBudget::Quick, 1, 1, 1, 60),
-            (TestBudget::Short, 2, 1, 2, 120),
-            (TestBudget::Medium, 5, 1, 5, 300),
-            (TestBudget::Long, 30, 1, 30, 480),
-            (TestBudget::Heavy, 90, 1, 90, 480),
-            (TestBudget::Network, 600, 1, 600, 480),
+        for (budget, real, rtsan, miri) in [
+            (TestBudget::Quick, 1, 1, 60),
+            (TestBudget::Long, 30, 30, 480),
+            (TestBudget::Heavy, 90, 90, 480),
+            (TestBudget::Network, 600, 600, 480),
         ] {
             let real_expected = if cfg!(miri) {
                 miri
@@ -86,7 +80,7 @@ mod tests {
             } else if cfg!(rtsan) {
                 rtsan
             } else {
-                flash
+                1
             };
             assert_eq!(budget.timeout(false), Duration::from_secs(real_expected));
             assert_eq!(budget.timeout(true), Duration::from_secs(flash_expected));

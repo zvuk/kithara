@@ -683,9 +683,9 @@ mod tests {
             ("", "fn contract() {}"),
             ("", "async fn contract() {}"),
             ("tokio", "async fn contract() {}"),
-            ("tokio, timeout(Medium)", "async fn contract() {}"),
+            ("tokio, timeout(Long)", "async fn contract() {}"),
             ("tokio, native", "async fn contract() {}"),
-            ("tokio, native, timeout(Medium)", "async fn contract() {}"),
+            ("tokio, native, timeout(Long)", "async fn contract() {}"),
             ("browser", "async fn contract() {}"),
         ] {
             let args = syn::parse_str::<TestArgs>(attrs)?;
@@ -737,7 +737,7 @@ mod tests {
             "native",
             "serial",
             "native, browser",
-            "native, timeout(Short)",
+            "native, timeout(Long)",
         ] {
             let args = syn::parse_str::<TestArgs>(attrs)?;
             let function = syn::parse_str("fn contract() -> Result<(), String> { Ok(()) }")?;

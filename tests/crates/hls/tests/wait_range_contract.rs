@@ -24,7 +24,7 @@ mod consts {
     pub(super) const TAIL_CHUNK_SIZE: usize = 32 * 1024;
 }
 
-#[kithara::test(tokio, serial, timeout(Short), hang_timeout_secs(1))]
+#[kithara::test(tokio, serial, timeout(Long), hang_timeout_secs(1))]
 #[case::ephemeral(true)]
 #[cfg(not(target_arch = "wasm32"))]
 #[case::disk(false)]

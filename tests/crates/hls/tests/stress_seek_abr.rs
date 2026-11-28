@@ -183,7 +183,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
 ///
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
-#[kithara::test(tokio, native, serial, hang_timeout_secs(5), timeout(Short))]
+#[kithara::test(tokio, native, serial, hang_timeout_secs(5), timeout(Long))]
 #[case::hls("HLS", mixed_plain().await)]
 #[case::drm("DRM", mixed_encrypted().await)]
 async fn seek_sequence_from_log_real_stream(

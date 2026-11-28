@@ -84,7 +84,7 @@ async fn wait_for_download_terminal(rx: &mut EventReceiver<TestEvent>, within: D
 #[kithara::test(
     tokio,
     tracing("kithara_file=debug,kithara::stream::writer=debug,kithara_storage=debug"),
-    timeout(Short)
+    timeout(Quick)
 )]
 async fn file_stream_closes_early_seek_still_works() {
     let clean_temp_dir = clean_temp_dir();

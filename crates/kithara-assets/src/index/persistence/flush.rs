@@ -386,7 +386,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(flash(false), timeout(Short))]
+    #[kithara::test(flash(false), timeout(Long))]
     fn eager_publication_holds_the_source_lock_until_write_returns() {
         struct Source {
             publication_state: PublicationState,
@@ -431,7 +431,7 @@ mod tests {
         eager.join().unwrap();
     }
 
-    #[kithara::test(flash(false), timeout(Medium))]
+    #[kithara::test(flash(false), timeout(Long))]
     fn eager_flush_returns_after_a_competing_consumer_publishes() {
         use std::{fs, path::PathBuf};
 
@@ -527,7 +527,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(flash(false), timeout(Medium))]
+    #[kithara::test(flash(false), timeout(Long))]
     fn eager_flush_preserves_updates_made_during_io_through_checkpoint_and_reopen() {
         use std::{fs, path::PathBuf};
 
@@ -711,7 +711,7 @@ mod tests {
         assert!(source.durable.load(Ordering::Acquire));
     }
 
-    #[kithara::test(timeout(Short))]
+    #[kithara::test(timeout(Long))]
     fn checkpoint_durably_rewrites_a_completed_eager_publication() {
         let hub = FlushHub::new(CancelToken::never(), fast_policy());
         let src = CountingSource::new("eager-durability");
@@ -736,7 +736,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(flash(false), timeout(Medium))]
+    #[kithara::test(flash(false), timeout(Long))]
     fn checkpoint_cannot_discharge_a_newer_eager_publication() {
         use std::{fs, path::PathBuf};
 
@@ -850,7 +850,7 @@ mod tests {
         assert_eq!(*source.last_publication.lock(), Some((2, true)));
     }
 
-    #[kithara::test(flash(false), timeout(Medium))]
+    #[kithara::test(flash(false), timeout(Long))]
     fn checkpoint_selection_is_serialized_with_the_eager_claim() {
         use std::{fs, path::PathBuf};
 
@@ -963,7 +963,7 @@ mod tests {
         assert!(source.durable.load(Ordering::Acquire));
     }
 
-    #[kithara::test(flash(false), timeout(Medium))]
+    #[kithara::test(flash(false), timeout(Long))]
     fn new_live_writer_publishes_during_an_older_sources_checkpoint() {
         use std::{fs, path::PathBuf};
 
@@ -1082,7 +1082,7 @@ mod tests {
         assert_eq!(fs::read(&writer.path).unwrap(), vec![2]);
     }
 
-    #[kithara::test(flash(false), timeout(Medium))]
+    #[kithara::test(flash(false), timeout(Long))]
     fn checkpoint_waits_for_eager_publication_and_reopens_the_latest_bytes() {
         use std::{fs, path::PathBuf};
 

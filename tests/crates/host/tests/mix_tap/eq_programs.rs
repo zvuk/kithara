@@ -72,7 +72,7 @@ async fn public_eq_kill_uses_the_mixer_frame_and_neutral_reset() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Quick))]
 #[case::audible(false)]
 #[case::output_muted(true)]
 async fn public_deck_eq_cubic_reaches_the_host_without_second_smoothing(#[case] muted: bool) {

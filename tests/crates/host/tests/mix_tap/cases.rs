@@ -159,7 +159,7 @@ pub(super) async fn render_effect_window(harness: &OfflinePlayer, frames: usize)
 }
 
 #[cfg(not(rtsan))]
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Quick))]
 async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     deck_eq_format_change(true).await;
 }
@@ -169,7 +169,7 @@ async fn deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     tracing(
         "kithara_render_probe=trace,kithara_decode_probe=trace,kithara_audio_probe=trace,kithara_worker_probe=trace,kithara_test::host_rate_telemetry=info,host_rate_feed_intervals=info,warp_target_cost=debug"
     ),
-    timeout(Short)
+    timeout(Quick)
 )]
 async fn nonblocking_deck_multiband_eq_keeps_pcm_and_settings_across_a_host_rate_change() {
     #[cfg(not(any(feature = "flash", feature = "no-block", rtsan)))]

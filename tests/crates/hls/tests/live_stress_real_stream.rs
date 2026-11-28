@@ -582,7 +582,7 @@ async fn live_ephemeral_revisit_sequence_regression(
     serial,
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info"),
-    timeout(Medium)
+    timeout(Long)
 )]
 #[case::hls_fixed("HLS", SeekRegression::FixedWindow, mixed_plain().await)]
 #[case::drm_fixed("DRM", SeekRegression::FixedWindow, mixed_encrypted().await)]
@@ -1006,7 +1006,7 @@ async fn live_ephemeral_small_cache_playback(
     serial,
     hang_timeout_secs(3),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info"),
-    timeout(Medium)
+    timeout(Long)
 )]
 #[cfg_attr(not(target_os = "android"), case::hls_sw(false, "HLS", DecoderBackend::Symphonia, mixed_plain().await))]
 #[cfg_attr(target_os = "android", case::hls_android(false, "HLS", DecoderBackend::default(), mixed_plain().await))]

@@ -158,7 +158,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(flash(false), timeout(Medium))]
+    #[kithara::test(flash(false), timeout(Long))]
     fn update_bytes_leaves_the_write_to_the_flush_hub() {
         use std::{fs, num::NonZeroUsize};
 

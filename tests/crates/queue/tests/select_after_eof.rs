@@ -233,7 +233,7 @@ async fn seek_updates_cached_position_optimistically() {
 
 /// Track A reaches real EOF while the fixture server stalls B's HTTP load. Selecting
 /// A again must reload the retained product source and restart playback.
-#[kithara::test(tokio, timeout(Medium))]
+#[kithara::test(tokio, timeout(Quick))]
 async fn reselect_finished_track_restarts_when_next_track_never_loads() {
     const PASS_BLOCKS: usize = 64;
 
@@ -384,7 +384,7 @@ async fn play_button_marks_current_loaded_track_consumed() {
 
 /// Re-selecting A must cancel a pending switch to a real load that remains
 /// unavailable, so its eventual completion cannot barge into playback.
-#[kithara::test(tokio, timeout(Medium))]
+#[kithara::test(tokio, timeout(Quick))]
 async fn reselect_playing_track_cancels_pending_switch() {
     const WARMUP_BLOCKS: usize = 64;
 

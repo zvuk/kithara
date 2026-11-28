@@ -280,7 +280,7 @@ mod tests {
             syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")
                 .is_err()
         );
-        let args = syn::parse_str::<TestArgs>("tokio, timeout(Medium)")?;
+        let args = syn::parse_str::<TestArgs>("tokio, timeout(Long)")?;
         let name: Ident = parse_quote!(stress_case);
         let visibility = Visibility::Inherited;
         let return_type = ReturnType::Default;
@@ -322,7 +322,7 @@ mod tests {
             syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")
                 .is_err()
         );
-        let args = syn::parse_str::<TestArgs>("tokio, timeout(Medium)")?;
+        let args = syn::parse_str::<TestArgs>("tokio, timeout(Long)")?;
         let name: Ident = parse_quote!(cold_binary);
         let expanded = emit_async_timeout_test(
             &name,

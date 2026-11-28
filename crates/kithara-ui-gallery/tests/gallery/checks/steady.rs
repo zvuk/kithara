@@ -447,7 +447,7 @@ fn a_page_held_at_one_moment_rasterises_the_same_twice() {
 /// this question is next door in `walk`, where a tree that has stopped
 /// animating is a tree that has stopped asking the window for frames — which
 /// is the same claim asked of the loop rather than of the picture.
-#[kithara::test(timeout(Medium))]
+#[kithara::test(timeout(Quick))]
 fn a_page_that_moves_draws_a_different_picture_once_its_clock_has_run() {
     let host = Host::Immediate;
 

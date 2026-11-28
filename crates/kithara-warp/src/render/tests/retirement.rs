@@ -237,7 +237,7 @@ fn tempo_gestures_keep_keylocked_tone_continuous(warp_sine: Vec<f32>) {
     }
 }
 
-#[kithara::test(native, flash(false), tracing("info"), timeout(Short))]
+#[kithara::test(native, flash(false), tracing("info"), timeout(Quick))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith_repeated(StretchKind::Signalsmith, false, 1.05)

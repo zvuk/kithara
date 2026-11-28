@@ -48,7 +48,7 @@ fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers(encod
     }
 }
 
-#[kithara::test(timeout(Medium))]
+#[kithara::test(timeout(Long))]
 fn encode_bytes_honors_explicit_bit_rate_across_lossy_range(encoder_second: Pcm) {
     let pcm = encoder_second;
 

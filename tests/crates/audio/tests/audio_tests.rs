@@ -74,7 +74,7 @@ fn test_wav_config(
     (cache, config)
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Quick))]
 #[case::short(wav_16())]
 #[case::regular(wav_1000())]
 async fn test_audio_new(#[case] wav_input: NamedTempFile) {
@@ -93,7 +93,7 @@ async fn test_audio_new(#[case] wav_input: NamedTempFile) {
 /// members in declaration order, so a worker that already enqueued
 /// `AudioEvent::FormatDetected` on its first pass would preempt this event on
 /// a shared receiver no matter which was published first.
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Quick))]
 async fn test_audio_new_publishes_initial_decoder_changed(wav_1000: NamedTempFile) {
     let region = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());

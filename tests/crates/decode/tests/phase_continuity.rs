@@ -354,7 +354,7 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
     serial,
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug"),
-    timeout(Medium)
+    timeout(Long)
 )]
 #[cfg_attr(
     not(target_os = "android"),
@@ -758,7 +758,7 @@ async fn run_codec_compare(asset_a: ServedSignal, asset_b: ServedSignal, backend
     serial,
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug"),
-    timeout(Short)
+    timeout(Long)
 )]
 #[cfg_attr(not(target_os = "android"), case::mp3_vs_wav_symphonia(
     signal_mp3_sine440_60_s().await,

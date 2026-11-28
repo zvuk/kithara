@@ -37,7 +37,7 @@ fn rhythm_controls(style: &str) -> [Vec<f32>; 4] {
     .map(|control| rhythm(style, control))
 }
 
-#[kithara::test(native, flash(false), timeout(Medium))]
+#[kithara::test(native, flash(false), timeout(Quick))]
 #[case::ambient_dub(rhythm_ambient_dub_62(), "ambient_dub_62", 62.0)]
 #[case::trip_hop(rhythm_trip_hop_74(), "trip_hop_74", 74.0)]
 #[case::downtempo(rhythm_downtempo_96(), "downtempo_96", 96.0)]
@@ -143,7 +143,7 @@ fn static_rhythmic_oracle_accepts_aligned_stems_and_rejects_one_frame_phase_erro
     );
 }
 
-#[kithara::test(native, flash(false), timeout(Medium))]
+#[kithara::test(native, flash(false), timeout(Quick))]
 #[case::missing_beat(
     Some(deck_b_missing_beat()),
     "missing static beat",

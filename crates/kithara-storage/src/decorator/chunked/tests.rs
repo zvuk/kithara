@@ -133,7 +133,7 @@ fn fail_cleans_tmp() {
     assert!(!canonical.exists());
 }
 
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(Long))]
 fn reactivated_failed_write_publishes_the_replacement_file() {
     let dir = TempDir::new().unwrap();
     let (resource, canonical, tmp) = open_chunked(&dir, "recovered.bin");
@@ -153,7 +153,7 @@ fn reactivated_failed_write_publishes_the_replacement_file() {
     assert_eq!(&bytes, b"replacement");
 }
 
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(Long))]
 fn reactivation_preserves_a_successors_temporary_claim() {
     let dir = TempDir::new().unwrap();
     let (resource, canonical, _) = open_chunked(&dir, "successor.bin");

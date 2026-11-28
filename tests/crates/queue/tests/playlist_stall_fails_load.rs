@@ -71,7 +71,7 @@ async fn wait_for_failed(
 /// (`inactivity_timeout` × retries), never park it in `Loading` forever.
 /// Pins the production hang where `Resource::new` blocked indefinitely on
 /// an unbounded playlist body read.
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Quick))]
 async fn stalled_master_playlist_fails_load(
     temp_dir: TestTempDir,
     #[future(awt)] stalled_playlist: (TestServerHelper, Url),

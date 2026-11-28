@@ -1212,7 +1212,7 @@ mod artifacts {
         );
     }
 
-    #[kithara::test(timeout(Short))]
+    #[kithara::test(timeout(Quick))]
     async fn a_track_half_covered_by_a_producer_agrees_with_one_covered_alone(
         analysis_pcm: &'static [f32],
     ) {

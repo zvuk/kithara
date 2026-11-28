@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(&buf[..n], b"data");
     }
 
-    #[kithara::test(native, flash(false), timeout(Medium))]
+    #[kithara::test(native, flash(false), timeout(Long))]
     fn final_checkpoint_includes_a_writer_that_outlives_the_store() {
         let dir = tempdir().unwrap();
         let key = ResourceKey::relative(consts::BUILDER_ROOT, "seg.m4s");

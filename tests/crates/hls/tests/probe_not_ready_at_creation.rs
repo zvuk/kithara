@@ -103,7 +103,7 @@ fn audio_config(
     tokio,
     native,
     serial,
-    timeout(Medium),
+    timeout(Quick),
     tracing("kithara_audio=info,kithara_hls=info,kithara_stream=info")
 )]
 async fn audio_new_is_bounded_when_first_segment_withheld(fixture_config: HlsFixtureBuilder) {

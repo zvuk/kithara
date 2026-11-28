@@ -50,7 +50,7 @@ fn foreign_host_cannot_close_owned_player() {
     assert!(player.is_closed());
 }
 
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(Quick))]
 fn dropping_host_invalidates_retained_player_control() {
     let player = {
         let mut host =

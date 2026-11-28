@@ -61,8 +61,8 @@ Derive macros:
 ### `#[kithara::test]` flags
 
 A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
-(e.g. `#[kithara::test(native, tokio, timeout(Medium))]`). Flags
-include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`, `flash_timeout(...)`,
+(e.g. `#[kithara::test(native, tokio, timeout(Long))]`). Flags
+include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
 `hang_timeout_secs(N)`,
 `tracing(...)`, `soft_fail(...)`, `serial`, `multi_thread`, `selenium`, and
 `loom`, and `flash(true|false)`. `loom` is a synchronous, unit-returning,
@@ -75,11 +75,9 @@ is unchanged. `#[future]` injects an unpolled async fixture;
 until test teardown. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for per-flag semantics and the
 Flash/Loom debugging rules.
 
-`timeout(...)` accepts only `Quick`, `Short`, `Medium`, `Long`, `Heavy`, or
-`Network`. Duration expressions are rejected. `flash_timeout(...)` accepts the
-same tiers and overrides the allowance when Flash is requested and compiled;
-`timeout(...)` remains the real-clock allowance. Without the override both modes
-use the same tier.
+`timeout(...)` accepts only `Quick`, `Long`, `Heavy`, or `Network`. Duration
+expressions are rejected. The tier names the real-clock allowance; under Flash
+every tier is one second.
 
 ### `#[kithara::probe(...)]` arguments
 
@@ -99,8 +97,8 @@ Mock expansion requires test-utils `mock` and direct `unimock` (`0.6`, feature
 those wrappers does not establish browser execution.
 
 Hang helpers become no-ops when test-utils `hang` is disabled. The explicit
-`timeout(...)` accepts only a `TestBudget` tier name: `Quick`, `Short`, `Medium`,
-`Long`, `Heavy` or `Network`. Duration expressions, aliases and qualified paths are
+`timeout(...)` accepts only a `TestBudget` tier name: `Quick`, `Long`, `Heavy`
+or `Network`. Duration expressions, aliases and qualified paths are
 compile errors. `Network` is only for tests against a live network or run by
 hand. Tests default to `Quick`. The body timeout
 works separately from watchdog progress checks;

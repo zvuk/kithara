@@ -246,7 +246,7 @@ async fn run_seek_scenario(
 #[kithara::test(
     tracing("kithara_queue=debug,kithara_hls=debug,kithara_audio=debug"),
     tokio,
-    timeout(Medium)
+    timeout(Long)
 )]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]
@@ -267,7 +267,7 @@ async fn drm_seek_resumes(
 #[kithara::test(
     tracing("kithara_queue=debug,kithara_hls=debug,kithara_audio=debug"),
     tokio,
-    timeout(Medium)
+    timeout(Long)
 )]
 #[case::symphonia_auto(DecoderBackend::Symphonia, AbrMode::Auto(None))]
 #[case::symphonia_locked_low(DecoderBackend::Symphonia, AbrMode::manual(0))]

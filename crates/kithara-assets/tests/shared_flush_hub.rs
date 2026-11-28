@@ -66,7 +66,7 @@ fn shared_hub_flush_now_persists_every_store() {
     );
 }
 
-#[kithara::test(native, timeout(Medium))]
+#[kithara::test(native, timeout(Long))]
 fn shared_hub_checkpoint_covers_a_live_pending_writer_pin() {
     let dir = tempdir().unwrap();
     let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());

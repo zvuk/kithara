@@ -752,7 +752,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false), timeout(Short))]
+    #[kithara::test(native, flash(false), timeout(Quick))]
     fn observed_leading_origin_preserves_detector_input_and_raw_beats(clicks_120_20s: Vec<f32>) {
         let pcm: Vec<_> = clicks_120_20s
             .iter()

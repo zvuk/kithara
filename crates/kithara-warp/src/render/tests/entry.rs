@@ -202,7 +202,7 @@ fn an_entered_plan_refuses_a_landing_after_its_activation_source(
     assert_eq!(refused.frames(), frames);
 }
 
-#[kithara::test(timeout(Medium), flash_timeout(Quick))]
+#[kithara::test(timeout(Quick))]
 fn starting_controls_and_live_controls_render_the_same_samples() {
     for backend in StretchKind::all() {
         for pitch in [

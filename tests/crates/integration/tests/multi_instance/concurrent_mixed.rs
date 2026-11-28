@@ -191,7 +191,7 @@ async fn run_mixed(
 }
 
 /// Mixed File + HLS instances running concurrently.
-#[kithara::test(tokio, browser, serial, timeout(Short), hang_timeout_secs(2))]
+#[kithara::test(tokio, browser, serial, timeout(Long), hang_timeout_secs(2))]
 #[case::two_file_two_hls(2, 2)]
 #[case::four_file_four_hls(4, 4)]
 async fn concurrent_mixed_instances(

@@ -164,7 +164,7 @@ async fn non_leading_completion_does_not_advance_the_queue(
 
 /// The audible half of the same defect: the listener hears the current
 /// track handed over to the successor while it is still playing.
-#[kithara::test(tokio, flash(false), timeout(Short))]
+#[kithara::test(tokio, flash(false), timeout(Quick))]
 #[case::eof(Completion::Eof)]
 #[case::failure(Completion::Failure)]
 async fn background_completion_does_not_cut_the_current_track_audio(

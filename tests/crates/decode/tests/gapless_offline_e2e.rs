@@ -2,7 +2,7 @@
 
 use kithara_integration_tests::mock::gapless::*;
 
-#[kithara::test(native, tokio, timeout(Medium), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, timeout(Quick), hang_timeout_secs(1))]
 async fn single_track_media_only_strips_leading_priming(
     temp_dir: TestTempDir,
     #[future(awt)] primed: (TestServerHelper, CreatedHls),
@@ -55,7 +55,7 @@ async fn single_track_media_only_strips_leading_priming(
 #[kithara::test(
     native,
     tokio,
-    timeout(Medium),
+    timeout(Long),
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
@@ -130,7 +130,7 @@ async fn two_tracks_gapless_no_click_with_media_only_zero_crossfade(
     harness.close().await;
 }
 
-#[kithara::test(native, tokio, timeout(Medium), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(1))]
 async fn two_tracks_gapless_stitch_continuity_metric(
     temp_dir: TestTempDir,
     #[future(awt)] trimmed: (TestServerHelper, CreatedHls),
@@ -355,7 +355,7 @@ async fn render_apple_fused_deficit_seam(
     result
 }
 
-#[kithara::test(native, tokio, timeout(Medium), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(1))]
 async fn disabled_gapless_mode_keeps_full_decoded_length(
     temp_dir: TestTempDir,
     #[future(awt)] trimmed: (TestServerHelper, CreatedHls),

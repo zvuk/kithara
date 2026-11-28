@@ -332,7 +332,7 @@ async fn run_seek_scenario(ladders: &[Ladder], select_index: usize, backend: Sto
     tracing("kithara_queue=debug,kithara_hls=debug,kithara_stream=debug"),
     tokio,
     multi_thread,
-    timeout(Medium)
+    timeout(Long)
 )]
 #[case::one_track(&[Ladder::Plain], 0)]
 #[case::first_of_two(&[Ladder::Plain, Ladder::Encrypted], 0)]

@@ -155,7 +155,7 @@ async fn a_sign_in_without_a_confirmed_code_keeps_no_token() {
     }
 }
 
-#[kithara::test(timeout(Medium))]
+#[kithara::test(timeout(Quick))]
 async fn signing_out_completes_before_zvuk_answers_and_clears_the_catalogue() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes
@@ -336,7 +336,7 @@ async fn a_refused_token_signs_out_and_a_stale_refusal_spares_the_newer_one() {
 
 /// The refusal arrives through the stream batch of a search a newer query
 /// superseded, and ends the reaction and the listing in flight.
-#[kithara::test(timeout(Medium))]
+#[kithara::test(timeout(Quick))]
 async fn a_refused_token_signs_out_and_ends_the_work_in_flight() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes
@@ -406,7 +406,7 @@ async fn a_refused_token_signs_out_and_ends_the_work_in_flight() {
     );
 }
 
-#[kithara::test(timeout(Medium))]
+#[kithara::test(timeout(Quick))]
 async fn a_failing_store_signs_out_with_its_error_and_revokes_the_new_session() {
     let net = DelayedNet::new(Unimock::new(()));
     net.polls([poll(Some(TOKEN))]);

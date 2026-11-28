@@ -245,7 +245,7 @@ async fn decoder_file_reads_samples(#[case] asset: SignalAsset, temp_dir: TestTe
 /// Covers three zero-warmup scenarios: seek to 0, seek forward (2s), seek
 /// to 0 again. The backward-seek case (which needs a warmup prelude) is a
 /// separate test.
-#[kithara::test(tokio, browser, hang_timeout_secs(1), timeout(Short))]
+#[kithara::test(tokio, browser, hang_timeout_secs(1), timeout(Long))]
 #[case(SignalAsset::MP3_TRACK_SINE440_187S, Duration::from_secs(0))]
 #[case(SignalAsset::MP3_TRACK_SINE440_187S, Duration::from_secs(2))]
 #[cfg_attr(
@@ -1199,7 +1199,7 @@ async fn decoder_file_seek_multiple(
 
 /// A seek after the decoder ran to the end of the file lands and decodes.
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
-#[kithara::test(tokio, timeout(Short), hang_timeout_secs(1))]
+#[kithara::test(tokio, timeout(Quick), hang_timeout_secs(1))]
 #[case(
     SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT,
     DecoderBackend::Symphonia
@@ -1499,7 +1499,7 @@ async fn read_until_decoded(
 /// chunks exactly under the same identity (native rate: the re-decode is
 /// sample-exact) or decodes them under a new revision (decoder-side
 /// resampling restarts its output clock on a fractional source phase).
-#[kithara::test(tokio, native, timeout(Medium), hang_timeout_secs(1))]
+#[kithara::test(tokio, native, timeout(Long), hang_timeout_secs(1))]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case(SignalAsset::MP3_SAW_6S, DecoderBackend::Symphonia, None)

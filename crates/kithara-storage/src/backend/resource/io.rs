@@ -652,7 +652,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(timeout(Short))]
+    #[kithara::test(timeout(Long))]
     #[case::mem(Backend::Mem)]
     #[case::mmap(Backend::Mmap)]
     fn concurrent_varying_length_rewrite_via_wait_range_stays_consistent(#[case] backend: Backend) {

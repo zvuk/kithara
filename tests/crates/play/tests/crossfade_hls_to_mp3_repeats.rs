@@ -66,7 +66,6 @@ async fn hls_server(saw_segments: &'static [u8]) -> CreatedHls {
 #[kithara::test(
     tokio,
     timeout(Heavy),
-    flash_timeout(Short),
     hang_timeout_secs(10),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]

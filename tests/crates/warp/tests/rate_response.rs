@@ -491,7 +491,7 @@ fn unrendered_frames_counts_exactly_the_output_no_span_covers() {
     multi_thread,
     serial,
     flash(false),
-    timeout(Medium),
+    timeout(Quick),
     hang_timeout_secs(5)
 )]
 #[case::signalsmith_minimum(StretchKind::Signalsmith, response_backends(), MINIMUM)]
@@ -688,7 +688,7 @@ async fn run_strict_case(
     hang_tick!();
 }
 
-#[kithara::test(tokio, multi_thread, serial, timeout(Medium), hang_timeout_secs(5))]
+#[kithara::test(tokio, multi_thread, serial, timeout(Quick), hang_timeout_secs(5))]
 #[case::signalsmith_default_quantum(
     StretchKind::Signalsmith,
     response_backends(),

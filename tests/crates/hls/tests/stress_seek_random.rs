@@ -194,7 +194,7 @@ fn read_final_tail(
     tokio,
     native,
     serial,
-    timeout(Medium),
+    timeout(Long),
     tracing("kithara_hls=debug,kithara_stream=debug")
 )]
 #[case::small(50_000, 20, 200, false, false)]

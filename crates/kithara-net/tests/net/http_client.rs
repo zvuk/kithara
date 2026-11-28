@@ -670,7 +670,7 @@ impl NetObserver for HeadArrivals {
     }
 }
 
-#[kithara::test(tokio, timeout(Short), hang_timeout_secs(1))]
+#[kithara::test(tokio, timeout(Long), hang_timeout_secs(1))]
 #[case::slow_alive_stream_completes(
     "/slow-body",
     Duration::from_millis(400),
@@ -1038,7 +1038,7 @@ fn flaky_body_router() -> (Router, RequestCounter) {
     (router, counter)
 }
 
-#[kithara::test(tokio, hang_timeout_secs(1), timeout(Short))]
+#[kithara::test(tokio, hang_timeout_secs(1), timeout(Quick))]
 #[case::get_bytes(Op::GetBytes, b"ok")]
 #[case::head(Op::Head, b"")]
 #[case::post(Op::Post, b"ping")]

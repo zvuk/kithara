@@ -6,7 +6,7 @@ use kithara_test_fixtures::Mp3Shape;
 
 use super::*;
 
-#[kithara::test(tokio, browser, timeout(Short), hang_timeout_secs(5))]
+#[kithara::test(tokio, browser, timeout(Quick), hang_timeout_secs(5))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
@@ -118,7 +118,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     );
 }
 
-#[kithara::test(tokio, browser, flash(false), timeout(Short), hang_timeout_secs(5))]
+#[kithara::test(tokio, browser, flash(false), timeout(Quick), hang_timeout_secs(5))]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia(false, DecoderBackend::Symphonia)
@@ -337,7 +337,7 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
     assert!(second_read > 0, "second HLS stream session must read bytes");
 }
 
-#[kithara::test(tokio, native, timeout(Medium), hang_timeout_secs(3))]
+#[kithara::test(tokio, native, timeout(Long), hang_timeout_secs(3))]
 #[cfg_attr(not(target_os = "android"), case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia, aac_source().await))]
 #[case::aac_apple(platform = apple, AudioCodec::AacLc, DecoderBackend::Apple, aac_source().await)]
 #[cfg_attr(

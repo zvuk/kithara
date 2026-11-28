@@ -121,7 +121,7 @@ fn assert_carries_the_tone(pcm: &[f32], label: &str) {
     );
 }
 
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(Quick))]
 #[case::platform_default(DecoderBackend::default())]
 #[case::symphonia(DecoderBackend::Symphonia)]
 fn the_packaged_segments_decode_back_to_the_source_tone(

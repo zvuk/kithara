@@ -316,7 +316,7 @@ fn streaming_resource_reopen_round_trip(
     }
 }
 
-#[kithara::test(timeout(Medium), hang_timeout_secs(1))]
+#[kithara::test(timeout(Quick), hang_timeout_secs(1))]
 fn streaming_resource_wait_range_partial_coverage() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancelToken::never();
@@ -564,7 +564,7 @@ fn streaming_resource_empty_operations() {
     assert!(data.is_empty());
 }
 
-#[kithara::test(timeout(Medium), hang_timeout_secs(1))]
+#[kithara::test(timeout(Quick), hang_timeout_secs(1))]
 fn streaming_resource_complex_range_scenario() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancelToken::never();

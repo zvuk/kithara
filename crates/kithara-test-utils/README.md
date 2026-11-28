@@ -21,7 +21,7 @@ Cross-crate test-runtime support: `#[kithara::test]` macro re-exports, USDT prob
 ```rust
 use kithara_test_utils::kithara;
 
-#[kithara::test(tokio, timeout(Medium))]
+#[kithara::test(tokio, timeout(Long))]
 async fn smoke() {
 }
 ```
@@ -46,12 +46,11 @@ enabled. On macOS, `usdt` emits native DTrace probes; on other targets, it
 emits the same probe records through `tracing`.
 
 `TestBudget` resolves named wall-time allowances for real, Flash, RTSan and Miri
-execution. On real clocks and under RTSan the levels are `Quick` (1 s), `Short`
-(2 s), `Medium` (5 s), `Long` (30 s), `Heavy` (90 s) and `Network` (600 s,
-live-network and hand-run tests only). Every level is 1 s under Flash. Under Miri
-`Quick` is 1 min, `Long`, `Heavy` and `Network` are 8 min, and the other levels
-scale by 60. Tests default to `Quick`; `timeout(...)` and `flash_timeout(...)`
-accept only these tier names.
+execution. On real clocks and under RTSan the levels are `Quick` (1 s), `Long`
+(30 s), `Heavy` (90 s) and `Network` (600 s, live-network and hand-run tests
+only). Every level is 1 s under Flash. Under Miri `Quick` is 1 min and the other
+levels are 8 min. Tests default to `Quick`; `timeout(...)` accepts only these
+tier names.
 Duration expressions and aliases are rejected by the attribute parser. With
 defaults disabled, enable `test` for these APIs.
 

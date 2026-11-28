@@ -183,7 +183,7 @@ fn a_track_the_reader_outruns_the_detector_on_reaches_its_end(analysis_silence: 
     );
 }
 
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(Quick))]
 fn a_gap_at_the_start_is_taken_rather_than_declared_covered(analysis_silence: Vec<f32>) {
     let analysis = read_whole(Track::silence(
         &analysis_silence,
@@ -203,7 +203,7 @@ fn a_gap_at_the_start_is_taken_rather_than_declared_covered(analysis_silence: Ve
     );
 }
 
-#[kithara::test(timeout(Short))]
+#[kithara::test(timeout(Quick))]
 fn a_pass_that_cannot_feed_its_detector_reads_on(analysis_silence: Vec<f32>) {
     let pools = pools();
     let track = Track::silence(

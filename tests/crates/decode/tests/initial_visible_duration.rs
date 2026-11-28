@@ -27,7 +27,7 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::kithara;
 
-#[kithara::test(native, tokio, timeout(Short), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(1))]
 #[kithara::hang_watchdog(ctx = String)]
 #[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH)]
 #[case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH)]

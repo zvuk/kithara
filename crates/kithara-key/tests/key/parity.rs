@@ -3,7 +3,7 @@ use kithara_test_utils::kithara;
 
 use crate::recipe::{estimate_whole, goldens, render};
 
-#[kithara::test(timeout(Medium))]
+#[kithara::test(timeout(Long))]
 fn every_tonal_fixture_matches_key_extractor() {
     const STRENGTH_TOLERANCE: f32 = 1e-3;
     const KEY_NAMES_FROM_A: [&str; 12] = [

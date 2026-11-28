@@ -511,7 +511,7 @@ async fn offline_sync_capture_keeps_the_host_beat_clicks(rhythm_a_wav: String) {
 
 /// The deck shows a seek landing on the in-phase position nearest the
 /// request, then plays on from it.
-#[kithara::test(native, tokio, timeout(Medium))]
+#[kithara::test(native, tokio, timeout(Quick))]
 async fn a_seek_on_a_synced_deck_shows_the_position_moving_on(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 124.0).await;
     rig.call(|rig| {
@@ -552,7 +552,7 @@ async fn a_seek_on_a_synced_deck_shows_the_position_moving_on(rhythm_a_wav: Stri
 }
 
 /// A refused SYNC leaves the deck free: a track it takes afterwards takes a speed.
-#[kithara::test(native, tokio, timeout(Medium))]
+#[kithara::test(native, tokio, timeout(Quick))]
 async fn a_refused_sync_leaves_a_later_track_free(rhythm_a_wav: String, rhythm_b_wav: String) {
     let (analysis, mut requests) = AnalysisHandle::channel(watch::channel(Arc::default()).1);
     let rig = OffThread::spawn("engine", move || {
@@ -625,7 +625,7 @@ async fn a_refused_sync_leaves_a_later_track_free(rhythm_a_wav: String, rhythm_b
 
 /// A late grid restores SYNC with continuous speed correction; a seek then
 /// aligns immediately to the tempo the host holds by then.
-#[kithara::test(native, tokio, timeout(Medium))]
+#[kithara::test(native, tokio, timeout(Quick))]
 async fn a_ready_grid_recovers_sync_smoothly_until_a_seek_aligns_it(rhythm_a_wav: String) {
     let Synced { rig, served } = synced_one(rhythm_a_wav, 126.0).await;
     let analysis = served.await.expect("the analysis fixture serves");
@@ -1340,7 +1340,7 @@ async fn a_synced_deck_crossfades_into_a_next_track_analysed_after_it_loads(
     crossfade_into_the_next_track(rhythm_a_wav, rhythm_b_wav, false).await;
 }
 
-#[kithara::test(native, tokio, timeout(Medium))]
+#[kithara::test(native, tokio, timeout(Quick))]
 async fn a_synced_deck_shows_the_played_speed_and_keeps_it_when_sync_ends(rhythm_a_wav: String) {
     let Synced { rig, served } = synced(vec![rhythm_a_wav], 126.0, |requests, tracks| {
         task::spawn(fixtures::serve_grid(

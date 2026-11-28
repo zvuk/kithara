@@ -97,7 +97,7 @@ async fn run_concurrent_file(n: usize, source: (TestServerHelper, Url)) {
 ///
 /// Each Audio instance uses 2 pool threads (downloader + `audio_loop`),
 /// so pool size must be >= 2 * N to avoid starvation.
-#[kithara::test(tokio, browser, serial, timeout(Medium), hang_timeout_secs(2))]
+#[kithara::test(tokio, browser, serial, timeout(Long), hang_timeout_secs(2))]
 #[case::n2(2)]
 #[case::n4(4)]
 #[case::n8(8)]

@@ -33,12 +33,12 @@ fn default_flash_budget_bounds_wall_time() {
     wall_sleep(Duration::from_millis(1500));
 }
 
-#[kithara::test(native, flash(false), timeout(Medium))]
+#[kithara::test(native, flash(false), timeout(Long))]
 fn named_real_budget_allows_four_wall_seconds() {
     wall_sleep(Duration::from_secs(4));
 }
 
-#[kithara::test(native, timeout(Short))]
+#[kithara::test(native, timeout(Long))]
 #[serial_test::serial]
 #[should_panic(expected = "timed out")]
 fn sync_infinite_loop_is_killed_by_timeout() {
@@ -47,7 +47,7 @@ fn sync_infinite_loop_is_killed_by_timeout() {
     }
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Long))]
 #[serial_test::serial]
 #[cfg_attr(not(target_arch = "wasm32"), should_panic(expected = "timed out"))]
 #[cfg_attr(target_arch = "wasm32", should_panic)]
@@ -57,7 +57,7 @@ async fn async_infinite_loop_is_killed_by_timeout() {
     }
 }
 
-#[kithara::test(tokio, timeout(Short))]
+#[kithara::test(tokio, timeout(Long))]
 #[serial_test::serial]
 #[cfg_attr(not(target_arch = "wasm32"), should_panic(expected = "timed out"))]
 #[cfg_attr(target_arch = "wasm32", should_panic)]

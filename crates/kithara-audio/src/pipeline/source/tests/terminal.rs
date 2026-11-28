@@ -186,7 +186,7 @@ enum TerminalTransition {
     Seek,
 }
 
-#[kithara::test(native, tokio, tracing("warn"), timeout(Short))]
+#[kithara::test(native, tokio, tracing("warn"), timeout(Quick))]
 #[case::cancel(TerminalTransition::Cancel, "source cancelled")]
 #[case::recreate(TerminalTransition::Recreate, "8193")]
 #[case::failed_seek(TerminalTransition::Seek, "terminal-seek-failure")]

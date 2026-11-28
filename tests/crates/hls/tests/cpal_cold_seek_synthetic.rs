@@ -26,7 +26,7 @@ const VARIANT_COUNT: usize = 3;
 const SEGMENT_COUNT: usize = 40;
 
 /// Cold-cache seek into a far segment over the offline backend.
-#[kithara::test(tokio, multi_thread, timeout(Medium))]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]

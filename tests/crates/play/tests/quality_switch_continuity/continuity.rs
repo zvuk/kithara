@@ -288,7 +288,7 @@ fn measure_cochlea(samples: &[f32]) -> (CochleaMetric, Vec<f64>) {
     (metric, onsets.times_ms)
 }
 
-#[kithara::test(native, flash(false), timeout(Medium))]
+#[kithara::test(native, flash(false), timeout(Quick))]
 fn focused_measurements_match_full_cochlea(quality_control_a: Vec<f32>) {
     let audio = ProbeAudio {
         samples: quality_control_a.clone(),
