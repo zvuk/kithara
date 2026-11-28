@@ -24,6 +24,7 @@ mod strided;
 mod svf;
 #[cfg(test)]
 mod tests;
+mod window;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use accelerate as platform;
@@ -43,3 +44,4 @@ pub(crate) use simd::{
     scale_in_place,
 };
 pub(crate) use strided::{gather, scatter};
+pub(crate) use window::{all_finite, biquad_window};

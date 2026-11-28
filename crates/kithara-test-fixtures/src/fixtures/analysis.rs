@@ -108,3 +108,23 @@ pub fn bucket_short() -> Vec<f32> {
 pub fn bucket_sine() -> Vec<f32> {
     samples(&assets::bucket_input_sine())
 }
+
+/// Prepared two-second peak-envelope carriers, in low, burst, low-mid, high-mid, high order.
+#[kithara::fixture]
+#[must_use]
+pub fn waveform_peak_tones() -> [Vec<f32>; 5] {
+    [
+        assets::waveform_peak_tone_low(),
+        assets::waveform_peak_tone_burst(),
+        assets::waveform_peak_tone_low_mid(),
+        assets::waveform_peak_tone_high_mid(),
+        assets::waveform_peak_tone_high(),
+    ]
+    .map(|asset| samples(&asset))
+}
+
+#[kithara::fixture]
+#[must_use]
+pub fn waveform_peak_clicks() -> Vec<f32> {
+    samples(&assets::analysis_values_peak_clicks())
+}

@@ -42,7 +42,7 @@ pub use kithara_signal::{FrameCoverage, FrameSpan};
 pub use kithara_waveform::WaveformAnalyzer;
 /// The waveform result and its tunables, re-exported from their owner: a
 /// consumer that only reads a waveform needs no DSP.
-pub use kithara_waveform::{AnalysisParams, Bucket, Waveform};
+pub use kithara_waveform::{AnalysisParams, Band, Bucket, MAX_BUCKETS, Waveform};
 pub use rangemap::RangeSet;
 #[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub use {

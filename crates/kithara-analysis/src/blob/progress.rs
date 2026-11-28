@@ -259,7 +259,7 @@ mod tests {
     }
 
     fn wave() -> Waveform {
-        Waveform::try_new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
+        Waveform::try_new(vec![Bucket::new([0.5; 4], [0.5; 4])], NonZeroU64::MIN)
             .expect("hand-built buckets are valid")
     }
 
@@ -329,10 +329,7 @@ mod tests {
         )
         .expect("the waveform and key tags still match");
 
-        assert_eq!(
-            got.waveform().map(Waveform::buckets),
-            Some(wave().buckets())
-        );
+        assert_eq!(got.waveform(), Some(&wave()));
         assert!(got.beat().is_none(), "another beat model is a beat miss");
         assert_eq!(got.fingerprint().beat(), None);
         assert_eq!(got.fingerprint().waveform(), Some("wave:fold1:v2"));

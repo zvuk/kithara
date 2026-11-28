@@ -59,7 +59,11 @@ fn analyze(prepared: &Prepared) {
             0,
         )
         .expect("the excerpt fits the region");
-    std::hint::black_box(analyzer.snapshot(consts::FOLD, Some(extent)));
+    std::hint::black_box(
+        analyzer
+            .snapshot(consts::FOLD, Some(extent))
+            .expect("finite fixture"),
+    );
 }
 
 #[metabench::benchmark(WAVEFORM_ANALYZER, "waveform_analyzer", "push_snapshot_10s_stereo", gungraun_setup = prepare)]

@@ -246,7 +246,6 @@ mod tests {
         bufpool::{Pools, TestPools, pools, sample_buffer},
         kithara,
     };
-    use kithara_waveform::Waveform;
     use num_traits::cast::ToPrimitive;
     use unimock::{MockFn, Unimock, matching};
 
@@ -951,10 +950,7 @@ mod tests {
             .expect("key estimation succeeds");
         assert_eq!(after.media_origin(), audio.meta.media_origin);
         assert_eq!(after.coverage(), progress.analysis().coverage());
-        assert_eq!(
-            after.waveform().map(Waveform::buckets),
-            progress.analysis().waveform().map(Waveform::buckets)
-        );
+        assert_eq!(after.waveform(), progress.analysis().waveform());
     }
 
     #[kithara::test]
@@ -1014,10 +1010,7 @@ mod tests {
                 .expect("key estimation succeeds");
             assert_eq!(after.media_origin(), before.media_origin());
             assert_eq!(after.coverage(), before.coverage());
-            assert_eq!(
-                after.waveform().map(Waveform::buckets),
-                before.waveform().map(Waveform::buckets)
-            );
+            assert_eq!(after.waveform(), before.waveform());
             extent.prove_end(0);
             assert_eq!(
                 extent.frames(),
@@ -1044,10 +1037,10 @@ mod tests {
             spec: spec(),
             ..Default::default()
         };
-        assert!(writer.push(&metadata, 4, analysis_silence[..4].iter().copied()));
+        assert!(writer.push(&metadata, &analysis_silence[..8]));
         let span = reader.pop(&mut out).expect("the first span is accepted");
         assert_eq!(
-            pass.push_mono(&out, span, &mut extent, None)
+            pass.push_ingest(&out, span, &mut extent, None)
                 .expect("key estimation succeeds"),
             Ingest::Accepted
         );
@@ -1065,7 +1058,7 @@ mod tests {
                 frame_offset: 44_100,
                 ..metadata
             };
-            assert!(writer.push(&info, 4, analysis_silence[..4].iter().copied()));
+            assert!(writer.push(&info, &analysis_silence[..8]));
             let span = reader
                 .pop(&mut out)
                 .expect("the ring carries the source facts");
@@ -1075,7 +1068,7 @@ mod tests {
                 Ingest::ForeignClock
             };
             assert_eq!(
-                pass.push_mono(&out, span, &mut extent, None)
+                pass.push_ingest(&out, span, &mut extent, None)
                     .expect("key estimation succeeds"),
                 expected
             );

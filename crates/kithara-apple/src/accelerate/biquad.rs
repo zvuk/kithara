@@ -165,6 +165,43 @@ impl MultichannelBiquad {
         Ok(())
     }
 
+    /// Section-major coefficients, with one five-coefficient row per channel.
+    pub fn coefficients(&self) -> impl ExactSizeIterator<Item = &[[f64; 5]]> {
+        self.table
+            .as_chunks::<5>()
+            .0
+            .chunks_exact(self.channels.get())
+    }
+
+    /// Filters interleaved frames in one call, carrying history; callers own admission/reset.
+    /// Rounding and nonfinite propagation may differ from `process`.
+    ///
+    /// # Errors
+    /// [`BiquadError::Shape`] when samples do not contain whole channel frames.
+    pub fn process_window(&mut self, samples: &mut [f32]) -> Result<(), BiquadError> {
+        let channels = self.channels.get();
+        if !samples.len().is_multiple_of(channels) {
+            return Err(BiquadError::Shape);
+        }
+        if samples.is_empty() {
+            return Ok(());
+        }
+        let stride = isize::try_from(channels).map_err(|_| BiquadError::Shape)?;
+        let frames = samples.len() / channels;
+        for (slot, sample) in self.planes.iter_mut().zip(samples.iter_mut()) {
+            *slot = ptr::from_mut(sample);
+        }
+        let table = self.planes.as_mut_ptr();
+        let setup = self.setup.as_ptr();
+        let input = table.cast::<*const f32>();
+        // SAFETY: each channel pointer covers frames samples with the checked stride.
+        // SAFETY: X and Y share the table, the supported in-place form.
+        unsafe {
+            vDSP_biquadm(setup, input, stride, table, stride, frames);
+        }
+        Ok(())
+    }
+
     fn prepare<P: DerefMut<Target = [f32]>>(
         &mut self,
         planes: &mut [P],

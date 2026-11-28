@@ -14,7 +14,7 @@ use serde::Deserialize;
 #[command(version, about)]
 #[non_exhaustive]
 pub struct Args {
-    /// Native waveform windows folded into each bucket.
+    /// Native waveform columns folded into each bucket.
     #[arg(long, default_value = "1")]
     pub(crate) waveform_fold: NonZeroU32,
     /// Maximum concurrent source loads and analysis passes.

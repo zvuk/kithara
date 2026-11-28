@@ -14,6 +14,7 @@ use tracing::warn;
 pub(crate) struct Span {
     pub(crate) start: u64,
     frames: usize,
+    pub(crate) channels: usize,
     pub(crate) media_origin: Option<Duration>,
     pub(crate) visible_origin: Option<Duration>,
 }
@@ -29,7 +30,11 @@ where
     const AHEAD_RANGES: usize = 256;
 
     let frames = rate.get().saturating_mul(AHEAD_SECONDS).to_usize();
-    open(pools, frames.unwrap_or(usize::MAX), AHEAD_RANGES)
+    open(
+        pools,
+        frames.unwrap_or(usize::MAX).saturating_mul(2),
+        AHEAD_RANGES,
+    )
 }
 
 pub(crate) fn open<S>(
@@ -64,25 +69,18 @@ impl Writer {
         self.spans.read_is_held()
     }
 
-    pub(crate) fn push<I>(&mut self, info: &AudioChunkInfo, frames: usize, mono: I) -> bool
-    where
-        I: Iterator<Item = f32>,
-    {
-        if frames == 0 || self.samples.vacant_len() < frames || self.spans.is_full() {
+    pub(crate) fn push(&mut self, info: &AudioChunkInfo, pcm: &[f32]) -> bool {
+        let channels = usize::from(info.spec.channels.max(1));
+        let frames = pcm.len() / channels;
+        let samples = frames.saturating_mul(channels);
+        if frames == 0 || self.samples.vacant_len() < samples || self.spans.is_full() {
             return false;
         }
-
-        let written = self.samples.push_iter(mono.take(frames));
-        if written != frames {
-            warn!(
-                frames,
-                written, "analysis ingest: range shorter than declared; dropped"
-            );
-            return false;
-        }
+        self.samples.push_slice(&pcm[..samples]);
         self.spans
             .try_push(Span {
                 frames,
+                channels,
                 start: info.frame_offset,
                 media_origin: info.media_origin,
                 visible_origin: info.visible_origin,
@@ -100,15 +98,16 @@ impl Reader {
     pub(crate) fn pop(&mut self, out: &mut SampleBuffer) -> Option<Span> {
         let span = self.spans.try_pop()?;
         out.clear();
-        if out.ensure_len(span.frames).is_err() {
+        let samples = span.frames.saturating_mul(span.channels);
+        if out.ensure_len(samples).is_err() {
             warn!(
                 frames = span.frames,
                 "analysis ingest: no room to drain a range; dropped"
             );
-            self.samples.skip(span.frames);
+            self.samples.skip(samples);
             return None;
         }
-        let read = self.samples.pop_slice(&mut out[..span.frames]);
+        let read = self.samples.pop_slice(&mut out[..samples]);
         out.truncate(read);
         Some(span)
     }
@@ -146,8 +145,8 @@ mod tests {
         let (mut tx, mut rx) = open(&pools, 64, 4).expect("test ring fits the pools");
         let mut out = pools.get::<f32>();
 
-        assert!(tx.push(&info(100), 4, pcm_ramp[..4].iter().copied()));
-        assert!(tx.push(&info(200), 2, pcm_ramp[4..6].iter().copied()));
+        assert!(tx.push(&info(100), &pcm_ramp[..4]));
+        assert!(tx.push(&info(200), &pcm_ramp[4..6]));
 
         assert_eq!(rx.pop(&mut out).map(|span| span.start), Some(100));
         assert_eq!(&out[..], &[1.0, 2.0, 3.0, 4.0]);
@@ -166,9 +165,9 @@ mod tests {
         let (mut tx, mut rx) = open(&pools, 8, 4).expect("test ring fits the pools");
         let mut out = pools.get::<f32>();
 
-        assert!(tx.push(&info(0), 8, ones[..8].iter().copied()));
+        assert!(tx.push(&info(0), &ones[..8]));
         assert!(
-            !tx.push(&info(8), 1, pcm_ramp[1..2].iter().copied()),
+            !tx.push(&info(8), &pcm_ramp[1..2]),
             "no room left for a single frame"
         );
 
@@ -187,10 +186,10 @@ mod tests {
         let (mut tx, mut rx) = open(&pools, 64, 2).expect("test ring fits the pools");
         let mut out = pools.get::<f32>();
 
-        assert!(tx.push(&info(0), 1, pcm_ramp[0..1].iter().copied()));
-        assert!(tx.push(&info(1), 1, pcm_ramp[1..2].iter().copied()));
+        assert!(tx.push(&info(0), &pcm_ramp[0..1]));
+        assert!(tx.push(&info(1), &pcm_ramp[1..2]));
         assert!(
-            !tx.push(&info(2), 1, pcm_ramp[2..3].iter().copied()),
+            !tx.push(&info(2), &pcm_ramp[2..3]),
             "there are only two range slots"
         );
 
@@ -205,11 +204,11 @@ mod tests {
         let (mut tx, mut rx) = open(&pools, 8, 4).expect("test ring fits the pools");
         let mut out = pools.get::<f32>();
 
-        assert!(tx.push(&info(0), 8, ones[..8].iter().copied()));
-        assert!(!tx.push(&info(8), 4, twos[..4].iter().copied()));
+        assert!(tx.push(&info(0), &ones[..8]));
+        assert!(!tx.push(&info(8), &twos[..4]));
         assert_eq!(rx.pop(&mut out).map(|span| span.start), Some(0));
         assert!(
-            tx.push(&info(8), 4, twos[..4].iter().copied()),
+            tx.push(&info(8), &twos[..4]),
             "a drained ring takes the range it refused"
         );
 
@@ -227,7 +226,7 @@ mod tests {
                 visible_origin: Some(Duration::from_nanos(11_995_465)),
                 ..info(22_050)
             };
-            assert!(tx.push(&info, 4, pcm_ramp[..4].iter().copied()));
+            assert!(tx.push(&info, &pcm_ramp[..4]));
             let span = rx.pop(&mut out).expect("the accepted span is present");
             assert_eq!(span.start, 22_050);
             assert_eq!(span.media_origin, media_origin);

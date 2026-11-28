@@ -853,7 +853,9 @@ async fn matches_direct_waveform_analyzer_over_chunked_stream(analysis_pcm: &'st
     direct
         .push(&pools, samples, usize::from(fixtures::consts::CH), 0)
         .expect("waveform buffers fit the test region");
-    let want = direct.snapshot(crate::consts::NODE_FOLD, Some(frames));
+    let want = direct
+        .snapshot(crate::consts::NODE_FOLD, Some(frames))
+        .expect("finite fixture");
 
     let reader = Box::new(FakeReader::chunked(&pools, samples, 4));
     let out = stages(reader, builder, &CancelToken::root()).await;

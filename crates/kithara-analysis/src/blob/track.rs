@@ -283,7 +283,7 @@ mod tests {
     }
 
     fn active() -> AnalysisFingerprint {
-        fingerprint("wave:fold1:v2", consts::BEAT_TAG)
+        fingerprint("wave:fold1:v3", consts::BEAT_TAG)
     }
 
     fn rate() -> NonZeroU32 {
@@ -291,7 +291,7 @@ mod tests {
     }
 
     fn wave() -> Waveform {
-        Waveform::try_new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
+        Waveform::try_new(vec![Bucket::new([0.5; 4], [0.5; 4])], NonZeroU64::MIN)
             .expect("hand-built buckets are valid")
     }
 
@@ -425,7 +425,10 @@ mod tests {
     fn a_document_reads_every_artifact_under_the_tag_it_carries() {
         let span = NonZeroU64::new(10 * 441).expect("ten windows span frames");
         let waveform = Waveform::try_new(
-            vec![Bucket::new(0.25, 0.5, 0.75), Bucket::new(0.5, 0.25, 0.125)],
+            vec![
+                Bucket::new([0.25, 0.5, 0.75, 0.5], [0.25, 0.5, 0.75, 0.5]),
+                Bucket::new([0.5, 0.25, 0.125, 0.25], [0.5, 0.25, 0.125, 0.25]),
+            ],
             span,
         )
         .expect("hand-built buckets are valid");
@@ -464,7 +467,7 @@ mod tests {
         assert!(got.is_complete());
         let got_waveform = got.waveform().expect("the waveform is read");
         assert_eq!(got_waveform.span_frames(), span);
-        assert_eq!(got_waveform.buckets(), waveform.buckets());
+        assert_eq!(got_waveform, &waveform);
         assert_eq!(got.beat().map(BeatSnapshot::artifact), Some(&steady_grid()));
         assert_eq!(got.beat().map(BeatSnapshot::state), Some(BeatState::Final));
         assert!(want.grid().is_some(), "the fixture states a grid");
@@ -604,10 +607,7 @@ mod tests {
             assert_eq!(got.revision(), want.revision());
             assert_eq!(got.is_settled(), want.is_settled());
             assert_eq!(got.fingerprint(), want.fingerprint());
-            assert_eq!(
-                got.waveform().map(Waveform::buckets),
-                want.waveform().map(Waveform::buckets)
-            );
+            assert_eq!(got.waveform(), want.waveform());
             assert_eq!(
                 got.beat().map(BeatSnapshot::artifact),
                 want.beat().map(BeatSnapshot::artifact)

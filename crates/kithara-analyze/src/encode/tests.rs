@@ -35,8 +35,11 @@ fn publication() -> AnalysisProgress {
         once(36_000..40_000).collect(),
     );
     let waveform = Waveform::try_new(
-        vec![Bucket::new(0.1, 0.4, 0.2), Bucket::new(0.8, 0.2, 0.3)],
-        NonZeroU64::new(10_240).expect("span"),
+        vec![
+            Bucket::new([0.1, 0.4, 0.2, 0.6], [0.8, 0.2, 0.3, 1.0]),
+            Bucket::new([0.8, 0.2, 0.3, 1.0], [0.1, 0.4, 0.2, 0.6]),
+        ],
+        NonZeroU64::new(640).expect("span"),
     )
     .expect("waveform");
     let key = KeyEstimate::new(
@@ -57,7 +60,7 @@ fn publication() -> AnalysisProgress {
         .revision(0)
         .fingerprint(
             AnalysisFingerprint::builder()
-                .waveform("wave:fold10:v2")
+                .waveform("wave:fold10:v3")
                 .beat("beat:test")
                 .key("key:test")
                 .build(),
@@ -95,7 +98,7 @@ fn full_record_preserves_every_artifact_and_confidence() {
     assert_eq!(record["coverage"], json!([[0, 96_000]]));
     assert_eq!(
         record["fingerprint"],
-        json!({"waveform": "wave:fold10:v2", "beat": "beat:test", "key": "key:test"})
+        json!({"waveform": "wave:fold10:v3", "beat": "beat:test", "key": "key:test"})
     );
     assert_eq!(record["beat"]["state"], "final");
     assert_eq!(record["beat"]["bpm"], 120.0);
@@ -121,7 +124,7 @@ fn full_record_preserves_every_artifact_and_confidence() {
     );
     assert_eq!(
         record["waveform"],
-        json!({"bands":["low","mid","high"],"span_frames":10_240,"buckets":[[0.1,0.4,0.2],[0.8,0.2,0.3]]})
+        json!({"bands":["low","low_mid","high_mid","high"],"span_frames":640,"buckets":[[[0.101960786,0.4,0.2,0.6],[0.8,0.2,0.3019608,1.0]],[[0.8,0.2,0.3019608,1.0],[0.101960786,0.4,0.2,0.6]]]})
     );
 }
 

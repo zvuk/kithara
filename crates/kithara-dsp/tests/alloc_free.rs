@@ -120,7 +120,13 @@ fn biquad_never_allocates_after_construction() {
     )
     .expect("valid low-pass");
     let mut planes = vec![vec![0.25_f32; FRAMES]; TWO.get()];
+    let mut window =
+        Biquad::new(NonZeroUsize::MIN.saturating_add(7), TWO).expect("eight window lanes");
+    let mut window_samples = vec![0.25_f32; FRAMES * 8];
     assert_no_alloc(|| {
+        window
+            .process_window(&mut window_samples, 0..FRAMES)
+            .expect("finite window");
         for section in 0..four.get() {
             filter.retune(section, low_pass).expect("section in range");
             filter

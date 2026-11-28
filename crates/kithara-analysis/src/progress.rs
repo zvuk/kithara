@@ -12,7 +12,7 @@ use crate::{
 };
 
 mod consts {
-    pub(super) const RESUME_VERSION: u32 = 0x4b41_5204;
+    pub(super) const RESUME_VERSION: u32 = 0x4b41_5205;
 }
 
 /// One atomic analysis publication and the opaque state needed to continue it.
