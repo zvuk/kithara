@@ -734,10 +734,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case(SignalAsset::MP3_TRACK_SINE440_187S, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::MP3_TRACK_SINE440_187S, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::MP3_TRACK_SINE440_187S, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -752,10 +749,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -770,10 +764,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_24BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -788,10 +779,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_22050_1CH_16BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -806,10 +794,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_22050_2CH_16BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -824,10 +809,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_16BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -842,10 +824,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_44100_2CH_24BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -860,10 +839,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_16BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -878,10 +854,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_48000_2CH_24BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -896,10 +869,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_88200_2CH_24BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -914,10 +884,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_16BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -932,10 +899,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_FLAC_FLAC_96000_2CH_24BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -950,10 +914,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -968,10 +929,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_MP3_LIBMP3LAME_22050_1CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -986,10 +944,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_MP3_LIBMP3LAME_32000_2CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1004,10 +959,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1022,10 +974,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_2CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1040,10 +989,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_1CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1058,10 +1004,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_MP3_LIBMP3LAME_48000_2CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::default())
@@ -1070,10 +1013,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_M4A_AAC_44100_2CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1088,10 +1028,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_M4A_ALAC_44100_2CH_16BIT, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, DecoderBackend::default())
@@ -1100,10 +1037,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_OGG_VORBIS_44100_2CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, DecoderBackend::default())
@@ -1112,10 +1046,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_OPUS_LIBOPUS_48000_2CH, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1130,13 +1061,9 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(
-        SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT,
+#[case(platform = apple, SignalAsset::PROFILE_AIFF_PCM_S16BE_44100_2CH_16BIT,
         DecoderBackend::Apple
-    )
-)]
+    )]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1151,13 +1078,9 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(
-        SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT,
+#[case(platform = apple, SignalAsset::PROFILE_WAV_PCM_F32LE_192000_2CH_32BIT,
         DecoderBackend::Apple
-    )
-)]
+    )]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1172,13 +1095,9 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(
-        SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT,
+#[case(platform = apple, SignalAsset::PROFILE_WAV_PCM_S16LE_192000_2CH_16BIT,
         DecoderBackend::Apple
-    )
-)]
+    )]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1193,13 +1112,9 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(
-        SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
+#[case(platform = apple, SignalAsset::PROFILE_WAV_PCM_S16LE_44100_2CH_16BIT,
         DecoderBackend::Apple
-    )
-)]
+    )]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1214,13 +1129,9 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(
-        SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT,
+#[case(platform = apple, SignalAsset::PROFILE_WAV_PCM_S24LE_44100_2CH_24BIT,
         DecoderBackend::Apple
-    )
-)]
+    )]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(
@@ -1235,13 +1146,9 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
         DecoderBackend::Symphonia
     )
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(
-        SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT,
+#[case(platform = apple, SignalAsset::PROFILE_WAV_PCM_S32LE_192000_2CH_32BIT,
         DecoderBackend::Apple
-    )
-)]
+    )]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(SignalAsset::PROFILE_TAGGED_FLAC_ID3, DecoderBackend::default())
@@ -1250,10 +1157,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case(SignalAsset::PROFILE_TAGGED_FLAC_ID3, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_TAGGED_FLAC_ID3, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_TAGGED_FLAC_ID3, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(SignalAsset::PROFILE_TAGGED_MP3_ID3, DecoderBackend::default())
@@ -1262,10 +1166,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case(SignalAsset::PROFILE_TAGGED_MP3_ID3, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_TAGGED_MP3_ID3, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_TAGGED_MP3_ID3, DecoderBackend::Apple)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, DecoderBackend::default())
@@ -1274,10 +1175,7 @@ async fn decoder_file_seek_backward(#[case] asset: SignalAsset, temp_dir: TestTe
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case(SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, DecoderBackend::Apple)
-)]
+#[case(platform = apple, SignalAsset::PROFILE_TAGGED_WAVE_MP3_ID3, DecoderBackend::Apple)]
 async fn decoder_file_seek_multiple(
     #[case] asset: SignalAsset,
     temp_dir: TestTempDir,

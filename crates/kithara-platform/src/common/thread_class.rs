@@ -171,8 +171,7 @@ mod tests {
         class
     }
 
-    #[cfg(target_vendor = "apple")]
-    #[kithara::test(native)]
+    #[kithara::test(native, platform = apple)]
     fn an_audio_feed_thread_runs_at_the_user_interactive_qos_class() {
         let (answer, class) = on_fresh_thread(ThreadClass::AudioFeed, qos);
 

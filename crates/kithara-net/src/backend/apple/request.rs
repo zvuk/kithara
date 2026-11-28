@@ -118,7 +118,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(native)]
+    #[kithara::test(platform = apple, native)]
     #[case::rust_thread(false)]
     #[case::caller_scoped(true)]
     fn request_releases_its_native_storage_when_dropped(#[case] caller_scoped: bool) {

@@ -32,12 +32,15 @@ fn correlations() -> Vec<Correlation> {
             name: "portable-fallback",
             correlate: |signal, kernel, output| dispatch!(Level::fallback(), simd => kernels::correlate_kernel(simd, signal, kernel, output)),
         },
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        Correlation {
-            name: "accelerate",
-            correlate: accelerate::correlate,
-        },
     ])
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn accelerate_correlations() -> Vec<Correlation> {
+    Vec::from([Correlation {
+        name: "accelerate",
+        correlate: accelerate::correlate,
+    }])
 }
 
 fn portable_forward(len: FftLen, signal: &[f32]) -> Result<[Vec<f32>; 2], SpectrumError> {
@@ -67,24 +70,29 @@ struct Transform {
 }
 
 fn transforms() -> Vec<Transform> {
-    Vec::from([
-        Transform {
-            name: "portable",
-            forward: portable_forward,
-            scale: Dft::WINDOW_SCALE,
-        },
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        Transform {
-            name: "accelerate",
-            forward: accelerate_forward,
-            scale: accelerate::Dft::WINDOW_SCALE,
-        },
-    ])
+    Vec::from([Transform {
+        name: "portable",
+        forward: portable_forward,
+        scale: Dft::WINDOW_SCALE,
+    }])
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn accelerate_transforms() -> Vec<Transform> {
+    Vec::from([Transform {
+        name: "accelerate",
+        forward: accelerate_forward,
+        scale: accelerate::Dft::WINDOW_SCALE,
+    }])
 }
 
 #[kithara::test]
-fn every_backend_dft_times_its_window_scale_tracks_a_direct_dft() {
-    let rows = transforms();
+#[case::portable(transforms)]
+#[case::accelerate(platform = apple, accelerate_transforms)]
+fn every_backend_dft_times_its_window_scale_tracks_a_direct_dft(
+    #[case] rows: fn() -> Vec<Transform>,
+) {
+    let rows = rows();
     for len in LENGTHS {
         let signal = oracle::mix(len);
         let want = oracle::dft(&signal);
@@ -108,8 +116,12 @@ fn every_backend_dft_times_its_window_scale_tracks_a_direct_dft() {
 /// Reductions stay within `N·ε·Σ|terms|` of the `f64` sum (spec, reduction
 /// level).
 #[kithara::test]
-fn correlate_tracks_the_f64_sliding_dot_product_on_every_backend() {
-    for row in correlations() {
+#[case::portable(correlations)]
+#[case::accelerate(platform = apple, accelerate_correlations)]
+fn correlate_tracks_the_f64_sliding_dot_product_on_every_backend(
+    #[case] rows: fn() -> Vec<Correlation>,
+) {
+    for row in rows() {
         let name = row.name;
         for taps in TAPS {
             let signal = oracle::mix(taps.saturating_add(EXTRA));

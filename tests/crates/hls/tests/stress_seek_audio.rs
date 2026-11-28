@@ -563,17 +563,13 @@ fn resume_after_eof(audio: &mut HlsAudio, buf: &mut [f32], total_secs: f64) {
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 5. Final seek near the end → read to EOF
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(30)))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::wav_apple_ephemeral(
-        true,
+#[case::wav_apple_ephemeral(platform = apple, true,
         DecoderBackend::Apple,
         SeekAudioFixture::WavFileLike,
         100,
         Some(110),
         wav_hundred().await
-    )
-)]
+    )]
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(target_os = "android"), case::wav_symphonia_ephemeral(
     true,
@@ -655,17 +651,13 @@ fn resume_after_eof(audio: &mut HlsAudio, buf: &mut [f32], total_secs: f64) {
     None,
     flac_hundred().await
 ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::wav_apple_mmap(
-        false,
+#[case::wav_apple_mmap(platform = apple, false,
         DecoderBackend::Apple,
         SeekAudioFixture::WavFileLike,
         100,
         None,
         wav_hundred().await
-    )
-)]
+    )]
 async fn stress_seek_audio_hls(
     #[case] ephemeral: bool,
     #[case] backend: DecoderBackend,

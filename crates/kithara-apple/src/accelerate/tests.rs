@@ -25,7 +25,7 @@ const SPECIALS: [f32; 8] = [
 ];
 const UNWRITTEN: f32 = -1.0;
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn tangent_double_preserves_prefix_special_values_and_precision() {
     let input = [
         0.0,
@@ -57,7 +57,7 @@ fn tangent_double_preserves_prefix_special_values_and_precision() {
     assert_eq!(output.map(f64::to_bits), before.map(f64::to_bits));
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn tangent_double_is_bit_identical_across_widths_offsets_and_partitions() {
     let angles = [
         0.0,
@@ -108,7 +108,7 @@ fn bits<const N: usize>(values: [f32; N]) -> [u32; N] {
     values.map(f32::to_bits)
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(platform = apple, native, flash(false))]
 fn interpolation_outputs_requested_frames(accelerate_ramp: Vec<f32>) {
     let source = accelerate_ramp;
     let positions = [0.0, 0.5, 1.0];
@@ -119,7 +119,7 @@ fn interpolation_outputs_requested_frames(accelerate_ramp: Vec<f32>) {
     );
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(platform = apple, native, flash(false))]
 fn linear_interpolation_matches_scalar_positions(accelerate_ramp: Vec<f32>) {
     let source = accelerate_ramp;
     let positions = [1.0, 1.25, 1.5, 1.75];
@@ -133,7 +133,7 @@ fn linear_interpolation_matches_scalar_positions(accelerate_ramp: Vec<f32>) {
     assert_eq!(target, [1.0, 1.25, 1.5, 1.75]);
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(platform = apple, native, flash(false))]
 fn quadratic_interpolation_matches_scalar_positions(accelerate_wave: Vec<f32>) {
     let source = accelerate_wave;
     let positions = [1.0, 1.25, 1.5, 1.75];
@@ -150,7 +150,7 @@ fn quadratic_interpolation_matches_scalar_positions(accelerate_wave: Vec<f32>) {
     }
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn interpolation_rejects_positions_outside_the_window(accelerate_ramp: Vec<f32>) {
     type Interpolate = fn(&[f32], &[f32], &mut [f32]) -> Result<usize, OutOfWindow>;
     let cases: [(&str, Interpolate, f32); 6] = [
@@ -180,7 +180,7 @@ fn interpolation_rejects_positions_outside_the_window(accelerate_ramp: Vec<f32>)
     }
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn interleave_pair_writes_only_the_common_prefix() {
     let mut output = [9.0_f32; 7];
     assert_eq!(
@@ -190,7 +190,7 @@ fn interleave_pair_writes_only_the_common_prefix() {
     assert_eq!(bits(output), bits([1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 9.0]));
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn deinterleave_pair_reads_only_whole_pairs() {
     let (mut left, mut right) = ([9.0_f32; 4], [9.0_f32; 4]);
     assert_eq!(
@@ -201,14 +201,14 @@ fn deinterleave_pair_reads_only_whole_pairs() {
     assert_eq!(bits(right), bits([-1.0, -2.0, 9.0, 9.0]));
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn downmix_pair_averages_only_whole_pairs() {
     let mut mono = [9.0_f32; 3];
     assert_eq!(downmix_pair_f32(&[1.0, 3.0, -2.0, 2.0, 5.0], &mut mono), 2);
     assert_eq!(bits(mono), bits([2.0, 0.0, 9.0]));
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn layout_moves_special_values_bit_for_bit() {
     let mut interleaved = [1.0_f32; 16];
     assert_eq!(
@@ -224,7 +224,7 @@ fn layout_moves_special_values_bit_for_bit() {
     assert_eq!(bits(right), bits(SPECIALS));
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn multichannel_biquad_rejects_a_shape_it_was_not_built_for() {
     let two = NonZeroUsize::MIN.saturating_add(1);
     let mut filter = MultichannelBiquad::new(two, NonZeroUsize::MIN)
@@ -252,7 +252,7 @@ fn multichannel_biquad_rejects_a_shape_it_was_not_built_for() {
     assert_eq!(filter.process(&mut short, 2..4), Ok(()));
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn multichannel_biquad_keeps_a_finite_prefix_before_a_future_nan() {
     let mut filter =
         MultichannelBiquad::new(NonZeroUsize::MIN, NonZeroUsize::MIN).expect("native setup");
@@ -267,7 +267,7 @@ fn multichannel_biquad_keeps_a_finite_prefix_before_a_future_nan() {
     assert!(plane[2..].iter().all(|sample| sample.is_nan()));
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn multichannel_biquad_reapplying_equal_coefficients_is_bit_neutral() {
     // RBJ low-pass, 800 Hz at 44.1 kHz, Q = 1/sqrt(2).
     let w = std::f32::consts::TAU * 800.0 / 44_100.0;
@@ -303,7 +303,7 @@ fn multichannel_biquad_reapplying_equal_coefficients_is_bit_neutral() {
     );
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn multichannel_biquad_refuses_the_entire_shape_without_advancing_history() {
     let mut filter =
         MultichannelBiquad::new(NonZeroUsize::MIN.saturating_add(1), NonZeroUsize::MIN)
@@ -320,7 +320,7 @@ fn multichannel_biquad_refuses_the_entire_shape_without_advancing_history() {
     assert_eq!(probe, [vec![0.0; 3], vec![0.0; 3]]);
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn max_magnitude_reads_the_largest_absolute_value() {
     assert_eq!(
         max_magnitude_f32(&[0.5, -2.0, 1.0]).to_bits(),
@@ -359,7 +359,7 @@ fn max_magnitude_reads_the_largest_absolute_value() {
     }
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn real_dft_of_an_impulse_is_flat_and_doubled() {
     let dft = RealDft::new(16).unwrap_or_else(|err| panic!("vDSP setup: {err}"));
     let even = Plane([1.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
@@ -377,7 +377,7 @@ fn real_dft_of_an_impulse_is_flat_and_doubled() {
     );
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 #[case::empty(0)]
 #[case::single(1)]
 #[case::odd(17)]
@@ -386,7 +386,7 @@ fn real_dft_refuses_a_length_vdsp_has_no_setup_for(#[case] len: usize) {
     assert_eq!(RealDft::new(len).err(), Some(DftError::Setup));
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn real_dft_refuses_planes_of_another_length() {
     let dft = RealDft::new(32).unwrap_or_else(|err| panic!("vDSP setup: {err}"));
     let (even, odd, short) = (
@@ -412,7 +412,7 @@ fn real_dft_refuses_planes_of_another_length() {
 
 /// vDSP picks its algorithm by where the planes sit, so one off the boundary
 /// could round the same frame differently.
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 #[case::even([1, 0, 0, 0])]
 #[case::odd([0, 1, 0, 0])]
 #[case::re([0, 0, 1, 0])]
@@ -438,7 +438,7 @@ fn real_dft_refuses_a_plane_off_the_boundary(#[case] shift: [usize; 4]) {
     );
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn multiply_writes_the_product_of_the_common_prefix() {
     let mut output = [UNWRITTEN; 4];
     assert_eq!(
@@ -449,7 +449,7 @@ fn multiply_writes_the_product_of_the_common_prefix() {
     assert_eq!(multiply_f32(&[], &[1.0], &mut output), 0);
 }
 
-#[kithara::test]
+#[kithara::test(platform = apple)]
 fn in_place_multiply_uses_the_short_side_count() {
     let mut values = [1.5, -2.0, 4.0, UNWRITTEN];
     assert_eq!(multiply_in_place_f32(&mut values, &[2.0, 0.5]), 2);
@@ -460,7 +460,7 @@ fn in_place_multiply_uses_the_short_side_count() {
     assert_eq!(values, [6.0, -1.0, 4.0, UNWRITTEN]);
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn singleton_multiply_preserves_ieee_prefix_and_tails() {
     for sample in SPECIALS.into_iter().chain([0.7, -1.5]) {
         for gain in SPECIALS.into_iter().chain([0.7, -1.5]) {
@@ -491,7 +491,7 @@ fn singleton_multiply_preserves_ieee_prefix_and_tails() {
     assert_eq!(bits(samples), before);
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn correlate_slides_the_kernel_along_the_signal() {
     let signal = [1.0_f32, 2.0, 3.0, 4.0, 5.0];
     let kernel = [1.0_f32, 0.5, -1.0];
@@ -517,7 +517,7 @@ fn correlate_slides_the_kernel_along_the_signal() {
     );
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn sum_squares_adds_the_square_of_every_sample() {
     assert_eq!(sum_squares_f32(&[1.0, -2.0, 3.0, 0.5]), 14.25);
     assert_eq!(
@@ -531,7 +531,7 @@ fn sum_squares_adds_the_square_of_every_sample() {
     );
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn affine_scales_then_offsets_every_sample() {
     let mut x = [0.5_f32, -1.0, 2.0, 0.0];
     let expected = x.map(|value| value * -2.0 + 1.0);
@@ -540,7 +540,7 @@ fn affine_scales_then_offsets_every_sample() {
     assert_eq!(affine_f32(&mut [], -2.0, 1.0), 0, "an empty slice");
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn sub_takes_the_second_slice_from_the_common_prefix() {
     let mut x = [1.0_f32, 0.5, -2.0, UNWRITTEN];
     let y = [0.25_f32, 1.5, -3.0];
@@ -551,7 +551,7 @@ fn sub_takes_the_second_slice_from_the_common_prefix() {
     assert_eq!(sub_f32(&mut x, &[]), 0, "an empty subtrahend");
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn scale_add_accumulates_the_scaled_common_prefix() {
     let x = [1.0_f32, -0.5, 4.0, 8.0];
     let mut acc = [0.25_f32, 1.0, -1.0];
@@ -562,7 +562,7 @@ fn scale_add_accumulates_the_scaled_common_prefix() {
     assert_eq!(bits(acc), bits(expected), "an empty source writes nothing");
 }
 
-#[kithara::test(native)]
+#[kithara::test(platform = apple, native)]
 fn add_accumulates_the_common_prefix() {
     let mut acc = [0.25_f32, 1.0, UNWRITTEN];
     assert_eq!(add_f32(&[1.0, -0.5], &mut acc), 2);
@@ -575,7 +575,7 @@ fn add_accumulates_the_common_prefix() {
     assert_eq!(add_f32(&[], &mut acc), 0, "an empty source");
 }
 
-#[kithara::test]
+#[kithara::test(platform = apple)]
 fn multichannel_biquad_validates_the_mutable_borrow_before_ffi() {
     struct Plane([f32; 4]);
     impl std::ops::Deref for Plane {

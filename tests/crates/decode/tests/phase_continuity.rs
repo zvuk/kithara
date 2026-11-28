@@ -364,10 +364,7 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
     target_os = "android",
     case::mp3_android(local_mp3_sine440_60_s_320_k(), DecoderBackend::default())
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple(local_mp3_sine440_60_s_320_k(), DecoderBackend::Apple)
-)]
+#[case::mp3_apple(platform = apple, local_mp3_sine440_60_s_320_k(), DecoderBackend::Apple)]
 async fn phase_continuity_file_local_socket_free(
     #[case] asset: (SignalAsset, TestTempDir, PathBuf),
     #[case] backend: DecoderBackend,
@@ -375,11 +372,9 @@ async fn phase_continuity_file_local_socket_free(
     local_run_case(asset, backend).await;
 }
 
-#[cfg(all(
-    feature = "apple-fused-src",
-    any(target_os = "macos", target_os = "ios")
-))]
+#[cfg(feature = "apple-fused-src")]
 #[kithara::test(
+    platform = apple,
     tokio,
     native,
     serial,
@@ -816,62 +811,34 @@ async fn run_codec_compare(asset_a: ServedSignal, asset_b: ServedSignal, backend
     signal_wav_sine440_60_s().await,
     DecoderBackend::default()
 ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::mp3_vs_wav_apple(
-        signal_mp3_sine440_60_s().await,
+#[case::mp3_vs_wav_apple(platform = apple, signal_mp3_sine440_60_s().await,
         signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_vs_wav_apple(
-        signal_aac_sine440_60_s().await,
+    )]
+#[case::aac_vs_wav_apple(platform = apple, signal_aac_sine440_60_s().await,
         signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::m4a_vs_wav_apple(
-        signal_m4_a_sine440_60_s().await,
+    )]
+#[case::m4a_vs_wav_apple(platform = apple, signal_m4_a_sine440_60_s().await,
         signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::flac_vs_wav_apple(
-        signal_flac_sine440_60_s().await,
+    )]
+#[case::flac_vs_wav_apple(platform = apple, signal_flac_sine440_60_s().await,
         signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_320k_vs_wav_apple(
-        signal_aac_sine440_60_s_320_k().await,
+    )]
+#[case::aac_320k_vs_wav_apple(platform = apple, signal_aac_sine440_60_s_320_k().await,
         signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::m4a_320k_vs_wav_apple(
-        signal_m4_a_sine440_60_s_320_k().await,
+    )]
+#[case::m4a_320k_vs_wav_apple(platform = apple, signal_m4_a_sine440_60_s_320_k().await,
         signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::mp3_320k_vs_wav_apple(
-        signal_mp3_sine440_60_s_320_k().await,
+    )]
+#[case::mp3_320k_vs_wav_apple(platform = apple, signal_mp3_sine440_60_s_320_k().await,
         signal_wav_sine440_60_s().await,
         DecoderBackend::Apple
-    )
-)]
+    )]
 #[cfg_attr(
     target_os = "android",
     case::mp3_vs_wav_android(
@@ -920,19 +887,12 @@ async fn codec_distortion_profile(
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::sentinel_mp3_apple_eph_e2e(
-        signal_mp3_sine440_60_s_320_k().await,
+#[case::sentinel_mp3_apple_eph_e2e(platform = apple, signal_mp3_sine440_60_s_320_k().await,
         DecoderBackend::Apple,
         true,
         0
-    )
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple_eph_10seek(signal_mp3_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 10)
-)]
+    )]
+#[case::mp3_apple_eph_10seek(platform = apple, signal_mp3_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 10)]
 #[cfg_attr(not(target_os = "android"), case::mp3_symphonia_eph_e2e(
     signal_mp3_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
@@ -951,29 +911,17 @@ async fn codec_distortion_profile(
     true,
     10
 ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::m4a_apple_eph_e2e(signal_m4_a_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 0)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::m4a_apple_eph_10seek(signal_m4_a_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 10)
-)]
+#[case::m4a_apple_eph_e2e(platform = apple, signal_m4_a_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 0)]
+#[case::m4a_apple_eph_10seek(platform = apple, signal_m4_a_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 10)]
 #[cfg_attr(not(target_os = "android"), case::m4a_symphonia_eph_e2e(
     signal_m4_a_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
     true,
     0
 ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::flac_apple_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Apple, true, 0)
-)]
+#[case::flac_apple_eph_e2e(platform = apple, signal_flac_sine440_60_s().await, DecoderBackend::Apple, true, 0)]
 #[cfg_attr(not(target_os = "android"), case::flac_symphonia_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Symphonia, true, 0))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_apple_eph_e2e(signal_aac_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 0)
-)]
+#[case::aac_apple_eph_e2e(platform = apple, signal_aac_sine440_60_s_320_k().await, DecoderBackend::Apple, true, 0)]
 #[cfg_attr(not(target_os = "android"), case::aac_symphonia_eph_e2e(
     signal_aac_sine440_60_s_320_k().await,
     DecoderBackend::Symphonia,
@@ -998,10 +946,7 @@ async fn codec_distortion_profile(
     target_os = "android",
     case::flac_android_eph_e2e(signal_flac_sine440_60_s().await, DecoderBackend::Android, true, 0)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple_eph_10seek_headerless(headerless_mp3().await, DecoderBackend::Apple, true, 10)
-)]
+#[case::mp3_apple_eph_10seek_headerless(platform = apple, headerless_mp3().await, DecoderBackend::Apple, true, 10)]
 async fn phase_continuity_file(
     #[case] asset: ServedSignal,
     #[case] backend: DecoderBackend,
@@ -1118,10 +1063,7 @@ fn first_signal_window_phase(
     case::aac_symphonia(DecoderBackend::Symphonia)
 )]
 #[cfg_attr(target_os = "android", case::aac_android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_apple(DecoderBackend::Apple)
-)]
+#[case::aac_apple(platform = apple, DecoderBackend::Apple)]
 async fn seek_to_zero_decoder_warmup_is_deterministic(
     #[case] backend: DecoderBackend,
     #[future(awt)] served_aac: ServedSignal,

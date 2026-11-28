@@ -29,6 +29,7 @@ pub struct TestArgs {
     /// `--lane=<configured-name>`, `--flash=true|false|on|off`, `--no-flash`,
     /// `--loom=true|false|on|off`, `--no-loom`, `--no-block=true|false|on|off`,
     /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, `--narrow=<filterset>`,
+    /// `--platform=<configured-name>` (only the tests declared for that platform),
     /// `--draft` (the lane's share of the required packages and the pull request's
     /// `KITHARA_PR_TESTS` block; admitted Cargo suites keep their native selection),
     /// `--rest-of-draft` (what a passed `--draft` run of the same block left of the lane),
@@ -171,6 +172,9 @@ fn plan<'a>(
     pr_tests: Option<&str>,
 ) -> Result<Plan<'a>> {
     validate_config(test)?;
+    if let Some(platform) = &request.platform {
+        platform_filter(test, platform)?;
+    }
     let lane = select_lane(test, request)?;
     if !request.draft && !request.rest_of_draft {
         return Ok(Plan::Lane(lane));
@@ -248,11 +252,28 @@ pub(super) fn requested_lane(
     lane_name: &str,
     request: &TestRequest,
 ) -> Result<ResolvedLane> {
-    let lane = resolve(test, &requested(test, lane_name, Some(request))?)?;
+    let mut lane = resolve(test, &requested(test, lane_name, Some(request))?)?;
+    if let Some(platform) = &request.platform {
+        lane = lane.filtered(platform_filter(test, platform)?.to_owned())?;
+    }
     match &request.narrow {
         Some(filterset) => lane.filtered(filterset.clone()),
         None => Ok(lane),
     }
+}
+
+/// The filterset of a configured platform.
+fn platform_filter<'a>(test: &'a TestCommandConfig, platform: &str) -> Result<&'a str> {
+    test.platforms
+        .get(platform)
+        .map(|config| config.filter.as_str())
+        .with_context(|| {
+            let known: Vec<_> = test.platforms.keys().map(String::as_str).collect();
+            format!(
+                "unknown platform `{platform}`; known platforms: {}",
+                known.join(", ")
+            )
+        })
 }
 
 /// An admitted Draft lane's command. Nextest narrows to the Draft scope;

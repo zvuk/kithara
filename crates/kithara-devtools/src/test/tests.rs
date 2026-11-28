@@ -264,6 +264,12 @@ pub(super) fn synthetic_project() -> ProjectConfig {
         test: TestCommandConfig {
             lanes,
             net_backends,
+            platforms: BTreeMap::from([(
+                "demo-os".to_owned(),
+                crate::common::project::TestPlatformConfig {
+                    filter: "test(/(^|::)platform_demo_os_/)".to_owned(),
+                },
+            )]),
             required: crate::common::project::TestRequiredConfig::default(),
             default_lane: "workspace".to_owned(),
             default_backend: "http".to_owned(),
@@ -1489,6 +1495,61 @@ fn a_narrowed_request_runs_only_what_every_filterset_selects() {
             .any(|arg| arg.contains("--narrow")),
         "the harness consumes its own flag"
     );
+}
+
+/// A platform restriction is one more intersection: it takes away every test
+/// not declared for the platform, whatever the lane, narrow or caller select.
+#[test]
+fn a_platform_restricted_request_runs_only_the_declared_tests() {
+    let project = synthetic_project();
+    let request = request_of(&["--platform=demo-os", "--narrow=test(seek)", "-E", "test(a)"])
+        .expect("parse request");
+
+    let filtered = args_of(&lane_command(&project.test, "loom", &request).expect("command"));
+    let unfiltered = args_of(&lane_command(&project.test, "workspace", &request).expect("command"));
+
+    assert_eq!(
+        filtersets(&filtered),
+        [
+            "(((test(loom_model_)) & ((test(/(^|::)platform_demo_os_/)))) & ((test(seek)))) & ((test(a)))"
+        ],
+        "{filtered:?}"
+    );
+    assert_eq!(
+        filtersets(&unfiltered),
+        ["((test(/(^|::)platform_demo_os_/)) & ((test(seek)))) & ((test(a)))"],
+        "{unfiltered:?}"
+    );
+    assert!(
+        !filtered
+            .iter()
+            .chain(&unfiltered)
+            .any(|arg| arg.contains("--platform")),
+        "the harness consumes its own flag"
+    );
+}
+
+/// A platform the configuration does not define is refused with the ones it
+/// does, before any lane is planned.
+#[test]
+fn an_unknown_platform_is_refused_with_the_known_ones() {
+    let project = synthetic_project();
+    let request = request_of(&["--platform=plan9"]).expect("parse request");
+    let error =
+        lane_command(&project.test, "workspace", &request).expect_err("an unknown platform");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("`plan9`") && message.contains("demo-os"),
+        "{message}"
+    );
+    for args in [
+        &["--platform"][..],
+        &["--platform="],
+        &["--platform", "--lane=loom"],
+        &["--platform=a", "--platform=b"],
+    ] {
+        assert!(request_of(args).is_err(), "accepted {args:?}");
+    }
 }
 
 /// A `cargo test` lane has no filterset, so a narrowed request cannot be

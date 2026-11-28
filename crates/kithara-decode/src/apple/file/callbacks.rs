@@ -375,7 +375,7 @@ mod tests {
         ctx
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn staged_partial_reads_publish_the_served_position() {
         let mut source = FragmentedSource {
             inner: Cursor::new((0..40).collect()),
@@ -422,7 +422,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn staged_actual_eof_shortens_only_the_final_read() {
         let source = FragmentedSource {
             inner: Cursor::new((0..11).collect()),
@@ -446,7 +446,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn unknown_length_short_reads_do_not_publish_a_partial_extent() {
         let source = FragmentedSource {
             inner: Cursor::new((0..40).collect()),
@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(&output[..3], &[11, 12, 13]);
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn declared_extent_rejects_a_premature_source_eof() {
         let mut source = Cursor::new((0..11).collect::<Vec<u8>>());
         source.set_position(3);
@@ -493,7 +493,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     #[case::data_pending(
         Error::new(
             ErrorKind::Interrupted,
@@ -577,7 +577,7 @@ mod tests {
         ctx.finish_packet().expect("finish the next operation");
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     #[case::masked_eof(AudioFilePacketRead { bytes: 0, packets: 0 }, SizeMode::Snapshot(40), 15)]
     #[case::masked_truncation(AudioFilePacketRead { bytes: 2, packets: 1 }, SizeMode::Snapshot(40), 15)]
     fn staged_span_violation_survives_native_success(

@@ -624,7 +624,7 @@ mod tests {
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     };
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn open_wav_demuxer_track_info_and_first_frame(tone_wav: &'static [u8]) {
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(Cursor::new(tone_wav.to_vec())),
@@ -680,7 +680,7 @@ mod tests {
     /// `Unsupported codec: Flac` the device hit on every `streamfl` track.
     /// fMP4-FLAC and container-less FLAC must stay `false` — those route
     /// through the segment-aware path, not this standalone one.
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     #[case(AudioCodec::Pcm, Some(ContainerFormat::Wav), true)]
     #[case(AudioCodec::Mp3, Some(ContainerFormat::MpegAudio), false)]
     #[case(AudioCodec::Flac, Some(ContainerFormat::Flac), true)]
@@ -782,7 +782,7 @@ mod tests {
     /// classified `Interrupted` by the decode loop, which retries
     /// immediately — a hot spin that burns a core for as long as the
     /// stall lasts instead of parking the worker.
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn next_frame_surfaces_not_ready_as_pending_not_err(tone_wav: &'static [u8]) {
         let bytes = tone_wav.to_vec();
         let ready = u64::try_from(bytes.len() / 2).expect("fixture length fits in u64");
@@ -809,7 +809,7 @@ mod tests {
     /// table (the `packet_count()` query a complete open issues). The scan
     /// reads to EOF — 3–37 s of startup latency on device and a full
     /// download wait on a streamed source.
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn open_flac_demuxer_does_not_require_tail_bytes(flac_saw: &'static [u8]) {
         let bytes = flac_saw.to_vec();
         // A bounded streaming open reads the header + first frame (~27 KiB)
@@ -856,7 +856,7 @@ mod tests {
     /// another fraction on a manual play kick (and seeks skipped to the next
     /// track). The fix needs both the sized streaming open (`AudioFile` knows
     /// more data exists) and `read_packet` consulting the stashed error.
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn flac_streaming_not_ready_surfaces_pending_not_eof(flac_saw: &'static [u8]) {
         let bytes = flac_saw.to_vec();
         // Header + several frames are ready; the rest is "not downloaded".
@@ -893,7 +893,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(native)]
+    #[kithara::test(platform = apple, native)]
     fn unknown_size_flac_produces_another_packet_as_the_resource_grows(flac_saw: &'static [u8]) {
         let bytes = flac_saw.to_vec();
         let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
@@ -941,7 +941,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(native)]
+    #[kithara::test(platform = apple, native)]
     fn flac_seek_into_a_waiting_packet_resumes_when_bytes_arrive() {
         let bytes = signal_profile_flac_flac_96000_2ch_24bit().bytes().to_vec();
         let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
@@ -1016,7 +1016,7 @@ mod tests {
         assert!(frame.pts <= target && frame.pts + frame.duration > target);
     }
 
-    #[kithara::test(native)]
+    #[kithara::test(platform = apple, native)]
     fn indexed_flac_packet_resumes_when_its_bytes_are_unavailable() {
         let bytes = signal_profile_flac_flac_96000_2ch_24bit().bytes().to_vec();
         let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
@@ -1057,7 +1057,7 @@ mod tests {
         assert!(frame.pts <= target && frame.pts + frame.duration > target);
     }
 
-    #[kithara::test(native)]
+    #[kithara::test(platform = apple, native)]
     fn streaming_flac_walk_and_indexed_seeks_preserve_every_packet() {
         let bytes = signal_profile_flac_flac_96000_2ch_24bit().bytes().to_vec();
         let mut complete = AppleAudioFileDemuxer::open_for_with_mode(
@@ -1164,7 +1164,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn prepared_apple_packet_consumption_does_not_touch_source(tone_wav: &'static [u8]) {
         let calls = Arc::new(AtomicUsize::new(0));
         let mut prepared = AppleAudioFileDemuxer::open_for_with_mode(
@@ -1219,7 +1219,7 @@ mod tests {
     /// work, ballooning `step_track` to 10–77 ms and starving the audio worker
     /// (`step_track took too long`), i.e. a fresh stall. With the full length
     /// known at open, the decoder must resolve the size O(1), not O(packets).
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn flac_streaming_size_query_is_bounded(flac_saw: &'static [u8]) {
         let bytes = flac_saw.to_vec();
         let end_seeks = Arc::new(AtomicUsize::new(0));

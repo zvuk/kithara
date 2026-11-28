@@ -101,7 +101,10 @@ fn cascade_planes_equal_individual_filters_bit_for_bit() {
             dispatch!(Level::fallback(), simd => cascade::cascade_kernel(simd, filter, planes, range));
         }
     );
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+}
+
+#[kithara::test(platform = apple)]
+fn accelerate_cascade_planes_equal_individual_filters_bit_for_bit() {
     check_planes!(
         accelerate::Cascade,
         |filter: &mut accelerate::Cascade, planes: &mut [Vec<f32>], range| {
