@@ -8,10 +8,7 @@ use super::*;
 
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     #[future(awt)] mp3_endpoints: (TestServerHelper, url::Url, url::Url),
@@ -69,14 +66,8 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia_headerless(false, DecoderBackend::Symphonia, Mp3Shape::Headerless)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::disk_apple(false, DecoderBackend::Apple, Mp3Shape::Tagged)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::disk_apple_headerless(false, DecoderBackend::Apple, Mp3Shape::Headerless)
-)]
+#[case::disk_apple(platform = apple, false, DecoderBackend::Apple, Mp3Shape::Tagged)]
+#[case::disk_apple_headerless(platform = apple, false, DecoderBackend::Apple, Mp3Shape::Headerless)]
 #[cfg_attr(
     target_os = "android",
     case::disk_android(false, DecoderBackend::Android, Mp3Shape::Tagged)
@@ -85,14 +76,8 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     not(target_os = "android"),
     case::ephemeral_symphonia(true, DecoderBackend::Symphonia, Mp3Shape::Tagged)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::ephemeral_apple(true, DecoderBackend::Apple, Mp3Shape::Tagged)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::ephemeral_apple_headerless(true, DecoderBackend::Apple, Mp3Shape::Headerless)
-)]
+#[case::ephemeral_apple(platform = apple, true, DecoderBackend::Apple, Mp3Shape::Tagged)]
+#[case::ephemeral_apple_headerless(platform = apple, true, DecoderBackend::Apple, Mp3Shape::Headerless)]
 #[cfg_attr(
     target_os = "android",
     case::ephemeral_android(true, DecoderBackend::Android, Mp3Shape::Tagged)
@@ -144,10 +129,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia(false, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::disk_apple(false, DecoderBackend::Apple)
-)]
+#[case::disk_apple(platform = apple, false, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::disk_android(false, DecoderBackend::Android)
@@ -156,10 +138,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     not(target_os = "android"),
     case::ephemeral_symphonia(true, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::ephemeral_apple(true, DecoderBackend::Apple)
-)]
+#[case::ephemeral_apple(platform = apple, true, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::ephemeral_android(true, DecoderBackend::Android)
@@ -245,10 +224,7 @@ enum WarmupTeardown {
     not(target_os = "android"),
     case::shutdown_symphonia(WarmupTeardown::Shutdown, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::shutdown_apple(WarmupTeardown::Shutdown, DecoderBackend::Apple)
-)]
+#[case::shutdown_apple(platform = apple, WarmupTeardown::Shutdown, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::shutdown_android(WarmupTeardown::Shutdown, DecoderBackend::Android)
@@ -257,10 +233,7 @@ enum WarmupTeardown {
     not(target_os = "android"),
     case::drop_only_symphonia(WarmupTeardown::DropOnly, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::drop_only_apple(WarmupTeardown::DropOnly, DecoderBackend::Apple)
-)]
+#[case::drop_only_apple(platform = apple, WarmupTeardown::DropOnly, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::drop_only_android(WarmupTeardown::DropOnly, DecoderBackend::Android)
@@ -269,10 +242,7 @@ enum WarmupTeardown {
     not(target_os = "android"),
     case::read_only_symphonia(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::read_only_apple(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Apple)
-)]
+#[case::read_only_apple(platform = apple, WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::read_only_android(WarmupTeardown::ReadOnlyThenDrop, DecoderBackend::Android)
@@ -381,19 +351,13 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
 
 #[kithara::test(tokio, native, timeout(Duration::from_secs(25)), hang_timeout_secs(3))]
 #[cfg_attr(not(target_os = "android"), case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia, aac_source().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::aac_apple(AudioCodec::AacLc, DecoderBackend::Apple, aac_source().await)
-)]
+#[case::aac_apple(platform = apple, AudioCodec::AacLc, DecoderBackend::Apple, aac_source().await)]
 #[cfg_attr(
     target_os = "android",
     case::aac_android(AudioCodec::AacLc, DecoderBackend::Android, aac_source().await)
 )]
 #[cfg_attr(not(target_os = "android"), case::flac_symphonia(AudioCodec::Flac, DecoderBackend::Symphonia, flac_source().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::flac_apple(AudioCodec::Flac, DecoderBackend::Apple, flac_source().await)
-)]
+#[case::flac_apple(platform = apple, AudioCodec::Flac, DecoderBackend::Apple, flac_source().await)]
 #[cfg_attr(
     target_os = "android",
     case::flac_android(AudioCodec::Flac, DecoderBackend::Android, flac_source().await)
@@ -526,10 +490,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia(false, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::disk_apple(false, DecoderBackend::Apple)
-)]
+#[case::disk_apple(platform = apple, false, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::disk_android(false, DecoderBackend::Android)
@@ -538,10 +499,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     not(target_os = "android"),
     case::ephemeral_symphonia(true, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::ephemeral_apple(true, DecoderBackend::Apple)
-)]
+#[case::ephemeral_apple(platform = apple, true, DecoderBackend::Apple)]
 #[cfg_attr(
     target_os = "android",
     case::ephemeral_android(true, DecoderBackend::Android)

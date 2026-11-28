@@ -75,7 +75,7 @@ mod tests {
 
     use super::pod_to_vec;
 
-    #[kithara::test(native)]
+    #[kithara::test(platform = apple, native)]
     fn pod_to_vec_returns_the_value_bytes() {
         let value = 0x0102_0304_0506_0708_u64;
         assert_eq!(pod_to_vec(&value), value.to_ne_bytes());

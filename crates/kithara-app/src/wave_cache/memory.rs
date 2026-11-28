@@ -192,16 +192,13 @@ pub(crate) fn token_for(key: &ResourceKey) -> AnalysisToken {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::{NonZeroU32, NonZeroU64},
-        ops::Range,
-    };
+    use std::{num::NonZeroU32, ops::Range};
 
     use ::kithara::platform::{sync::Arc, time::Duration};
     /// The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
-            AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState, Bucket,
+            AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState,
             FrameCoverage, RangeSet, TrackAnalysis, Waveform,
         },
         assets::{
@@ -215,7 +212,10 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{AnalysisTarget, TrackAnalysisCache, consts};
-    use crate::pools::{self, AppPools, AppResourceConfig, AppStore, Pools};
+    use crate::{
+        analysis::fixtures::one_bucket_wave as wave,
+        pools::{self, AppPools, AppResourceConfig, AppStore, Pools},
+    };
 
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
         AnalysisFingerprint::builder()
@@ -227,7 +227,7 @@ mod tests {
     fn fp() -> AnalysisFingerprint {
         const BEAT_TAG: &str = "beat:test:v1";
 
-        fingerprint("wave:fold1:v2", BEAT_TAG)
+        fingerprint("wave:fold1:v3", BEAT_TAG)
     }
 
     fn rate() -> NonZeroU32 {
@@ -256,11 +256,6 @@ mod tests {
 
     fn progress(analysis: TrackAnalysis) -> AnalysisProgress {
         AnalysisProgress::try_from(analysis).expect("settled fixture is valid progress")
-    }
-
-    fn wave() -> Waveform {
-        Waveform::try_new(vec![Bucket::new(0.5, 0.5, 0.5)], NonZeroU64::MIN)
-            .expect("hand-built buckets are valid")
     }
 
     fn grid() -> BeatArtifact {

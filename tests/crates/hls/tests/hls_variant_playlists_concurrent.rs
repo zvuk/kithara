@@ -178,10 +178,7 @@ fn format_variant_request_ids(request_ids: &HashSet<u64>) -> String {
 #[kithara::test(tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 async fn variant_media_playlists_load_concurrently(
     #[future(awt)] prepared_hls: (TestServerHelper, CreatedHls),
     #[case] decoder: DecoderBackend,

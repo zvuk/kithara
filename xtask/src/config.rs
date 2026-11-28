@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use kithara_devtools::{Ctx, common::project::ProjectConfig};
 use serde::{Deserialize, Serialize};
 
-use crate::consts;
+use crate::{ci::PipelineKind, consts};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -194,6 +194,62 @@ where
         OneOrMany::One(os) => vec![os],
         OneOrMany::Many(os) => os,
     })
+}
+
+/// What a lane has left to run in a ready verification that follows its
+/// draft's passed run of the same merge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AfterDraft {
+    /// The draft ran another plan, or none: the lane runs whole.
+    Whole,
+    /// The draft ran the same plan, and its suites the draft scope of it: the
+    /// lane runs again with each suite less that scope.
+    Rest,
+    /// The draft ran the same plan and nothing in it narrows to a scope.
+    Nothing,
+}
+
+impl CiLaneConfig {
+    pub(crate) fn after_draft(&self) -> AfterDraft {
+        let draft = PipelineKind::Branch.name();
+        let ready = PipelineKind::Quarantine.name();
+        if !self.kinds_gitlab.iter().any(|kind| kind == draft)
+            || self
+                .steps
+                .iter()
+                .any(|step| step.args_in(draft) != step.args_in(ready))
+        {
+            return AfterDraft::Whole;
+        }
+        if self
+            .steps
+            .iter()
+            .any(|step| step.suite_request(self, step.args_in(ready)).is_some())
+        {
+            AfterDraft::Rest
+        } else {
+            AfterDraft::Nothing
+        }
+    }
+
+    /// Whether a change of `changed` paths reaches what the lane checks: any
+    /// change does, unless the lane names the paths it reads.
+    pub(crate) fn scheduled_by(&self, name: &str, changed: &[String]) -> Result<bool> {
+        if self.path_globs.is_empty() {
+            return Ok(true);
+        }
+        for glob in &self.path_globs {
+            let glob = glob::Pattern::new(glob)
+                .with_context(|| format!("invalid path glob for CI lane `{name}`"))?;
+            if changed
+                .iter()
+                .any(|path| glob.matches_path(Path::new(path)))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -413,6 +469,12 @@ impl CiProjectConfig {
                         bail!("ext.ci.lanes.{name}.{field} names unknown kind `{kind}`");
                     }
                 }
+            }
+            if let Some(kind) = consts::REVIEW_KINDS.iter().find(|kind| {
+                lane.kinds_gitlab.iter().any(|listed| listed == *kind)
+                    && lane.kinds_github.iter().any(|listed| listed == *kind)
+            }) {
+                bail!("ext.ci.lanes.{name} runs review kind `{kind}` on both providers");
             }
             if lane.timeout_minutes == 0 {
                 bail!("ext.ci.lanes.{name} must declare a non-zero timeout_minutes");
@@ -1725,6 +1787,36 @@ timeout_minutes = 30
                 .to_string()
                 .contains("kinds_github names unknown kind"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn a_review_kind_belongs_to_one_provider() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.suite]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+program = "just"
+steps = [{ args = ["test"], label = "suite" }]
+role = "gate"
+kinds_gitlab = ["quarantine", "main"]
+kinds_github = ["main", "quarantine"]
+timeout_minutes = 30
+"#,
+        );
+        let error = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci
+            .validate()
+            .expect_err("one review kind on both providers verifies a change twice");
+        assert_eq!(
+            error.to_string(),
+            "ext.ci.lanes.suite runs review kind `quarantine` on both providers"
         );
     }
 }

@@ -46,10 +46,7 @@ mod consts {
     not(target_os = "android"),
     case::quick_symphonia(1, DecoderBackend::Symphonia)
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::quick_apple(1, DecoderBackend::Apple)
-)]
+#[case::quick_apple(platform = apple, 1, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::quick_android(1, DecoderBackend::Android))]
 async fn hls_seek_middle_repeated_seeks_stress(
     #[case] iterations: u32,

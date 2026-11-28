@@ -645,6 +645,11 @@ features = ["no-block"]
 default = false
 features = ["kithara-test-utils/load"]
 
+# `--platform=<name>` restricts a run to the tests declared for that platform.
+# The test attribute prefixes each declared test with `platform_<name>_`.
+[test.platforms.apple]
+filter = "test(/(^|::)platform_apple_/)"
+
 [test.net_backends.none]
 features = []
 
@@ -3169,6 +3174,7 @@ steps = [
     "test",
     "run",
     "--lane=apple",
+    "--platform=apple",
     "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
     "--flash=on",
     "--no-block=on",
@@ -3178,6 +3184,7 @@ steps = [
     "test",
     "run",
     "--lane=apple",
+    "--platform=apple",
     "--flash=on",
     "--no-block=on",
     "--profile",
@@ -3186,6 +3193,7 @@ steps = [
     "test",
     "run",
     "--lane=apple",
+    "--platform=apple",
     "--flash=on",
     "--no-block=on",
     "--profile",
@@ -3366,8 +3374,16 @@ steps = [
   ], label = "Safari WASM tests" },
 ]
 role = "platforms"
-kinds_gitlab = ["nightly"]
+# A review runs it only for a change to what drives the browser: the runner,
+# its fixture, the xtask owner that launches it, and the target configuration.
+kinds_gitlab = ["branch", "quarantine", "nightly"]
 kinds_github = []
+path_globs = [
+  "tests/wasm-runner/**",
+  "tests/wasm-runner-fixture/**",
+  "xtask/src/wasm/**",
+  ".cargo/config.toml",
+]
 timeout_minutes = 60
 
 

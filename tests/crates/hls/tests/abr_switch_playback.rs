@@ -59,28 +59,16 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(
 )]
 #[cfg_attr(not(target_os = "android"), case::drm_abr_auto_sw(true, true, DecoderBackend::Symphonia, mixed_encrypted().await))]
 #[cfg_attr(target_os = "android", case::drm_abr_auto_android(true, true, DecoderBackend::default(), mixed_encrypted().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::drm_abr_auto_hw(true, true, DecoderBackend::Apple, mixed_encrypted().await)
-)]
+#[case::drm_abr_auto_hw(platform = apple, true, true, DecoderBackend::Apple, mixed_encrypted().await)]
 #[cfg_attr(not(target_os = "android"), case::hls_abr_auto_sw(false, true, DecoderBackend::Symphonia, mixed_plain().await))]
 #[cfg_attr(target_os = "android", case::hls_abr_auto_android(false, true, DecoderBackend::default(), mixed_plain().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hls_abr_auto_hw(false, true, DecoderBackend::Apple, mixed_plain().await)
-)]
+#[case::hls_abr_auto_hw(platform = apple, false, true, DecoderBackend::Apple, mixed_plain().await)]
 #[cfg_attr(not(target_os = "android"), case::drm_manual_v0_sw(true, false, DecoderBackend::Symphonia, mixed_encrypted().await))]
 #[cfg_attr(target_os = "android", case::drm_manual_v0_android(true, false, DecoderBackend::default(), mixed_encrypted().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::drm_manual_v0_hw(true, false, DecoderBackend::Apple, mixed_encrypted().await)
-)]
+#[case::drm_manual_v0_hw(platform = apple, true, false, DecoderBackend::Apple, mixed_encrypted().await)]
 #[cfg_attr(not(target_os = "android"), case::hls_manual_v0_sw(false, false, DecoderBackend::Symphonia, mixed_plain().await))]
 #[cfg_attr(target_os = "android", case::hls_manual_v0_android(false, false, DecoderBackend::default(), mixed_plain().await))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hls_manual_v0_hw(false, false, DecoderBackend::Apple, mixed_plain().await)
-)]
+#[case::hls_manual_v0_hw(platform = apple, false, false, DecoderBackend::Apple, mixed_plain().await)]
 async fn stream_continues_after_seek(
     temp_dir: TestTempDir,
     #[case] encrypted: bool,

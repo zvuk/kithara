@@ -16,8 +16,8 @@ use tracing::warn;
 
 use super::{bench, nextest};
 use crate::{
-    ci::{cache::snapshot, config::CiPins, process::Process, run::PipelineKind},
-    config::{CiLaneConfig, CiLaneStep},
+    ci::{cache::snapshot, config::CiPins, partial, process::Process, run::PipelineKind},
+    config::{AfterDraft, CiLaneConfig, CiLaneStep},
     consts,
 };
 
@@ -36,7 +36,7 @@ pub(crate) fn run(
     kind: PipelineKind,
     narrow: Option<&str>,
 ) -> Result<()> {
-    let drafted = kind == PipelineKind::Branch;
+    let share = share_flag(lane, kind);
     let kind = kind_name(kind);
     admit(lane, &kind, narrow)?;
     if !lane.os.is_empty() {
@@ -88,8 +88,8 @@ pub(crate) fn run(
             if let Some(filterset) = narrow {
                 args.insert(at, format!("--narrow={filterset}"));
             }
-            if drafted {
-                args.insert(at, consts::DRAFT_FLAG.to_owned());
+            if let Some(flag) = share {
+                args.insert(at, flag.to_owned());
             }
         } else if let Some(filterset) = narrow
             && step.miri_request(lane, declared).is_some()
@@ -144,9 +144,10 @@ pub(crate) fn run(
     Ok(())
 }
 
-/// Whether the lane has anything to run in `kind`: any step but, in a draft,
-/// a suite whose lane holds none of the draft scope `pr_tests` completes. A lane with nothing to
-/// run has nothing to build either.
+/// Whether the lane has anything to run in `kind`: any step but a suite with
+/// nothing of the draft scope `pr_tests` names to run - in a draft, a lane that
+/// holds none of it; after a passed draft, one whose draft ran it whole. A
+/// lane with nothing to run has nothing to build either.
 pub(crate) fn runs_anything(
     lane: &CiLaneConfig,
     kind: PipelineKind,
@@ -155,15 +156,15 @@ pub(crate) fn runs_anything(
     project: &ProjectConfig,
     pr_tests: Option<&str>,
 ) -> Result<bool> {
-    let drafted = kind == PipelineKind::Branch;
+    let share = share_flag(lane, kind);
     let kind = kind_name(kind);
     admit(lane, &kind, narrow)?;
     for step in &lane.steps {
         let Some(request) = step.suite_request(lane, step.args_in(&kind)) else {
             return Ok(true);
         };
-        let request: Vec<String> = drafted
-            .then(|| consts::DRAFT_FLAG.to_owned())
+        let request: Vec<String> = share
+            .map(str::to_owned)
             .into_iter()
             .chain(request.iter().cloned())
             .collect();
@@ -172,6 +173,20 @@ pub(crate) fn runs_anything(
         }
     }
     Ok(false)
+}
+
+/// The share of the draft scope the lane's suites run: in a draft, that
+/// scope; after a passed draft of the same merge, what the draft left.
+fn share_flag(lane: &CiLaneConfig, kind: PipelineKind) -> Option<&'static str> {
+    match kind {
+        PipelineKind::Branch => Some(consts::DRAFT_FLAG),
+        PipelineKind::Quarantine
+            if partial::follows_draft() && lane.after_draft() == AfterDraft::Rest =>
+        {
+            Some(consts::REST_OF_DRAFT_FLAG)
+        }
+        _ => None,
+    }
 }
 
 /// Refuses what the lane declines before anything runs: a pipeline kind it

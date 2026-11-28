@@ -135,14 +135,8 @@ async fn seek_and_read(
     target_os = "android",
     case::sw_no_ext_android(None, None, DecoderBackend::default())
 )]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hw_ext_hint(Some("audio.mp3"), Some("mp3"), DecoderBackend::Apple)
-)]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hw_no_ext(None, None, DecoderBackend::Apple)
-)]
+#[case::hw_ext_hint(platform = apple, Some("audio.mp3"), Some("mp3"), DecoderBackend::Apple)]
+#[case::hw_no_ext(platform = apple, None, None, DecoderBackend::Apple)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn audio_file_mp3_decodes_with_duration(
     tone_mp3: &'static [u8],
@@ -221,10 +215,7 @@ async fn audio_file_mp3_decodes_with_duration(
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn streamed_mp3_plays_to_the_length_it_was_built_to(
     tone_mp3: &'static [u8],
@@ -290,10 +281,7 @@ async fn streamed_mp3_plays_to_the_length_it_was_built_to(
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(30)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn headerless_mp3_whose_bitrate_changes_plays_past_its_opening_estimate(
     #[case] backend: DecoderBackend,

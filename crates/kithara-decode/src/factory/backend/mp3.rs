@@ -35,7 +35,7 @@ mod consts {
     pub(super) const SEEK: Duration = Duration::from_secs(8);
 }
 
-#[kithara::test]
+#[kithara::test(platform = apple)]
 #[case(false)]
 #[case(true)]
 fn mp3_in_wave_matches_elementary_audio_and_seeks_in_file_coordinates(#[case] tagged: bool) {
@@ -285,7 +285,7 @@ fn streamed_apple(
 
 /// A streamed MP3 that the decoder reaches before its bytes do must play on once they arrive:
 /// the same span, the same pulse per beat, and the same beat grid as Symphonia on the same file.
-#[kithara::test]
+#[kithara::test(platform = apple)]
 #[case::seek_past_the_download(Some(consts::SEEK))]
 #[case::read_up_to_the_download(None)]
 async fn streamed_apple_mp3_resumes_where_the_download_arrives(#[case] seek: Option<Duration>) {

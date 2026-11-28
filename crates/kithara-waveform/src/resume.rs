@@ -6,7 +6,7 @@ use rangemap::RangeSet;
 /// the source ranges it already reduced. This is a checkpoint of the algorithm,
 /// not a waveform result: a served waveform never carries one.
 pub struct WaveformResume {
-    pub(crate) bands: Vec<(u64, [f32; 3])>,
+    pub(crate) columns: Vec<(u64, [[u8; 8]; crate::consts::COLUMNS])>,
     pub(crate) partials: Vec<WaveformPartialResume>,
     pub(crate) opened: u64,
 }
@@ -24,20 +24,21 @@ impl WaveformResume {
     ///
     /// # Errors
     ///
-    /// Returns [`BlobError::Corrupt`] for a truncated section, a non-finite
-    /// band energy, an out-of-order index, or a partial that contradicts the
+    /// Returns [`BlobError::Corrupt`] for a truncated section, an out-of-order index, or a partial that contradicts the
     /// bands beside it.
     pub fn decode(reader: &mut Reader<'_>) -> Result<Self, BlobError> {
-        let band_count = reader.read_count(20)?;
-        let mut bands: Vec<(u64, [f32; 3])> = Vec::with_capacity(Reader::capacity_for(band_count));
+        let count = reader.read_count(8 + 48 * 8)?;
+        let mut columns: Vec<(u64, [[u8; 8]; crate::consts::COLUMNS])> =
+            Vec::with_capacity(Reader::capacity_for(count));
         let mut previous = None;
-        for _ in 0..band_count {
+        for _ in 0..count {
             let index = reader.read_ordered(previous)?;
             previous = Some(index);
-            bands.push((
-                index,
-                [reader.read_f32()?, reader.read_f32()?, reader.read_f32()?],
-            ));
+            let mut values = [[0; 8]; crate::consts::COLUMNS];
+            for column in &mut values {
+                *column = reader.read_array()?;
+            }
+            columns.push((index, values));
         }
 
         let partial_count = reader.read_count(32)?;
@@ -56,7 +57,7 @@ impl WaveformResume {
         }
         let opened = reader.read_u64()?;
         let resume = Self {
-            bands,
+            columns,
             partials,
             opened,
         };
@@ -67,10 +68,7 @@ impl WaveformResume {
     fn validate(&self) -> Result<(), BlobError> {
         let mut partials = self.partials.iter();
         let mut partial = partials.next();
-        for (index, energy) in &self.bands {
-            if energy.iter().any(|value| !value.is_finite()) {
-                return Err(BlobError::Corrupt);
-            }
+        for (index, _) in &self.columns {
             while partial.is_some_and(|held| held.index < *index) {
                 partial = partials.next();
             }

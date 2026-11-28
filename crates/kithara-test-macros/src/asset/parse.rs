@@ -30,6 +30,12 @@ pub(crate) fn case_names(fn_name: &Ident, cases: &[Case]) -> syn::Result<Vec<Str
                 )
             })?
             .to_string();
+        if let Some(platform) = case.platform {
+            return Err(Error::new(
+                fn_name.span(),
+                format!("asset case `{name}` cannot declare `platform = {platform}`"),
+            ));
+        }
         if names.contains(&name) {
             return Err(Error::new(
                 fn_name.span(),
@@ -374,6 +380,8 @@ mod tests {
     fn named_case(name: &str) -> Case {
         Case {
             name: Some(ident(name)),
+            index: 0,
+            platform: None,
             values: vec![],
         }
     }
@@ -392,9 +400,18 @@ mod tests {
     fn an_unnamed_case_is_rejected() {
         let unnamed = Case {
             name: None,
+            index: 0,
+            platform: None,
             values: vec![],
         };
         assert!(case_names(&ident("sine_wav"), &[unnamed]).is_err());
+    }
+
+    #[test]
+    fn a_platform_case_is_rejected() {
+        let mut case = named_case("a440");
+        case.platform = Some(kithara_test_args::TestPlatform::Apple);
+        assert!(case_names(&ident("sine_wav"), &[case]).is_err());
     }
 
     #[test]

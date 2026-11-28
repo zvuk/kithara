@@ -990,7 +990,7 @@ mod tests {
             let (args, _) = gate("apple-test", kind);
             let mut expected = vec!["test", "run"];
             if review {
-                expected.push("--lane=apple");
+                expected.extend(["--lane=apple", "--platform=apple"]);
             }
             expected.extend(["--flash=on", "--no-block=on", "--profile", "ci"]);
             assert_eq!(args, expected);
@@ -1017,6 +1017,7 @@ mod tests {
                 "run",
                 "--draft",
                 "--lane=apple",
+                "--platform=apple",
                 "--selection-output=.ci-artifacts/junit/apple-test.selection.json",
                 "--flash=on",
                 "--no-block=on",
@@ -1487,7 +1488,17 @@ mod tests {
             .split_once("\n.")
             .map_or(after_verify, |(rules, _)| rules);
         assert!(
-            verify.contains("$KITHARA_PIPELINE_KIND == \"quarantine\""),
+            verify.contains("- !reference [.verify-kinds, rules]\n"),
+            "the rule set the iOS suite takes does not carry the verifying kinds"
+        );
+        let (_, after_kinds) = common
+            .split_once(".verify-kinds:")
+            .expect("the verifying kinds exist");
+        let kinds = after_kinds
+            .split_once("\n.")
+            .map_or(after_kinds, |(rules, _)| rules);
+        assert!(
+            kinds.contains("$KITHARA_PIPELINE_KIND == \"quarantine\""),
             "the rule set the iOS suite takes does not carry the quarantine kind"
         );
     }

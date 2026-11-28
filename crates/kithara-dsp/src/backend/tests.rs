@@ -16,7 +16,7 @@ use super::accelerate;
 use super::{
     cascade,
     curve::{self, fade},
-    delay, platform, portable, route, simd, strided,
+    delay, platform, portable, route, simd, strided, window,
 };
 use crate::{
     curve::Progression,
@@ -45,6 +45,18 @@ const SPECIALS: [f32; 9] = [
     f32::NAN,
     f32::from_bits(SIGNALING_NAN),
 ];
+
+#[kithara::test]
+fn finite_admission_matches_scalar_at_every_level() {
+    for size in SIZES {
+        for value in SPECIALS {
+            let samples = vec![value; size];
+            let expected = samples.iter().all(|sample| sample.is_finite());
+            assert_eq!(super::all_finite(&samples), expected);
+            dispatch!(Level::fallback(), simd => assert_eq!(window::all_finite_kernel(simd, &samples), expected));
+        }
+    }
+}
 
 #[kithara::test]
 fn last_loud_matches_scalar_at_native_and_fallback_levels() {
@@ -295,14 +307,17 @@ fn pairs() -> Vec<Pairs> {
             downmix_pair: |input, mono| dispatch!(Level::fallback(), simd => portable::downmix_pair_kernel(simd, input, mono)),
             interleave_pair: |left, right, output| dispatch!(Level::fallback(), simd => portable::interleave_pair_kernel(simd, left, right, output)),
         },
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        Pairs {
-            name: "accelerate",
-            deinterleave_pair: accelerate::deinterleave_pair,
-            downmix_pair: accelerate::downmix_pair,
-            interleave_pair: accelerate::interleave_pair,
-        },
     ])
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn accelerate_pairs() -> Vec<Pairs> {
+    Vec::from([Pairs {
+        name: "accelerate",
+        deinterleave_pair: accelerate::deinterleave_pair,
+        downmix_pair: accelerate::downmix_pair,
+        interleave_pair: accelerate::interleave_pair,
+    }])
 }
 
 fn signal(len: usize, prepared: &[f32]) -> Vec<f32> {
@@ -329,8 +344,10 @@ fn stride(value: usize) -> NonZeroUsize {
 }
 
 #[kithara::test]
-fn interleave_pair_matches_the_oracle() {
-    for layout in pairs() {
+#[case::portable(pairs)]
+#[case::accelerate(platform = apple, accelerate_pairs)]
+fn interleave_pair_matches_the_oracle(#[case] rows: fn() -> Vec<Pairs>) {
+    for layout in rows() {
         let name = layout.name;
         for size in SIZES {
             for offset in OFFSETS {
@@ -353,8 +370,10 @@ fn interleave_pair_matches_the_oracle() {
 }
 
 #[kithara::test]
-fn deinterleave_pair_matches_the_oracle() {
-    for layout in pairs() {
+#[case::portable(pairs)]
+#[case::accelerate(platform = apple, accelerate_pairs)]
+fn deinterleave_pair_matches_the_oracle(#[case] rows: fn() -> Vec<Pairs>) {
+    for layout in rows() {
         let name = layout.name;
         for size in SIZES {
             for offset in OFFSETS {
@@ -394,8 +413,10 @@ fn deinterleave_pair_matches_the_oracle() {
 /// `(l + r) · 0.5` bit for bit, the formula every analysis path used
 /// before `downmix`; a `NaN` payload is the backend's to choose.
 #[kithara::test]
-fn downmix_pair_matches_the_scalar_mean() {
-    for layout in pairs() {
+#[case::portable(pairs)]
+#[case::accelerate(platform = apple, accelerate_pairs)]
+fn downmix_pair_matches_the_scalar_mean(#[case] rows: fn() -> Vec<Pairs>) {
+    for layout in rows() {
         let name = layout.name;
         for size in SIZES {
             for offset in OFFSETS {
@@ -497,8 +518,10 @@ fn sanitize_matches_the_oracle_at_every_level() {
 }
 
 #[kithara::test]
-fn a_short_side_bounds_every_pair_kernel() {
-    for layout in pairs() {
+#[case::portable(pairs)]
+#[case::accelerate(platform = apple, accelerate_pairs)]
+fn a_short_side_bounds_every_pair_kernel(#[case] rows: fn() -> Vec<Pairs>) {
+    for layout in rows() {
         let name = layout.name;
         let mut output = [UNWRITTEN; 7];
         assert_eq!(
@@ -754,17 +777,31 @@ fn portable_fallback_run(planes: &mut [Vec<f32>], halves: &[Vec<[f32; 5]>; 2]) {
     }
 }
 
-#[kithara::test]
-fn every_cascade_backend_tracks_the_f64_oracle_across_a_retune() {
-    let runs: Vec<(&str, RunCascade)> = Vec::from([
+fn cascade_runs() -> Vec<(&'static str, RunCascade)> {
+    Vec::from([
         (
             "portable-native",
             handover_run!(cascade::Cascade) as RunCascade,
         ),
         ("portable-fallback", portable_fallback_run),
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        ("accelerate", handover_run!(accelerate::Cascade)),
-    ]);
+    ])
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn accelerate_cascade_runs() -> Vec<(&'static str, RunCascade)> {
+    Vec::from([(
+        "accelerate",
+        handover_run!(accelerate::Cascade) as RunCascade,
+    )])
+}
+
+#[kithara::test]
+#[case::portable(cascade_runs)]
+#[case::accelerate(platform = apple, accelerate_cascade_runs)]
+fn every_cascade_backend_tracks_the_f64_oracle_across_a_retune(
+    #[case] rows: fn() -> Vec<(&'static str, RunCascade)>,
+) {
+    let runs = rows();
     for channels in [1_usize, 2, 8] {
         for sections in [1_usize, 4] {
             let halves = halves(sections);
@@ -888,18 +925,21 @@ fn vectors() -> Vec<Vectors> {
             scale_add: |x, gain, acc| dispatch!(Level::fallback(), simd => portable::scale_add_kernel(simd, x, gain, acc)),
             add: |x, acc| dispatch!(Level::fallback(), simd => portable::add_kernel(simd, x, acc)),
         },
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        Vectors {
-            name: "accelerate",
-            #[cfg(feature = "spectrum")]
-            multiply: accelerate::multiply,
-            sum_squares: accelerate::sum_squares,
-            affine: accelerate::affine,
-            sub: accelerate::sub,
-            scale_add: accelerate::scale_add,
-            add: accelerate::add,
-        },
     ])
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn accelerate_vectors() -> Vec<Vectors> {
+    Vec::from([Vectors {
+        name: "accelerate",
+        #[cfg(feature = "spectrum")]
+        multiply: accelerate::multiply,
+        sum_squares: accelerate::sum_squares,
+        affine: accelerate::affine,
+        sub: accelerate::sub,
+        scale_add: accelerate::scale_add,
+        add: accelerate::add,
+    }])
 }
 
 /// Measured ramp forms and the fallback parity reference.
@@ -922,8 +962,10 @@ fn same(got: f32, want: f32) -> bool {
 
 #[cfg(feature = "spectrum")]
 #[kithara::test]
-fn multiply_matches_the_scalar_product_on_every_backend() {
-    for row in vectors() {
+#[case::portable(vectors)]
+#[case::accelerate(platform = apple, accelerate_vectors)]
+fn multiply_matches_the_scalar_product_on_every_backend(#[case] rows: fn() -> Vec<Vectors>) {
+    for row in rows() {
         let name = row.name;
         for size in SIZES {
             let a = signal(size, sine_440());
@@ -951,8 +993,10 @@ fn multiply_matches_the_scalar_product_on_every_backend() {
 /// `Σx²` within the reduction bound `N·ε·Σx²` of the `f64` sum (spec,
 /// reduction level); a `NaN` or an infinity carries through.
 #[kithara::test]
-fn sum_squares_tracks_the_f64_sum_on_every_backend() {
-    for row in vectors() {
+#[case::portable(vectors)]
+#[case::accelerate(platform = apple, accelerate_vectors)]
+fn sum_squares_tracks_the_f64_sum_on_every_backend(#[case] rows: fn() -> Vec<Vectors>) {
+    for row in rows() {
         let name = row.name;
         for size in SIZES {
             let samples: Vec<f32> = signal(size.saturating_add(SPECIALS.len()), sine_440())
@@ -1274,8 +1318,10 @@ fn routed_vector_forms_keep_bits_and_untouched_tails() {
 }
 
 #[kithara::test]
-fn affine_rounds_within_one_ulp_on_every_backend() {
-    for row in vectors() {
+#[case::portable(vectors)]
+#[case::accelerate(platform = apple, accelerate_vectors)]
+fn affine_rounds_within_one_ulp_on_every_backend(#[case] rows: fn() -> Vec<Vectors>) {
+    for row in rows() {
         let name = row.name;
         for (scale, offset_value) in [(0.75, -0.25), (-3.0, 0.5)] {
             for size in SIZES {
@@ -1305,8 +1351,10 @@ fn affine_rounds_within_one_ulp_on_every_backend() {
 }
 
 #[kithara::test]
-fn sub_rounds_within_one_ulp_on_every_backend() {
-    for row in vectors() {
+#[case::portable(vectors)]
+#[case::accelerate(platform = apple, accelerate_vectors)]
+fn sub_rounds_within_one_ulp_on_every_backend(#[case] rows: fn() -> Vec<Vectors>) {
+    for row in rows() {
         let name = row.name;
         for size in SIZES {
             for offset in OFFSETS {
@@ -1334,8 +1382,10 @@ fn sub_rounds_within_one_ulp_on_every_backend() {
 }
 
 #[kithara::test]
-fn scale_add_rounds_within_one_ulp_on_every_backend() {
-    for row in vectors() {
+#[case::portable(vectors)]
+#[case::accelerate(platform = apple, accelerate_vectors)]
+fn scale_add_rounds_within_one_ulp_on_every_backend(#[case] rows: fn() -> Vec<Vectors>) {
+    for row in rows() {
         let name = row.name;
         for gain in [0.7, -1.5] {
             for size in SIZES {
@@ -1419,7 +1469,9 @@ fn mul_add_rounds_within_one_ulp_at_every_level() {
 const CANCELLING_TRIPLE: [f32; 3] = [1.000_244_1, 1.000_244_1, -1.000_488_3];
 
 #[kithara::test]
-fn every_multiply_add_rounds_once_on_a_cancelling_triple() {
+#[case::portable(vectors)]
+#[case::accelerate(platform = apple, accelerate_vectors)]
+fn every_multiply_add_rounds_once_on_a_cancelling_triple(#[case] rows: fn() -> Vec<Vectors>) {
     let [x, y, acc] = CANCELLING_TRIPLE;
     let exact = f64::from(x).mul_add(f64::from(y), f64::from(acc));
     let assert_rounds_once = |context: &str, output: &[f32]| {
@@ -1428,7 +1480,7 @@ fn every_multiply_add_rounds_once_on_a_cancelling_triple() {
         }
     };
     for size in SIZES {
-        for row in vectors() {
+        for row in rows() {
             let name = row.name;
             let mut affine = vec![x; size];
             (row.affine)(&mut affine, y, acc);
@@ -1446,8 +1498,10 @@ fn every_multiply_add_rounds_once_on_a_cancelling_triple() {
 }
 
 #[kithara::test]
-fn add_rounds_within_one_ulp_on_every_backend() {
-    for row in vectors() {
+#[case::portable(vectors)]
+#[case::accelerate(platform = apple, accelerate_vectors)]
+fn add_rounds_within_one_ulp_on_every_backend(#[case] rows: fn() -> Vec<Vectors>) {
+    for row in rows() {
         let name = row.name;
         for size in SIZES {
             for offset in OFFSETS {
@@ -1609,9 +1663,11 @@ fn crossfade_linear_preserves_identity_and_integer_frame_gains() {
 
 /// A target shorter than its inputs bounds the prefix on every backend.
 #[kithara::test]
-fn a_short_target_bounds_every_elementwise_kernel() {
+#[case::portable(vectors)]
+#[case::accelerate(platform = apple, accelerate_vectors)]
+fn a_short_target_bounds_every_elementwise_kernel(#[case] rows: fn() -> Vec<Vectors>) {
     let input = signal(9, sine_440());
-    for row in vectors() {
+    for row in rows() {
         let name = row.name;
         let mut target = [0.0_f32; 5];
         assert_eq!((row.sub)(&mut target, &input), 5, "{name}: sub");

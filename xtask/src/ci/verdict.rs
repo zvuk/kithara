@@ -17,8 +17,11 @@ use kithara_devtools::{
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use super::run::PipelineKind;
-use crate::{config::CiProjectConfig, consts};
+use super::{partial, run::PipelineKind};
+use crate::{
+    config::{AfterDraft, CiProjectConfig},
+    consts,
+};
 
 #[derive(Debug, Args)]
 pub(crate) struct VerdictArgs {
@@ -350,23 +353,46 @@ pub(crate) fn lane(
         journal: journal_path(shared_root),
         base: std::env::var("CI_MERGE_REQUEST_DIFF_BASE_SHA").ok(),
     };
+    let part = Part {
+        follows_draft: partial::follows_draft(),
+        jobs: partial::repeated_jobs()?,
+    };
     judge(
         &common,
-        kind,
+        (kind, &part),
         ci,
         test,
         std::env::var("CI_COMMIT_SHA").ok().as_deref(),
     )
 }
 
+/// What part of the merge's checks the run repeats.
+#[derive(Default)]
+struct Part {
+    /// It follows its draft's passed run of the same merge.
+    follows_draft: bool,
+    /// It repeats only these jobs.
+    jobs: Option<BTreeSet<String>>,
+}
+
 fn judge(
     common: &Common,
-    kind: PipelineKind,
+    (kind, part): (PipelineKind, &Part),
     ci: &CiProjectConfig,
     test: &TestCommandConfig,
     sha: Option<&str>,
 ) -> Result<()> {
-    let expected = expected_producers(ci, test, kind)?;
+    let expected = expected_producers(ci, test, kind, part)?;
+    // A repeat of jobs none of which names a test can leave nothing behind
+    // when they pass, and that is its verdict.
+    if part.jobs.is_some()
+        && expected.is_empty()
+        && collect(&common.reports)?.is_empty()
+        && failed_markers(&common.reports)?.is_empty()
+    {
+        info!("the repeated jobs passed and reported nothing for the verdict to weigh");
+        return Ok(());
+    }
     let aliases = &ci.verdict.id_aliases;
     match journal_action(kind) {
         JournalAction::Record => {
@@ -570,23 +596,59 @@ struct ExpectedProducer<'a> {
     lane: &'a str,
     test_lane: &'a str,
     prefix: Option<&'a str>,
-    draft: bool,
+    share: Share,
+}
+
+/// How much of a producer's suite the run selects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Share {
+    Whole,
+    /// A draft's share, which may be nothing.
+    Draft,
+    /// What a passed draft of the same merge left, which may be nothing and
+    /// need not hold the required cases the draft already ran.
+    Rest,
 }
 
 fn expected_producers<'a>(
     ci: &'a CiProjectConfig,
     test: &'a TestCommandConfig,
     kind: PipelineKind,
+    part: &Part,
 ) -> Result<Vec<ExpectedProducer<'a>>> {
+    let repeated: Option<BTreeSet<&str>> = part.jobs.as_ref().map(|jobs| {
+        ci.planning
+            .bindings
+            .iter()
+            .filter(|(entrypoint, _)| {
+                entrypoint
+                    .split_once("::")
+                    .is_some_and(|(_, job)| jobs.contains(job))
+            })
+            .flat_map(|(_, lanes)| lanes.iter().map(String::as_str))
+            .collect()
+    });
     let mut producers = Vec::new();
     for (name, lane) in &ci.lanes {
         if !lane
             .kinds_gitlab
             .iter()
             .any(|candidate| candidate == kind.name())
+            || repeated
+                .as_ref()
+                .is_some_and(|lanes| !lanes.contains(name.as_str()))
         {
             continue;
         }
+        let share = match kind {
+            PipelineKind::Branch => Share::Draft,
+            PipelineKind::Quarantine
+                if part.follows_draft && lane.after_draft() == AfterDraft::Rest =>
+            {
+                Share::Rest
+            }
+            _ => Share::Whole,
+        };
         for step in &lane.steps {
             let Some(args) = step.suite_request(lane, step.args_in(kind.name())) else {
                 continue;
@@ -605,7 +667,7 @@ fn expected_producers<'a>(
                 lane: name,
                 test_lane,
                 prefix: test.required_case_prefixes.get(&path).map(String::as_str),
-                draft: kind == PipelineKind::Branch,
+                share,
             });
         }
     }
@@ -637,7 +699,7 @@ fn no_applicable_suites(
             serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         let report = reports.join(format!("{lane}.xml"));
         if selected.is_empty() {
-            if !producer.draft || (strict && report.try_exists()?) {
+            if producer.share == Share::Whole || (strict && report.try_exists()?) {
                 bail!("invalid empty selection for producer `{lane}`");
             }
             continue;
@@ -650,11 +712,15 @@ fn no_applicable_suites(
         } else {
             collect(&report)?
         };
+        let rest = producer.share == Share::Rest;
         if cases.is_empty() {
+            if rest {
+                continue;
+            }
             bail!("selected producer `{lane}` has no test cases in its JUnit report");
         }
         if let Some(prefix) = producer.prefix {
-            if !cases.iter().any(|case| case.name.starts_with(prefix)) {
+            if !rest && !cases.iter().any(|case| case.name.starts_with(prefix)) {
                 bail!("producer `{lane}` executed no cases starting with `{prefix}`");
             }
             if cases.iter().any(CaseTiming::failing) {
@@ -721,7 +787,7 @@ mod tests {
         lane: "apple-test",
         test_lane: "workspace",
         prefix: None,
-        draft: true,
+        share: Share::Draft,
     }];
     const APPLE_NET_UNITS: &str = "apple-net-units";
 
@@ -1264,7 +1330,13 @@ mod tests {
                     if failed {
                         mark_failed(directory.path(), APPLE_NET_UNITS).unwrap();
                     }
-                    let result = judge(&common, kind, &ci, &project.test, Some("current"));
+                    let result = judge(
+                        &common,
+                        (kind, &Part::default()),
+                        &ci,
+                        &project.test,
+                        Some("current"),
+                    );
                     assert_eq!(
                         result.is_ok(),
                         passes,
@@ -1274,6 +1346,89 @@ mod tests {
                         assert_eq!(fs::read(&common.journal).unwrap(), before);
                     }
                 }
+            }
+        }
+
+        fn repository() -> (CiProjectConfig, TestCommandConfig) {
+            let root = crate::testing::workspace::root();
+            let ci = crate::config::KitharaExt::load(&root).unwrap().ci;
+            ci.validate().unwrap();
+            let project = kithara_devtools::common::project::ProjectConfig::load(&root).unwrap();
+            (ci, project.test)
+        }
+
+        /// After a passed draft of the same merge, a producer's run holds what
+        /// the draft left: nothing, or none of the required cases the draft
+        /// ran, is a pass; a failure is still one.
+        #[test]
+        fn a_ready_run_after_its_draft_judges_only_what_the_draft_left() {
+            let (ci, test) = repository();
+            let apple = PASSING.replace("name=\"pass\"", "name=\"backend::apple::tests::pass\"");
+            let failing = apple.replace("/>", "><failure/></testcase>");
+            let after_draft = Part {
+                follows_draft: true,
+                jobs: None,
+            };
+            for (part, xml, passes) in [
+                (&after_draft, "<testsuites/>", true),
+                (&after_draft, PASSING, true),
+                (&after_draft, failing.as_str(), false),
+                (&Part::default(), "<testsuites/>", false),
+                (&Part::default(), PASSING, false),
+            ] {
+                let (_directory, common) = fixture(&[]);
+                snapshot(&common, true);
+                fs::write(common.reports.join("apple-test.xml"), PASSING).unwrap();
+                fs::write(
+                    common.reports.join("apple-net-units.selection.json"),
+                    r#"["workspace"]"#,
+                )
+                .unwrap();
+                fs::write(common.reports.join("apple-net-units.xml"), xml).unwrap();
+                let result = judge(
+                    &common,
+                    (PipelineKind::Quarantine, part),
+                    &ci,
+                    &test,
+                    Some("current"),
+                );
+                assert_eq!(
+                    result.is_ok(),
+                    passes,
+                    "{}: {xml}: {result:?}",
+                    part.follows_draft
+                );
+            }
+        }
+
+        /// A run that repeats some jobs expects reports from those alone, and
+        /// a repeat whose jobs name no test passes on nothing.
+        #[test]
+        fn a_repeat_of_failed_jobs_expects_only_their_reports() {
+            let (ci, test) = repository();
+            let repeat = |jobs: &[&str]| Part {
+                follows_draft: false,
+                jobs: Some(jobs.iter().map(|job| (*job).to_owned()).collect()),
+            };
+            for (part, apple_test, passes) in [
+                (repeat(&["apple:test", "verdict"]), true, true),
+                (repeat(&["linux:lint"]), false, true),
+                (Part::default(), true, false),
+                (Part::default(), false, false),
+            ] {
+                let (_directory, common) = fixture(&[]);
+                if apple_test {
+                    snapshot(&common, true);
+                    fs::write(common.reports.join("apple-test.xml"), PASSING).unwrap();
+                }
+                let result = judge(
+                    &common,
+                    (PipelineKind::Quarantine, &part),
+                    &ci,
+                    &test,
+                    Some("current"),
+                );
+                assert_eq!(result.is_ok(), passes, "{:?}: {result:?}", part.jobs);
             }
         }
 

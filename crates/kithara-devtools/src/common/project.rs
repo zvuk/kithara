@@ -596,6 +596,8 @@ fn default_perf_nextest_profile() -> String {
 pub struct TestCommandConfig {
     pub lanes: BTreeMap<String, TestLaneConfig>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
+    /// Platforms a run can be restricted to with `--platform`.
+    pub platforms: BTreeMap<String, TestPlatformConfig>,
     pub default_backend: String,
     pub default_lane: String,
     pub loom_lane: String,
@@ -673,6 +675,17 @@ impl ToggleSchema for TestLoad {
 }
 
 pub type TestLoadConfig = ToggleConfig<TestLoad>;
+
+/// The tests that require one platform.
+#[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
+#[serde(default, deny_unknown_fields)]
+#[config(builder(none))]
+pub struct TestPlatformConfig {
+    /// The filterset selecting the tests declared for the platform; a
+    /// restricted run intersects it with the lane's selection.
+    #[config(value)]
+    pub filter: String,
+}
 
 #[derive(Debug, Default, Deserialize, Clone, kithara_config::Config)]
 #[serde(default, deny_unknown_fields)]

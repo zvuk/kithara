@@ -4,6 +4,8 @@ use syn::{
     parse::{Parse, ParseStream},
 };
 
+use crate::TestPlatform;
+
 bitflags::bitflags! {
     /// Execution modes and explicit boolean settings of a test attribute.
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -33,6 +35,9 @@ pub struct TestArgs {
     timeout: Option<Expr>,
     tracing_filter: Option<String>,
     soft_fail_patterns: Vec<String>,
+    /// The platform every emitted test requires; a case may declare its own.
+    #[field(get(copy))]
+    platform: Option<TestPlatform>,
 }
 
 impl TestArgs {
@@ -96,8 +101,37 @@ impl TestArgs {
         Ok(())
     }
 
+    /// A declared platform is a native target: it needs a native entry and
+    /// cannot share a test with a loom model.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the conflicting mode.
+    pub fn validate_platform(&self, platform: TestPlatform) -> syn::Result<()> {
+        let browser_only = self.flags.contains(TestFlags::BROWSER)
+            && !self
+                .flags
+                .intersects(TestFlags::TOKIO | TestFlags::NATIVE_ONLY);
+        for (conflict, name) in [
+            (self.flags.contains(TestFlags::WASM_ONLY), "wasm"),
+            (browser_only, "browser"),
+            (self.flags.contains(TestFlags::LOOM), "loom"),
+        ] {
+            if conflict {
+                return Err(Error::new(
+                    Span::call_site(),
+                    format!("`platform = {platform}` and `{name}` are mutually exclusive"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn validate(&mut self) -> syn::Result<()> {
         self.validate_exclusive_modes()?;
+        if let Some(platform) = self.platform {
+            self.validate_platform(platform)?;
+        }
 
         if self.flags.contains(TestFlags::LOOM) && !self.soft_fail_patterns.is_empty() {
             return Err(Error::new(
@@ -165,20 +199,10 @@ impl Parse for TestArgs {
                     args.set_hang_timeout_secs(Some(secs.base10_parse()?));
                 }
                 "soft_fail" => {
-                    let content;
-                    syn::parenthesized!(content in input);
-                    let patterns = content
-                        .parse_terminated(<syn::LitStr as Parse>::parse, Token![,])?
-                        .into_iter()
-                        .map(|pattern| pattern.value())
-                        .collect::<Vec<String>>();
-                    args.set_soft_fail_patterns(patterns);
-                    if args.soft_fail_patterns().is_empty() {
-                        return Err(Error::new(
-                            ident.span(),
-                            "soft_fail requires at least one pattern string",
-                        ));
-                    }
+                    args.set_soft_fail_patterns(parse_soft_fail(input, &ident)?);
+                }
+                "platform" => {
+                    args.set_platform(Some(parse_platform(input)?));
                 }
                 "tracing" => {
                     let content;
@@ -201,4 +225,31 @@ impl Parse for TestArgs {
         args.validate()?;
         Ok(args)
     }
+}
+
+/// Reads `= <name>` after `platform`.
+fn parse_platform(input: ParseStream<'_>) -> syn::Result<TestPlatform> {
+    input.parse::<Token![=]>()?;
+    let name: Ident = input.parse()?;
+    name.to_string()
+        .parse()
+        .map_err(|message: String| Error::new(name.span(), message))
+}
+
+/// Reads the parenthesized, non-empty pattern list after `soft_fail`.
+fn parse_soft_fail(input: ParseStream<'_>, ident: &Ident) -> syn::Result<Vec<String>> {
+    let content;
+    syn::parenthesized!(content in input);
+    let patterns = content
+        .parse_terminated(<syn::LitStr as Parse>::parse, Token![,])?
+        .into_iter()
+        .map(|pattern| pattern.value())
+        .collect::<Vec<String>>();
+    if patterns.is_empty() {
+        return Err(Error::new(
+            ident.span(),
+            "soft_fail requires at least one pattern string",
+        ));
+    }
+    Ok(patterns)
 }

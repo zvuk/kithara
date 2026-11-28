@@ -10,11 +10,15 @@ keywords = ["audio", "waveform", "dsp", "analysis"]
 categories = ["multimedia::audio"]
 exclude = ["tests/**"]
 
+[package.metadata.kithara.wasm-lib-tests]
+default-features = false
+features = ["dsp"]
+
 [features]
 default = []
-# The FFT band analyzer. The model, its codec and the analysis parameters
+# The peak envelope analyzer. The model, its codec and the analysis parameters
 # are available without it.
-dsp = ["kithara-dsp/spectrum"]
+dsp = []
 
 [dependencies]
 kithara-blob = { workspace = true }
@@ -36,7 +40,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha5", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-test-fixtures = { workspace = true, default-features = false }
-kithara-test-utils = { features = ["test"], workspace = true }
+kithara-test-utils = { features = ["test", "subscriber"], workspace = true }
 
 serde_json = { workspace = true }
 
@@ -45,6 +49,9 @@ kithara-test-fixtures = { workspace = true, default-features = false, features =
 
 criterion = { workspace = true }
 metabench = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dev-dependencies]
 kithara-test-dylib = { workspace = true }

@@ -184,10 +184,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
 
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 #[cfg_attr(not(target_os = "android"), case::mp3_symphonia(local_mp3().await, 42, DecoderBackend::Symphonia, AbrMode::Auto(None)))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple(local_mp3().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))
-)]
+#[case::mp3_apple(platform = apple, local_mp3().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))]
 #[cfg_attr(
     target_os = "android",
     case::mp3_android(local_mp3().await, 42, DecoderBackend::Android, AbrMode::Auto(None))
@@ -198,10 +195,7 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
 ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hls_aac_apple(local_hls().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))
-)]
+#[case::hls_aac_apple(platform = apple, local_hls().await, 42, DecoderBackend::Apple, AbrMode::Auto(None))]
 #[cfg_attr(
     target_os = "android",
     case::hls_aac_android(local_hls().await, 42, DecoderBackend::Android, AbrMode::Auto(None))
@@ -212,15 +206,11 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
     DecoderBackend::Symphonia,
     AbrMode::Auto(None)
 ))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::hls_aes_apple(
-        local_encrypted_hls().await,
+#[case::hls_aes_apple(platform = apple, local_encrypted_hls().await,
         42,
         DecoderBackend::Apple,
         AbrMode::Auto(None)
-    )
-)]
+    )]
 #[cfg_attr(
     target_os = "android",
     case::hls_aes_android(
@@ -493,10 +483,7 @@ fn playlist_snapshot(queue: &QueueControl<TestPools>, ids: &[TrackId]) -> String
 /// `pending_select` was queued for the same track).
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(45)))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
-#[cfg_attr(
-    any(target_os = "macos", target_os = "ios"),
-    case::apple(DecoderBackend::Apple)
-)]
+#[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
 #[kithara_test_utils::kithara::hang_watchdog(ctx = String)]
 async fn local_queue_playlist_behavior(

@@ -10,7 +10,7 @@ use crate::{AnalysisParams, BlobError, Waveform, WaveformAnalyzer};
 #[derive(Default)]
 pub(crate) struct Slot(Option<(WaveformAnalyzer, NonZeroU32)>);
 
-/// Builds the pass that folds windows by `fold`. The caller decides whether a
+/// Builds the pass that folds columns by `fold`. The caller decides whether a
 /// waveform is wanted at all; reaching here means it is.
 impl<S> TryFrom<(NonZeroU32, NonZeroU32, &PoolRegion<S>)> for Slot
 where
@@ -28,7 +28,7 @@ where
 
 /// The tag names the requested fold factor; an absent factor disables the waveform.
 pub(crate) fn cache_tag(fold: Option<NonZeroU32>) -> Option<String> {
-    fold.map(|fold| format!("wave:fold{fold}:v2"))
+    fold.map(|fold| format!("wave:fold{fold}:v3"))
 }
 
 pub(crate) fn push<S>(slot: &mut Slot, pools: &PoolRegion<S>, pcm: &[f32], channels: usize, at: u64)
@@ -40,18 +40,25 @@ where
         .as_mut()
         .and_then(|(analyzer, _)| analyzer.push(pools, pcm, channels, at).err());
     if let Some(error) = failure {
-        warn!(
-            ?error,
-            "waveform analysis buffer allocation failed; waveform disabled"
-        );
+        warn!(?error, "waveform input failed; waveform disabled");
         slot.0 = None;
     }
 }
 
 pub(crate) fn snapshot(slot: &mut Slot, extent: Option<u64>) -> Option<Waveform> {
-    slot.0
+    let result = slot
+        .0
         .as_mut()
-        .map(|(analyzer, fold)| analyzer.snapshot(*fold, extent))
+        .map(|(analyzer, fold)| analyzer.snapshot(*fold, extent));
+    match result {
+        Some(Ok(waveform)) => Some(waveform),
+        Some(Err(error)) => {
+            warn!(?error, "waveform window failed; waveform disabled");
+            slot.0 = None;
+            None
+        }
+        None => None,
+    }
 }
 
 pub(crate) fn write_resume(slot: &Slot) -> Option<Vec<u8>> {

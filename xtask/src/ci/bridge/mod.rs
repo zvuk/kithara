@@ -3,6 +3,7 @@ mod checks;
 mod command;
 mod control;
 mod git;
+mod intersection;
 mod ledger;
 mod model;
 mod reconcile;

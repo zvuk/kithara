@@ -14,10 +14,13 @@
 
 # kithara-waveform
 
-The three-band waveform: its value type, byte format, parameters, and the
-streaming analyzer that computes it. Without the `dsp` feature only the model
+The four-band stereo peak waveform: its value type, byte format, parameters,
+and progressive analyzer. Without the `dsp` feature only the model
 and codec are built, for apps that display or transfer a waveform without
 analyzing audio. With `dsp`, the analyzer runs on `kithara-dsp` and can resume
 a stopped pass exactly where it left off.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-waveform) for the ownership contract.
+
+The analyzer keeps the first two channels separate (mono fills both sides) and splits each into four LR4 bands at 155, 1040 and 6957 Hz.
+Each column holds `round(255 * sqrt(min(1, gain * peak)))` over 64 frames at 44.1/48 kHz, scaling with rate to stay within 2 ms.

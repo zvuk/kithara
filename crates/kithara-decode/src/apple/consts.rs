@@ -67,7 +67,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test]
+    #[kithara::test(platform = apple)]
     fn test_os_status_to_string() {
         assert_eq!(os_status_to_string(NO_ERR), "noErr");
         assert!(os_status_to_string(0x7768_743f).contains("wht?"));

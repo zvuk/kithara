@@ -16,12 +16,18 @@ pub(super) struct TestRequest {
     /// passed-through `-E` is a union member, so it could widen a selection;
     /// this one only takes tests away.
     pub(super) narrow: Option<String>,
+    /// A configured platform the run is restricted to: only the tests
+    /// declared for it, intersected with every other selection.
+    pub(super) platform: Option<String>,
     pub(super) expected_tests: Option<PathBuf>,
     pub(super) selection_output: Option<PathBuf>,
     pub(super) passthrough: Vec<String>,
     /// Run only the lane's share of the draft scope: the required packages and
     /// what the pull request names.
     pub(super) draft: bool,
+    /// Run what a passed draft of the same merge left of the lane: the
+    /// lane's tests outside the draft scope.
+    pub(super) rest_of_draft: bool,
 }
 
 impl TestRequest {
@@ -33,11 +39,13 @@ impl TestRequest {
             load: None,
             loom: None,
             narrow: None,
+            platform: None,
             expected_tests: None,
             selection_output: None,
             passthrough: Vec::new(),
             flash: None,
             draft: false,
+            rest_of_draft: false,
         };
         let mut iter = args.iter();
         while let Some(arg) = iter.next() {
@@ -67,6 +75,7 @@ impl TestRequest {
                     request.load = Some(parse_toggle("load", value)?);
                 }
                 "--draft" => request.draft = true,
+                "--rest-of-draft" => request.rest_of_draft = true,
                 "--loom=off" | "--loom=false" | "--no-loom" => request.loom = Some(false),
                 "--loom=on" | "--loom=true" => request.loom = Some(true),
                 "--loom" => {
@@ -84,6 +93,7 @@ impl TestRequest {
                 "--narrow" => {
                     request.narrow = Some(filterset(iter.next().map(String::as_str))?);
                 }
+                "--platform" => request.restrict_to(iter.next().map(String::as_str))?,
                 "--expected-tests" => {
                     request.expect_tests(iter.next().map(String::as_str))?;
                 }
@@ -119,6 +129,9 @@ impl TestRequest {
                 _ if arg.starts_with("--narrow=") => {
                     request.narrow = Some(filterset(arg.strip_prefix("--narrow="))?);
                 }
+                _ if arg.starts_with("--platform=") => {
+                    request.restrict_to(arg.strip_prefix("--platform="))?;
+                }
                 _ if arg.starts_with("--expected-tests=") => {
                     request.expect_tests(arg.strip_prefix("--expected-tests="))?;
                 }
@@ -132,10 +145,24 @@ impl TestRequest {
                 _ => request.passthrough.push(arg.clone()),
             }
         }
+        if request.draft && request.rest_of_draft {
+            bail!("--draft and --rest-of-draft name the two halves of one selection");
+        }
         if request.expected_tests.is_some() {
             request.validate_expected_selection()?;
         }
         Ok(request)
+    }
+
+    fn restrict_to(&mut self, value: Option<&str>) -> Result<()> {
+        if self.platform.is_some() {
+            bail!("--platform may be supplied only once");
+        }
+        let platform = value
+            .filter(|platform| !platform.trim().is_empty() && !platform.starts_with('-'))
+            .context("--platform needs a platform name")?;
+        self.platform = Some(platform.to_owned());
+        Ok(())
     }
 
     fn select_to(&mut self, value: Option<&str>) -> Result<()> {
@@ -163,8 +190,11 @@ impl TestRequest {
     }
 
     fn validate_expected_selection(&self) -> Result<()> {
-        if self.draft {
-            bail!("--expected-tests requires one lane and cannot be combined with --draft");
+        if self.draft || self.rest_of_draft {
+            bail!(
+                "--expected-tests requires one lane and cannot be combined with --draft or \
+                 --rest-of-draft"
+            );
         }
         super::inventory::inventory_args(&self.passthrough)?;
         Ok(())
