@@ -604,7 +604,12 @@ impl TableSource {
             .columns_state
             .as_ref()
             .map(|(prefix, scope)| (prefix.as_str(), scope.as_str()));
-        let columns = column_layouts((&self.columns, self.width.as_deref()), &ctx, state, skin);
+        let columns = column_layouts(
+            (&self.columns, self.width.as_deref()),
+            &ctx,
+            state,
+            &skin.table,
+        );
         TableFace::new(rows, columns, skin, self.frame).with_status(
             self.status
                 .as_deref()
@@ -782,7 +787,7 @@ mod tests {
         let body = table_body(
             bounds,
             crate::atoms::table::TableMetrics {
-                skin,
+                skin: &skin.table,
                 frame: TableFrame::new(0.0, 0.0, true),
             },
         );

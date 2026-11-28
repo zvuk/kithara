@@ -34,7 +34,6 @@ fn asset_scope_with_root(
 
 #[kithara::test(
     native,
-    timeout(Duration::from_secs(5)),
     hang_timeout_secs(1),
     tracing("kithara_assets=debug,kithara_storage=debug")
 )]
@@ -129,7 +128,7 @@ fn eviction_max_assets_skips_pinned_assets(
     );
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 #[case(1)]
 #[case(2)]
 #[case(3)]
@@ -172,7 +171,7 @@ fn eviction_ignores_missing_index(
     assert!(res.is_ok(), "Should handle missing LRU index gracefully");
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, hang_timeout_secs(1))]
 fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
     let dir = temp_dir.path().to_path_buf();
     let store = asset_scope_with_root(&temp_dir, "zero-asset-0", Some(2))
@@ -207,7 +206,6 @@ fn eviction_with_zero_byte_assets(temp_dir: kithara_test_utils::TestTempDir) {
 
 #[kithara::test(
     native,
-    timeout(Duration::from_secs(5)),
     hang_timeout_secs(1),
     tracing("kithara_assets=debug,kithara_storage=debug")
 )]

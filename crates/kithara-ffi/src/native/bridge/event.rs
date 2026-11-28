@@ -1085,7 +1085,16 @@ mod tests {
         .await
         .expect("loaded track starts through the real queue lifecycle");
 
+        struct StopRendering<'a>(&'a CancelScope);
+
+        impl Drop for StopRendering<'_> {
+            fn drop(&mut self) {
+                self.0.cancel();
+            }
+        }
+
         let cancel = CancelScope::new(None);
+        let _stop_rendering = StopRendering(&cancel);
         let render_cancel = cancel.token();
         let rendering = spawn_blocking(move || crate::mock::render_until_cancelled(&render_cancel));
         let replay = wait_for_eof_advance(&mut events, id, 2000).await;

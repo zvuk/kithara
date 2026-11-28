@@ -121,7 +121,7 @@ impl TableFace {
 
     pub(crate) fn metrics(&self) -> TableMetrics<'_> {
         TableMetrics {
-            skin: &self.skin,
+            skin: &self.skin.table,
             frame: self.frame,
         }
     }
@@ -180,7 +180,7 @@ impl TableFace {
     ) {
         let (horizontal, vertical) = offsets;
         let body = table_body(bounds, self.metrics());
-        let pitch = table_row_pitch(&self.skin);
+        let pitch = table_row_pitch(&self.skin.table);
         let visible = visible_rows(self.rows().len(), pitch, body.h, vertical);
         let mut rows = DrawListBuilder::default();
         for index in visible {
@@ -188,7 +188,8 @@ impl TableFace {
                 table_row_rect(bounds, columns, index, horizontal, vertical, self.metrics());
             self.paint_row(&mut rows, text, index, row_bounds, interaction, columns);
         }
-        let listed = table_content_height(self.rows().len(), &self.skin) + self.skin.table.grid_gap;
+        let listed =
+            table_content_height(self.rows().len(), &self.skin.table) + self.skin.table.grid_gap;
         let below = body.y + listed - vertical;
         if below < body.y + body.h {
             rows.fill_rect(
@@ -519,7 +520,7 @@ fn paint_vertical_scrollbar(
     columns: &[ColumnLayout],
 ) {
     let body = table_body(bounds, paint.metrics());
-    let content = table_content_height(paint.rows().len(), &paint.skin);
+    let content = table_content_height(paint.rows().len(), &paint.skin.table);
     let Some(rail) = table_vertical_scrollbar_rect(
         bounds,
         columns,

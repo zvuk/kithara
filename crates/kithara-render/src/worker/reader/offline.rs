@@ -56,7 +56,6 @@ fn wait_until(receiver: &PcmReceiver, watchdog: &mut HangDetector, available: im
             watchdog.tick();
         }
         receiver.wake.wake();
-        let _real_io = kithara_platform::flash::real_io();
         let remaining = watchdog.remaining();
         kithara::probe_event!(pcm_wait_started);
         ready.wait_timeout(since, remaining);

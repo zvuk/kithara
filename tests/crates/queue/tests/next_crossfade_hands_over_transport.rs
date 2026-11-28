@@ -106,7 +106,7 @@ fn current_changed_to(events: &mut EventReceiver<QueueEvent>, id: TrackId) -> bo
     seen
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 #[case::one_second_fade(1.0, None)]
 #[case::the_apps_five_second_fade(5.0, None)]
 #[case::five_second_fade_at_a_set_tempo(5.0, Some(1.06))]

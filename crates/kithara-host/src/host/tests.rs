@@ -65,7 +65,7 @@ async fn hosts_report_their_configured_session_mode() {
 }
 
 #[cfg(feature = "offline")]
-#[kithara::test(native, tokio)]
+#[kithara::test(native, tokio, timeout(Quick))]
 #[kithara::hang_watchdog]
 async fn an_offline_deck_publishes_owner_commands_without_a_render_pull() {
     use kithara_platform::time::{self, Duration, WallInstant};

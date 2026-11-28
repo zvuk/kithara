@@ -518,7 +518,7 @@ async fn suggestions_are_capped_and_choosing_one_searches_its_text() {
 }
 
 #[kithara::test]
-async fn suggestion_failure_keeps_catalogue_rows_and_stale_replies_are_dropped() {
+async fn stale_suggestion_replies_are_dropped() {
     let empty = Bytes::from(
         json!({"data":{"search":{"tracks":{"items":[],"page":{"total":0,"cursor":null}}}}})
             .to_string(),
@@ -560,7 +560,10 @@ async fn suggestion_failure_keeps_catalogue_rows_and_stale_replies_are_dropped()
     .await
     .expect("the old query's suggestions must not replace the new query's");
     release(source, &net).await;
+}
 
+#[kithara::test]
+async fn suggestion_failure_keeps_catalogue_rows() {
     let net = DelayedNet::new(Unimock::new((
         NetMock::post_bytes
             .next_call(matching!(_, _, _))

@@ -308,7 +308,7 @@ async fn host_ride() -> HostRide {
     }
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Quick))]
 async fn the_host_grid_places_every_beat_on_the_frame_nearest_its_computed_time() {
     let ride = host_ride().await;
     let beats = computed_beats(&ride.stretches(), ride.end);
@@ -343,7 +343,7 @@ async fn the_host_grid_places_every_beat_on_the_frame_nearest_its_computed_time(
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Quick))]
 async fn the_metronome_clicks_on_the_frame_nearest_every_computed_beat() {
     let ride = host_ride().await;
     let beats = computed_beats(&ride.stretches(), ride.end);
@@ -504,7 +504,7 @@ fn first_difference(heard: &[f32], expected: &[f32]) -> Option<(usize, f32, f32)
         })
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 async fn the_live_metronome_lands_on_its_own_recording_with_no_flam() {
     let recording = recorded_metronome().await;
     assert_eq!(

@@ -348,14 +348,16 @@ fn constant_track(value: f32, frames: usize) -> Vec<u8> {
         .collect()
 }
 
+/// One stereo callback at the largest census block, 1024 frames; the census
+/// replays it from its start on every callback.
 #[kithara::asset(ext = "f32le", content_type = "application/octet-stream")]
 #[case::one(1)]
 #[case::two(2)]
 #[case::three(3)]
 #[case::four(4)]
-fn deadline_track(index: u16) -> Vec<u8> {
+fn deadline_block(index: u16) -> Vec<u8> {
     let value = f32::from(index) * 0.02;
-    vec![value; 14_400_000]
+    vec![value; 2_048]
         .into_iter()
         .flat_map(f32::to_le_bytes)
         .collect()

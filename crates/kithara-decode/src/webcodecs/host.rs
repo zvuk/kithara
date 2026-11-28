@@ -7,9 +7,9 @@ use std::{
 use js_sys::{Float32Array, Object, Uint8Array};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{
-    sync::mpsc::{self, TryRecvError},
+    sync::mpsc,
     thread::{assert_not_main_thread, keep_worker_alive, spawn_named},
-    time::{self, Duration},
+    time::Duration,
     tokio::task::spawn as task_spawn,
 };
 use kithara_signal::AudioSpec;
@@ -189,23 +189,10 @@ where
     keep_worker_alive();
 
     task_spawn(async move {
-        const POLL_IDLE: Duration = Duration::from_millis(4);
         let mut decoders = HashMap::new();
 
-        'outer: loop {
-            let mut worked = false;
-            loop {
-                match cmd_rx.try_recv() {
-                    Ok(cmd) => {
-                        worked = true;
-                        dispatch(cmd, &mut decoders, &pools).await;
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(_) => break 'outer,
-                }
-            }
-            let pause = if worked { Duration::ZERO } else { POLL_IDLE };
-            time::sleep(pause).await;
+        while let Ok(cmd) = cmd_rx.recv_async().await {
+            dispatch(cmd, &mut decoders, &pools).await;
         }
 
         for (decoder_id, state) in decoders {
@@ -690,7 +677,7 @@ mod tests {
         (cmd, out)
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+    #[kithara::test(wasm, timeout(Network))]
     async fn composed_mp3_reaches_eof_with_pcm(tone_mp3: &'static [u8]) {
         use symphonia::{
             core::{
@@ -754,7 +741,7 @@ mod tests {
         assert!(total_frames > 0, "no PCM through ComposedDecoder");
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(60)))]
+    #[kithara::test(wasm, timeout(Long))]
     async fn real_mp3_frames_produce_pcm(tone_mp3: &'static [u8]) {
         use symphonia::{
             core::{
@@ -818,7 +805,7 @@ mod tests {
         panic!("no PCM from WebCodecs for 64 real mp3 frames");
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(30)))]
+    #[kithara::test(wasm, timeout(Long))]
     async fn host_flushes_empty_configured_decoder() {
         let (cmd, out) = open_host();
         cmd.send(HostCmd::Configure {
@@ -852,7 +839,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(30)))]
+    #[kithara::test(wasm, timeout(Long))]
     async fn host_replies_error_to_garbage_configure() {
         let (cmd, out) = open_host();
         cmd.send(HostCmd::Configure {

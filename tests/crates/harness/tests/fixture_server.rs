@@ -1,9 +1,8 @@
-use kithara::platform::time::Duration;
 use kithara_integration_tests::{HlsFixtureBuilder, TestServerHelper, kithara};
 use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(tokio, hang_timeout_secs(1))]
 async fn test_test_server_helper_serves_audio_fixture_urls(
     #[future(awt)] server: TestServerHelper,
 ) {
@@ -18,7 +17,7 @@ async fn test_test_server_helper_serves_audio_fixture_urls(
     assert!(mp3_url.path().ends_with(".mp3"));
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, hang_timeout_secs(1))]
 #[case("wav", "audio/wav", "WAV file")]
 #[case("mp3", "audio/mpeg", "MP3 file")]
 async fn test_test_server_helper_serves_format(
@@ -61,7 +60,7 @@ async fn test_test_server_helper_serves_format(
     assert!(content_length > 0, "{}: content length should be > 0", desc);
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, hang_timeout_secs(1))]
 async fn test_create_packaged_hls_returns_stable_typed_urls(
     #[future(awt)] server: TestServerHelper,
 ) {

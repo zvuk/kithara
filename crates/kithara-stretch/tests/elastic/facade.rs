@@ -526,7 +526,7 @@ fn transitional_eof_preserves_every_indexed_marker(
     }
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

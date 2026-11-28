@@ -396,7 +396,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(timeout(Quick))]
     fn scalar_simd_and_fallback_crossovers_keep_exact_state_across_partitions_and_retunes() {
         for bands in [1, 3, 10] {
             parity::<1>(bands);

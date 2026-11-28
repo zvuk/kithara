@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(driver_arguments("--log-path='unclosed"), None);
     }
 
-    #[kithara::test(native, tokio, timeout(Duration::from_secs(1)))]
+    #[kithara::test(native, tokio, timeout(Quick))]
     async fn report_deadline_bounds_a_stalled_script_call() {
         let server = TestHttpServer::new(Router::new().route(
             "/session/test/execute/sync",

@@ -32,7 +32,7 @@ use std::{
 use kithara::{
     assets::{AssetResource, AssetSource, AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
-    platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    platform::{CancelToken, sync::Arc, tokio::task::spawn_blocking},
     stream::{SourceError, Stream, StreamError},
 };
 use kithara_integration_tests::{
@@ -52,7 +52,7 @@ mod consts {
     pub(super) const INIT_DATA: &[u8] = b"V0-INIT:ACQUIRE_OBSTRUCTION";
 }
 
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
+#[kithara::test(tokio, serial, hang_timeout_secs(1))]
 async fn stale_tmp_from_a_dead_writer_does_not_brick_a_segment() {
     let fixture = Fixture::new(false).await;
     let orphan = fixture.tmp_path();
@@ -91,7 +91,7 @@ async fn stale_tmp_from_a_dead_writer_does_not_brick_a_segment() {
 ///
 /// A directory at the tmp path is the cheapest permanent acquire failure that
 /// needs no fault injection: the claim's `open` can never succeed on it.
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
+#[kithara::test(tokio, serial, hang_timeout_secs(1))]
 async fn a_segment_that_can_never_be_acquired_fails_the_read() {
     let fixture = Fixture::new(false).await;
     let blocked = fixture.tmp_path();
@@ -108,7 +108,7 @@ async fn a_segment_that_can_never_be_acquired_fails_the_read() {
     );
 }
 
-#[kithara::test(tokio, serial, timeout(Duration::from_secs(15)), hang_timeout_secs(1))]
+#[kithara::test(tokio, serial, hang_timeout_secs(1))]
 async fn an_init_that_can_never_be_acquired_fails_the_read() {
     let fixture = Fixture::new(true).await;
     assert_eq!(fixture.server.init_bytes(0), consts::INIT_DATA);

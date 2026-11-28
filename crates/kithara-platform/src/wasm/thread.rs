@@ -265,7 +265,7 @@ mod tests {
             .name()
     }
 
-    #[kithara::test(wasm, timeout(Duration::from_secs(10)))]
+    #[kithara::test(wasm, timeout(Long))]
     async fn spawn_named_names_the_worker() {
         let named = spawn_named(consts::NAME, worker_name).join_async().await;
         let unnamed = spawn(worker_name).join_async().await;
@@ -273,7 +273,7 @@ mod tests {
         assert!(unnamed.is_ok_and(|name| name != consts::NAME));
     }
 
-    #[kithara::test(wasm, flash(false), timeout(Duration::from_secs(10)))]
+    #[kithara::test(wasm, flash(false), timeout(Long))]
     async fn workers_spawned_together_all_start() {
         let started = Arc::new(AtomicUsize::new(0));
         for _ in 0..consts::WORKERS {

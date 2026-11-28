@@ -211,7 +211,7 @@ mod fills {
     /// mixes up logical and physical points quietly lays the document out in a
     /// quarter of the glass. Rasterising and looking at the far corner is the
     /// cheapest honest check that the two agree.
-    #[kithara::test]
+    #[kithara::test(timeout(Long))]
     fn the_document_reaches_the_far_corner_at_any_scale() {
         for scale in [1.0, 2.0] {
             let width = num_traits::cast::AsPrimitive::<u32>::as_(1100.0 * scale);

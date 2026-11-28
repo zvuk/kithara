@@ -197,7 +197,7 @@ pub(super) struct CapturedAudio {
     pub(super) start_positions_secs: Vec<f64>,
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(300)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::mp3_one_44100(&CASES[0])]
 #[case::mp3_distinct_two_48000(&CASES[1])]
 #[case::mp3_alternating_four_44100(&CASES[2])]
@@ -211,7 +211,7 @@ async fn no_sync_real_media_matrix_is_continuous_and_unsynchronized(#[case] case
     run_real_media_matrix(false, sources, cases).await;
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(360)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Network))]
 #[ignore = "writes opt-in listening artifacts; run explicitly with KITHARA_AUDIO_ARTIFACT_DIR"]
 async fn record_no_sync_real_media_artifacts() {
     let sources = real_media_sources(CASES).await;

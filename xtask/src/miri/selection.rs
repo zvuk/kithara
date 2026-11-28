@@ -126,7 +126,7 @@ mod tests {
         let syntax = syn::parse_file(
             r#"
             mod nested {
-                #[kithara::test(miri, tokio, timeout(std::time::Duration::from_secs(3)))]
+                #[kithara::test(miri, tokio, timeout(Long))]
                 async fn selected() {}
                 #[kithara::test] fn ordinary() {}
                 #[kithara::test(tokio)] async fn native() {}
@@ -139,6 +139,15 @@ mod tests {
         );
         let invalid = syn::parse_file("#[kithara::test(miri, typo)] fn broken() {}")?;
         assert!(marked_tests(&invalid).is_err());
+        let duration = syn::parse_file(
+            "#[kithara::test(miri, timeout(std::time::Duration::from_secs(3)))] fn broken() {}",
+        )?;
+        let error = marked_tests(&duration).expect_err("duration expressions must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("timeout requires a TestBudget tier name")
+        );
         Ok(())
     }
 }

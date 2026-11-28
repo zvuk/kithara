@@ -15,7 +15,8 @@ use std::fs;
 const MAX_THREADS: usize = 128;
 
 /// One line per live thread: name, id, scheduler state, CPU ticks, nice,
-/// wait channel, syscall state, runtime counters and scheduling policy/switches.
+/// wait channel, syscall state, runtime counters, scheduling policy/switches,
+/// and the mapping that holds the PC of a thread blocked outside a syscall.
 /// Name first because readings join engine holders by name before truncation.
 ///
 /// Empty on targets without `/proc`, and on any thread whose files vanish
@@ -48,9 +49,43 @@ fn describe(tid: &str) -> Option<String> {
     let sched = read_trimmed(&format!("/proc/self/task/{tid}/sched"))
         .and_then(|value| parse_sched(&value))
         .unwrap_or_else(|| "-".to_owned());
+    let pc_map = fault_pc(&syscall)
+        .and_then(|pc| {
+            let maps = fs::read_to_string("/proc/self/maps").ok()?;
+            map_containing(&maps, pc).map(str::to_owned)
+        })
+        .unwrap_or_else(|| "-".to_owned());
     Some(format!(
-        "name={name} tid={tid} state={state} cpu_ticks={cpu_ticks} nice={nice} wchan={wchan} schedstat={schedstat:?} syscall={syscall:?} sched={sched:?}"
+        "name={name} tid={tid} state={state} cpu_ticks={cpu_ticks} nice={nice} wchan={wchan} schedstat={schedstat:?} syscall={syscall:?} sched={sched:?} pc_map={pc_map:?}"
     ))
+}
+
+/// The user PC of a thread blocked outside any syscall, such as in a page
+/// fault: the kernel then reports `syscall` as `-1 <sp> <pc>`.
+fn fault_pc(syscall: &str) -> Option<u64> {
+    let mut fields = syscall.split_whitespace();
+    if fields.next()? != "-1" {
+        return None;
+    }
+    let pc = fields.nth(1)?;
+    u64::from_str_radix(pc.strip_prefix("0x").unwrap_or(pc), 16).ok()
+}
+
+/// The `maps` line whose half-open address range holds `pc`, which names the
+/// mapped object and its file offset.
+fn map_containing(maps: &str, pc: u64) -> Option<&str> {
+    maps.lines().find(|line| {
+        line.split_whitespace()
+            .next()
+            .and_then(|range| range.split_once('-'))
+            .and_then(|(start, end)| {
+                Some((
+                    u64::from_str_radix(start, 16).ok()?,
+                    u64::from_str_radix(end, 16).ok()?,
+                ))
+            })
+            .is_some_and(|(start, end)| (start..end).contains(&pc))
+    })
 }
 
 fn parse_sched(sched: &str) -> Option<String> {
@@ -106,7 +141,28 @@ fn parse_stat(stat: &str) -> Option<(String, u64, i32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_sched, parse_stat, snapshot};
+    use super::{fault_pc, map_containing, parse_sched, parse_stat, snapshot};
+
+    #[test]
+    fn a_fault_pc_resolves_to_the_mapping_whose_half_open_range_holds_it() {
+        let maps = "garbage line\n\
+            7f0000000000-7f0000001000 r--p 00000000 08:01 11 /usr/lib/libc.so.6\n\
+            7f0000001000-7f0000002000 r-xp 00001000 08:01 11 /usr/lib/libc.so.6\n\
+            7f0000400000-7f0000500000 r-xp 00028000 08:01 22 /usr/lib/libvulkan.so.1\n";
+        let pc = fault_pc("-1 0x7ffc00000000 0x7f0000001000");
+        assert_eq!(pc, Some(0x7f00_0000_1000));
+        assert_eq!(
+            pc.and_then(|pc| map_containing(maps, pc)),
+            Some("7f0000001000-7f0000002000 r-xp 00001000 08:01 11 /usr/lib/libc.so.6")
+        );
+        assert_eq!(
+            map_containing(maps, 0x7f00_004f_ffff),
+            Some("7f0000400000-7f0000500000 r-xp 00028000 08:01 22 /usr/lib/libvulkan.so.1")
+        );
+        assert_eq!(map_containing(maps, 0x7f00_0050_0000), None);
+        assert_eq!(fault_pc("202 0x1 0x2 0x3 0x4 0x5 0x6 0x7ffc 0x7f00"), None);
+        assert_eq!(fault_pc("running"), None);
+    }
 
     #[test]
     fn scheduler_fields_preserve_policy_slice_and_both_switch_causes() {
@@ -147,7 +203,8 @@ mod tests {
                 && line.contains(" nice=")
                 && line.contains(" schedstat=")
                 && line.contains(" syscall=")
-                && line.contains(" sched=")),
+                && line.contains(" sched=")
+                && line.contains(" pc_map=")),
             "every line carries the full reading: {lines:?}"
         );
     }

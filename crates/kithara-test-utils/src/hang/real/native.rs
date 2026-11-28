@@ -405,7 +405,6 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
             .create_new(true)
             .open(&temp)?;
         output.write_all(payload.as_bytes())?;
-        output.sync_data()?;
         drop(output);
         fs::rename(&temp, &file)?;
         Ok::<(), std::io::Error>(())

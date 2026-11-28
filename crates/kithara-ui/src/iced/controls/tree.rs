@@ -4,15 +4,15 @@ use iced::{
     Element, Event, Rectangle, Renderer, Theme,
     advanced::widget::{Id, Operation},
     mouse::{Cursor, Interaction},
-    widget::canvas::{self, Action, Frame, Geometry},
+    widget::canvas::{self, Action, Geometry},
 };
-use kithara_platform::time::Instant;
+use kithara_platform::{sync::Arc, time::Instant};
 use num_traits::ToPrimitive;
 
-use super::{RetainedCanvas, RetainedCanvasState, snapped};
+use super::{Marks, RetainedCanvas, RetainedCanvasState, painted::shaped_with_resources, snapped};
 use crate::{
     atoms::tree::Tree,
-    backends::{finish, replay_ordered},
+    backends::replay_ordered,
     draw::Rect,
     engine::{
         ScrollConfig,
@@ -21,7 +21,7 @@ use crate::{
     iced::tree::index,
     interact::{Hit, ScrollAxis, iced as iced_interact},
     render::{InputOwner, Published},
-    shaping::TextContext,
+    shaping::{TextContext, TextResources},
 };
 
 pub(crate) fn tree_rows<'a>(
@@ -202,9 +202,6 @@ fn geometry(
     cursor: Cursor,
 ) -> Vec<Geometry> {
     let bounds = snapped(bounds);
-    let mut frame = Frame::new(renderer, bounds.size());
-    let mut text = state.text.borrow_mut();
-    let text = text.get_or_insert_with(|| picture.skin().text_resources.as_ref().into());
     let viewport = Rect {
         h: bounds.height,
         w: bounds.width,
@@ -218,14 +215,25 @@ fn geometry(
         bounds,
         cursor,
     );
-    let list = picture.row_commands(text, viewport, state.scroll.offset, hovered);
-    replay_ordered(&list, &mut frame, picture.skin().text_resources.as_ref());
-    vec![finish(frame.into_geometry())]
+    let resources = &picture.skin().text_resources;
+    let list = shaped_with_resources(&state.text, resources, |text| {
+        picture.row_commands(text, viewport, state.scroll.offset, hovered)
+    });
+    state.marks.picture(list);
+    state
+        .marks
+        .drawn(|cache, list| {
+            vec![cache.draw(renderer, bounds.size(), |frame| {
+                replay_ordered(list, frame, resources.as_ref());
+            })]
+        })
+        .expect("tree picture is retained before geometry replay")
 }
 
 #[derive(Default)]
 struct TreeState {
-    text: RefCell<Option<TextContext>>,
+    marks: Marks<()>,
+    text: RefCell<Option<(Arc<TextResources>, TextContext)>>,
     scroll: ScrollState,
     toggle: Option<ItemComponent>,
     path: String,
@@ -319,15 +327,19 @@ fn hovered_row(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc as GeometryArc;
+
     use iced::mouse;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
         builtin,
+        iced::controls::painted::picture_tests,
         interact::{Input, Outcome, PointerPhase, mouse as mouse_input},
         module::IconName,
         render::TreeRow,
+        shaping::FontId,
     };
 
     fn rows() -> [TreeRow<'static>; 3] {
@@ -481,5 +493,233 @@ mod tests {
         let mut other = sync_tree_scroll("tree/other", 0.0);
         other.custom(None, Rectangle::default(), &mut state);
         assert_eq!(state.scroll.offset, skin.tree.row_height);
+    }
+
+    fn tree_state(picture: &Tree, bounds: Rectangle, offset: f32) -> TreeState {
+        let mut state = TreeState::default();
+        let skin = picture.skin();
+        state.reconcile_scroll(
+            "tree/picture",
+            picture.row_count(),
+            skin.tree.row_height,
+            skin.tree.scrollbar_margin + skin.tree.scrollbar_width,
+        );
+        state.scroll.set_viewport(bounds.height);
+        state.sync("tree/picture", offset);
+        assert_eq!(state.scroll.offset, offset);
+        state
+    }
+
+    fn tree_picture(
+        picture: &Tree,
+        state: &TreeState,
+        renderer: &Renderer,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> iced_tiny_skia::geometry::Cache {
+        let mut drawn = geometry(picture, state, renderer, &Theme::Dark, bounds, cursor);
+        assert_eq!(drawn.len(), 1);
+        let Geometry::<Renderer>::Secondary(iced_tiny_skia::geometry::Geometry::Cache(cache)) =
+            drawn.pop().unwrap()
+        else {
+            panic!("the actual tree path must return prepared cached geometry");
+        };
+        assert!(!cache.primitives.is_empty());
+        assert!(cache.images.is_empty() && cache.text.is_empty());
+        cache
+    }
+
+    fn assert_tree_picture(
+        actual: &iced_tiny_skia::geometry::Cache,
+        fresh: &iced_tiny_skia::geometry::Cache,
+    ) {
+        assert!(!actual.primitives.is_empty() && !fresh.primitives.is_empty());
+        assert_eq!(actual.primitives.as_ref(), fresh.primitives.as_ref());
+        assert_eq!(actual.clip_bounds, fresh.clip_bounds);
+        assert!(actual.images.is_empty() && fresh.images.is_empty());
+        assert!(actual.text.is_empty() && fresh.text.is_empty());
+    }
+
+    fn assert_tree_changed(
+        before: &iced_tiny_skia::geometry::Cache,
+        changed: &iced_tiny_skia::geometry::Cache,
+        fresh: &iced_tiny_skia::geometry::Cache,
+    ) {
+        assert!(!GeometryArc::ptr_eq(
+            &before.primitives,
+            &changed.primitives
+        ));
+        assert_ne!(before.primitives.as_ref(), changed.primitives.as_ref());
+        assert_tree_picture(changed, fresh);
+    }
+
+    fn changed_tree_picture(
+        before: &iced_tiny_skia::geometry::Cache,
+        picture: &Tree,
+        state: &TreeState,
+        renderer: &Renderer,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> iced_tiny_skia::geometry::Cache {
+        let changed = tree_picture(picture, state, renderer, bounds, cursor);
+        let fresh = tree_picture(
+            picture,
+            &tree_state(picture, bounds, state.scroll.offset),
+            renderer,
+            bounds,
+            cursor,
+        );
+        assert_tree_changed(before, &changed, &fresh);
+        changed
+    }
+
+    #[kithara::test]
+    fn unchanged_tree_draws_reuse_nonempty_backing() {
+        let skin = picture_tests::skin(FontId::InterRegular);
+        let picture = Tree::new(&rows(), None, &skin);
+        let renderer = picture_tests::renderer();
+        let bounds = Rectangle::with_size(iced::Size::new(240.0, skin.tree.row_height * 1.5));
+        let state = tree_state(&picture, bounds, 0.0);
+        let first = tree_picture(&picture, &state, &renderer, bounds, Cursor::Unavailable);
+        let second = tree_picture(&picture, &state, &renderer, bounds, Cursor::Unavailable);
+        let third = tree_picture(&picture, &state, &renderer, bounds, Cursor::Unavailable);
+        assert!(GeometryArc::ptr_eq(&first.primitives, &second.primitives));
+        assert!(GeometryArc::ptr_eq(&second.primitives, &third.primitives));
+        assert_tree_picture(&first, &second);
+        assert_tree_picture(&second, &third);
+    }
+
+    #[kithara::test]
+    fn actual_unselected_hover_and_overflow_scroll_match_fresh_pictures() {
+        let skin = picture_tests::skin(FontId::InterRegular);
+        let source = rows();
+        assert!(!source[0].selected && !source[0].muted);
+        assert_ne!(
+            skin.rgba(skin.tree.row_hovered_fill),
+            crate::draw::TRANSPARENT
+        );
+        let picture = Tree::new(&source, None, &skin);
+        let renderer = picture_tests::renderer();
+        let bounds = Rectangle::with_size(iced::Size::new(240.0, skin.tree.row_height * 1.5));
+        assert!(picture.row_count().to_f32().unwrap() * skin.tree.row_height > bounds.height);
+        let mut state = tree_state(&picture, bounds, 0.0);
+        let before = tree_picture(&picture, &state, &renderer, bounds, Cursor::Unavailable);
+        let hovered = Cursor::Available(iced::Point::new(20.0, skin.tree.row_height * 0.5));
+        assert_eq!(
+            hovered_row(
+                picture.row_count(),
+                skin.tree.row_height,
+                0.0,
+                bounds,
+                hovered
+            ),
+            Some(0)
+        );
+        let hover = changed_tree_picture(&before, &picture, &state, &renderer, bounds, hovered);
+        let unhovered = changed_tree_picture(
+            &hover,
+            &picture,
+            &state,
+            &renderer,
+            bounds,
+            Cursor::Unavailable,
+        );
+        assert_tree_picture(&unhovered, &before);
+        let offset = skin.tree.row_height * 0.75;
+        state.sync("tree/picture", offset);
+        assert!(state.scroll.offset > 0.0);
+        assert_eq!(state.scroll.offset, offset);
+        changed_tree_picture(
+            &unhovered,
+            &picture,
+            &state,
+            &renderer,
+            bounds,
+            Cursor::Unavailable,
+        );
+    }
+
+    #[kithara::test]
+    fn changed_tree_label_bounds_and_used_colour_match_fresh_pictures() {
+        let skin = picture_tests::skin(FontId::InterRegular);
+        let source = rows();
+        let picture = Tree::new(&source, None, &skin);
+        let renderer = picture_tests::renderer();
+        let bounds = Rectangle::with_size(iced::Size::new(240.0, skin.tree.row_height * 1.5));
+        let state = tree_state(&picture, bounds, 0.0);
+        let before = tree_picture(&picture, &state, &renderer, bounds, Cursor::Unavailable);
+        let mut changed_rows = source;
+        changed_rows[0].label = "Changed visible label";
+        let changed_picture = Tree::new(&changed_rows, None, &skin);
+        let changed = changed_tree_picture(
+            &before,
+            &changed_picture,
+            &state,
+            &renderer,
+            bounds,
+            Cursor::Unavailable,
+        );
+
+        let wider = Rectangle {
+            width: bounds.width + 32.0,
+            ..bounds
+        };
+        let resized = changed_tree_picture(
+            &changed,
+            &changed_picture,
+            &state,
+            &renderer,
+            wider,
+            Cursor::Unavailable,
+        );
+
+        let mut coloured_skin = skin.clone();
+        assert_ne!(
+            skin.rgba(skin.tree.row_idle_text_color),
+            skin.rgba(skin.tree.row_selected_fill)
+        );
+        assert!(!changed_rows[0].selected && !changed_rows[0].muted);
+        coloured_skin.tree.row_idle_text_color = skin.tree.row_selected_fill;
+        let coloured_picture = Tree::new(&changed_rows, None, &coloured_skin);
+        changed_tree_picture(
+            &resized,
+            &coloured_picture,
+            &state,
+            &renderer,
+            wider,
+            Cursor::Unavailable,
+        );
+    }
+
+    #[kithara::test]
+    fn tree_font_owner_replacement_matches_fresh_ordered_primitives() {
+        let a = picture_tests::skin(FontId::InterRegular);
+        let b = picture_tests::skin(FontId::JetBrainsMonoRegular);
+        assert_eq!(a.tree, b.tree);
+        picture_tests::assert_font(&a, a.tree.label_text, FontId::InterRegular);
+        picture_tests::assert_font(&b, b.tree.label_text, FontId::JetBrainsMonoRegular);
+        let mut source = rows();
+        source[0].label = picture_tests::WORDS;
+        let first = Tree::new(&source, None, &a);
+        let changed = Tree::new(&source, None, &b);
+        let renderer = picture_tests::renderer();
+        let bounds = Rectangle::with_size(iced::Size::new(240.0, a.tree.row_height * 1.5));
+        let state = tree_state(&first, bounds, 0.0);
+        let before = tree_picture(&first, &state, &renderer, bounds, Cursor::Unavailable);
+        let retained_b = tree_picture(&changed, &state, &renderer, bounds, Cursor::Unavailable);
+        let fresh_b = tree_picture(
+            &changed,
+            &tree_state(&changed, bounds, 0.0),
+            &renderer,
+            bounds,
+            Cursor::Unavailable,
+        );
+        assert_tree_changed(&before, &retained_b, &fresh_b);
+        let again = tree_picture(&changed, &state, &renderer, bounds, Cursor::Unavailable);
+        assert!(GeometryArc::ptr_eq(
+            &retained_b.primitives,
+            &again.primitives
+        ));
+        assert_tree_picture(&again, &fresh_b);
     }
 }

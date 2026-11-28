@@ -77,7 +77,7 @@ fn wait_for_persisted_deletion(root: &Path, key: &ResourceKey) -> AssetStore<Tes
     }
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_checkpoint_persists_committed_resource_across_rebuild() {
     let dir = tempdir().unwrap();
     let root = "p4-persist";
@@ -119,7 +119,7 @@ enum Deletion {
     Asset,
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 #[case::remove_resource(Deletion::Resource)]
 #[case::delete_asset(Deletion::Asset)]
 fn a_deletion_persists_in_availability_across_rebuild(#[case] deletion: Deletion) {
@@ -169,7 +169,7 @@ fn a_deletion_persists_in_availability_across_rebuild(#[case] deletion: Deletion
     assert!(!reopened.contains_range(&key, 0..8));
 }
 
-#[kithara::test(native, flash(false), timeout(Duration::from_secs(5)))]
+#[kithara::test(native, flash(false))]
 fn worker_persists_resource_deletion_without_checkpoint() {
     let dir = tempdir().unwrap();
     let root = "worker-delete-persist";
@@ -213,7 +213,7 @@ fn worker_persists_resource_deletion_without_checkpoint() {
     assert!(reopened.available_ranges(&key).is_empty());
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
     let dir = tempdir().unwrap();
     let root = "p4-partial";
@@ -252,7 +252,7 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
     assert_eq!(scope.store().final_len(&key), None);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_checkpoint_without_prior_writes_is_noop() {
     let dir = tempdir().unwrap();
     let root = "p4-empty";
@@ -276,7 +276,7 @@ fn disk_checkpoint_without_prior_writes_is_noop() {
     assert_eq!(scope2.store().final_len(&key), None);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
     let root = "p4-mem";
 
@@ -299,7 +299,7 @@ fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
     assert_eq!(scope.store().final_len(&key), None);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn disk_checkpoint_is_idempotent() {
     let dir = tempdir().unwrap();
     let root = "p4-idem";

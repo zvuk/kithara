@@ -89,7 +89,7 @@ async fn wait_for_position_at_least(
     tracing("kithara_queue=info,kithara_audio=info,kithara_hls=debug,kithara_stream=info"),
     tokio,
     multi_thread,
-    timeout(Duration::from_secs(360))
+    timeout(Network)
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]

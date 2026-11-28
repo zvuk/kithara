@@ -21,9 +21,8 @@ Cross-crate test-runtime support: `#[kithara::test]` macro re-exports, USDT prob
 ```rust
 use kithara_test_utils::kithara;
 
-#[kithara::test(tokio, timeout(std::time::Duration::from_secs(10)))]
+#[kithara::test(tokio, timeout(Long))]
 async fn smoke() {
-    // An explicit timeout also applies with default features disabled.
 }
 ```
 
@@ -45,6 +44,19 @@ trait Service {
 Probe sites compile to no-ops unless the emitting crate's `usdt` feature is
 enabled. On macOS, `usdt` emits native DTrace probes; on other targets, it
 emits the same probe records through `tracing`.
+
+`TestBudget` resolves named wall-time allowances for real, Flash, RTSan and Miri
+execution. On real clocks and under RTSan the levels are `Quick` (1 s), `Long`
+(30 s), `Heavy` (90 s) and `Network` (600 s, live-network and hand-run tests
+only). Every level is 1 s under Flash. Under Miri `Quick` is 1 min and the other
+levels are 8 min. Tests default to `Quick`; `timeout(...)` accepts only these
+tier names.
+Duration expressions and aliases are rejected by the attribute parser. With
+defaults disabled, enable `test` for these APIs.
+
+Set `KITHARA_TEST_CLOCK_MEASUREMENT=1` to emit per-body clock receipts. Native
+tests read it at invocation time; Wasm tests read it at build time and report
+through the browser console without an OS process ID.
 
 ## Key Types
 

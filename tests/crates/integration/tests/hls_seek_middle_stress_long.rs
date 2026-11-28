@@ -252,7 +252,7 @@ async fn wait_for_gate_request(player: &mut OfflinePlayer, gate: &SegmentGateHan
     panic!("{label}: gated segment GET was never requested before release");
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
@@ -379,12 +379,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(
     }
 }
 
-#[kithara::test(
-    tokio,
-    multi_thread,
-    timeout(Duration::from_secs(120)),
-    hang_timeout_secs(10)
-)]
+#[kithara::test(tokio, multi_thread, timeout(Network), hang_timeout_secs(10))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]

@@ -155,7 +155,7 @@ fn write_wav_f32(path: &Path, interleaved: &[f32], sample_rate: u32, channels: u
 #[kithara::test(
     tokio,
     multi_thread,
-    timeout(Duration::from_secs(600)),
+    timeout(Network),
     tracing("kithara_audio=debug,kithara_hls=debug,kithara_stream=debug")
 )]
 #[cfg_attr(

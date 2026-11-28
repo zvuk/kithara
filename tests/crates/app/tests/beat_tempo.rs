@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 use kithara::{
     analysis::{AnalysisDemand, BeatAnalysisConfig, BeatArtifact},
     assets::StorageBackend,
-    platform::{CancelToken, time::Duration},
+    platform::CancelToken,
     play::{ResourceConfig, ResourceSrc},
 };
 use kithara_app::{
@@ -166,7 +166,7 @@ fn scalar_tempo_disagrees_with_retained_marker_ordinals() {
 }
 
 #[ignore = "needs a music library named through KITHARA_TEMPO_RECORDS"]
-#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, timeout(Network))]
 async fn the_reported_tempo_matches_the_known_record(records: Vec<(String, f64)>) {
     for (path, known) in records {
         let (grid, rate) = grid_of(&path).await;
@@ -184,7 +184,7 @@ async fn the_reported_tempo_matches_the_known_record(records: Vec<(String, f64)>
 }
 
 #[ignore = "needs a music library named through KITHARA_TEMPO_RECORDS"]
-#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
+#[kithara::test(tokio, timeout(Network))]
 async fn the_reported_tempo_is_the_tempo_the_markers_march_at(records: Vec<(String, f64)>) {
     for (path, _known) in records {
         let (grid, rate) = grid_of(&path).await;

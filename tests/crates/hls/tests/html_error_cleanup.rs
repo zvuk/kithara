@@ -106,7 +106,7 @@ fn build_scenario(
 ///   the master may remain cached (it succeeded) but no `v0*` orphan may exist
 ///   (exercises the `acquire_resource` → `InvalidContent` path at
 ///   `atomic_fetch.rs:67`).
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio)]
 #[case::master_all_html(HtmlScenario::AllHtml, "HTML master playlist must fail Stream::new")]
 #[case::media_after_valid_master(
     HtmlScenario::PartialHtml,
@@ -168,7 +168,7 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
 /// Downloader. The current behaviour issues a single `Stream::new` attempt
 /// which fails immediately; if future code wires auto-retry into the
 /// transport, the hit count must still be bounded.
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, timeout(Long))]
 async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let master = helper.register_behavior(FixtureBehavior {

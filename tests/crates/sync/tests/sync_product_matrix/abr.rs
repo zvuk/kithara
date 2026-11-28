@@ -1,7 +1,7 @@
 use kithara::{
     abr::{AbrEvent, AbrReason},
     hls::AbrMode,
-    platform::{sync::Arc, time::Duration},
+    platform::sync::Arc,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, auto, cochlea::synchronization_failures, fixture_protocol::DelayRule,
@@ -16,6 +16,7 @@ use super::{
 
 async fn rhythmic_ladder(mode: AbrMode) -> PreparedSources {
     let mut sources = synthetic_sources().await;
+    sources.real_network = true;
     let sample_rate = SEQUENTIAL_SYNC.sample_rate;
     let segment_frames = usize::try_from(sample_rate).expect("fixture sample rate");
     let segment_bytes = segment_frames * usize::from(CHANNELS) * size_of::<i16>();
@@ -41,16 +42,22 @@ async fn rhythmic_ladder(mode: AbrMode) -> PreparedSources {
             ..Default::default()
         }]);
     }
-    let hls = sources
-        .server
-        .create_hls(ladder)
+    // Register delayed responses on the same real clock as ABR's network samples.
+    let hls = kithara::platform::flash::with_ambient(false, sources.server.create_hls(ladder))
         .await
         .expect("local HLS ladder for the authored rhythm");
     sources.paths[0] = hls.master_url().to_string();
     sources
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    timeout(Long),
+    tracing("kithara_abr=debug,kithara_hls=debug")
+)]
 #[case::manual_then_auto(AbrMode::manual(1))]
 #[case::autonomous(auto(0))]
 async fn a_synced_hls_rung_change_keeps_the_pcm_beat_grid(#[case] mode: AbrMode) {
@@ -131,7 +138,7 @@ async fn a_synced_hls_rung_change_keeps_the_pcm_beat_grid(#[case] mode: AbrMode)
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::after_two_seconds(2)]
 #[case::after_four_seconds(4)]
 async fn a_synced_aac_to_flac_promotion_keeps_native_pcm_time(#[case] switch_at: usize) {

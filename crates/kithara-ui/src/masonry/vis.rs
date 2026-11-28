@@ -96,13 +96,14 @@ struct PreparedDraw {
 #[non_exhaustive]
 pub struct VisPass {
     bind_group_layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::RenderPipeline,
+    pipeline: Option<wgpu::RenderPipeline>,
+    format: wgpu::TextureFormat,
     draws: Vec<PreparedDraw>,
     slots: Vec<UniformSlot>,
 }
 
 impl VisPass {
-    /// Builds the retained pass for the Vello intermediate target format.
+    /// Creates a retained pass, compiling its pipeline on the first visible draw.
     #[must_use]
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -118,46 +119,10 @@ impl VisPass {
                 count: None,
             }],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("kithara_ui.vis.retained.pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kithara_ui.vis.retained.shader"),
-            source: ShaderSource::Wgsl(SHADER.into()),
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("kithara_ui.vis.retained.pipeline"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleList,
-                ..PrimitiveState::default()
-            },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: ColorWrites::ALL,
-                })],
-            }),
-            multiview: None,
-            cache: None,
-        });
         Self {
             bind_group_layout,
-            pipeline,
+            pipeline: None,
+            format,
             draws: Vec::new(),
             slots: Vec::new(),
         }
@@ -195,6 +160,9 @@ impl VisPass {
             queue.write_buffer(&slot.buffer, 0, &draw.uniforms.bytes());
         }
 
+        let pipeline = self
+            .pipeline
+            .get_or_insert_with(|| pipeline(device, &self.bind_group_layout, self.format));
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("kithara_ui.vis.retained.encoder"),
         });
@@ -214,7 +182,7 @@ impl VisPass {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(pipeline);
             for (draw, slot) in self.draws.iter().zip(&self.slots) {
                 let [x, y, width, height] = draw.scissor;
                 pass.set_scissor_rect(x, y, width, height);
@@ -224,6 +192,50 @@ impl VisPass {
         }
         queue.submit([encoder.finish()]);
     }
+}
+
+fn pipeline(
+    device: &wgpu::Device,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("kithara_ui.vis.retained.pipeline_layout"),
+        bind_group_layouts: &[bind_group_layout],
+        push_constant_ranges: &[],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("kithara_ui.vis.retained.shader"),
+        source: ShaderSource::Wgsl(SHADER.into()),
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("kithara_ui.vis.retained.pipeline"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: PrimitiveState {
+            topology: PrimitiveTopology::TriangleList,
+            ..PrimitiveState::default()
+        },
+        depth_stencil: None,
+        multisample: MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: ColorWrites::ALL,
+            })],
+        }),
+        multiview: None,
+        cache: None,
+    })
 }
 
 struct UniformSlot {
@@ -397,6 +409,8 @@ mod tests {
         queue.submit([clear.finish()]);
 
         let mut pass = VisPass::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        pass.render(&device, &queue, &view, &[], 1.0, [SIDE, SIDE]);
+        assert!(pass.pipeline.is_none(), "an empty frame needs no pipeline");
         pass.render(
             &device,
             &queue,
@@ -408,6 +422,11 @@ mod tests {
             1.0,
             [SIDE, SIDE],
         );
+        assert!(
+            pass.pipeline.is_some(),
+            "a visible declaration needs a pipeline"
+        );
+        pass.render(&device, &queue, &view, &[], 1.0, [SIDE, SIDE]);
 
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("kithara_ui.vis.retained.test.readback"),

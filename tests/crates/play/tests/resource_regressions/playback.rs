@@ -10,7 +10,7 @@ use super::*;
 /// `crossfade_hls_to_mp3_repeats`, not here.
 #[kithara::test(
     tokio,
-    timeout(Duration::from_secs(60)),
+    timeout(Long),
     hang_timeout_secs(10),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_play=debug,kithara_stream=debug")
 )]
@@ -107,7 +107,7 @@ async fn stress_offline_crossfade_no_gaps(
 
 /// MP3 through `ResourceConfig` (same path as kithara-app) must probe, decode,
 /// and report correct duration — with and without extension/hint.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
+#[kithara::test(tokio, timeout(Long), hang_timeout_secs(5))]
 #[cfg_attr(not(target_os = "android"), case::with_extension_symphonia(mp3_extension().await, DecoderBackend::Symphonia))]
 #[case::with_extension_apple(platform = apple, mp3_extension().await, DecoderBackend::Apple)]
 #[cfg_attr(
@@ -205,7 +205,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
 /// `live_remote_resource_decodes_with_duration` (now in
 /// `live_remote_network.rs`) but against `TestServerHelper`, so it stays in the
 /// regular suite: no VPN, no internet.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(10))]
+#[kithara::test(tokio, timeout(Quick), hang_timeout_secs(10))]
 #[cfg_attr(not(target_os = "android"), case::mp3_symphonia(local_mp3().await, DecoderBackend::Symphonia))]
 #[case::mp3_apple(platform = apple, local_mp3().await, DecoderBackend::Apple)]
 #[cfg_attr(

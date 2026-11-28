@@ -52,12 +52,7 @@ fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: Pools) -> AssetSt
 /// Requires internet (silvercomet) and corporate VPN (zvuk).
 // flash(false): live-internet sockets are invisible to the flash engine; virtual
 // sleep/deadline would outrun the real download and fail spuriously.
-#[kithara::test(
-    tokio,
-    flash(false),
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(10)
-)]
+#[kithara::test(tokio, flash(false), timeout(Long), hang_timeout_secs(10))]
 #[cfg_attr(
     not(target_os = "android"),
     case::silvercomet_mp3_symphonia(
@@ -227,12 +222,7 @@ async fn live_remote_resource_decodes_with_duration(
 /// `duration_seconds()` is the observation the GUI reads.
 // flash(false): live-internet sockets are invisible to the flash engine; a virtual
 // 500ms pacing sleep would elapse before the real metadata fetch completes.
-#[kithara::test(
-    tokio,
-    flash(false),
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(10)
-)]
+#[kithara::test(tokio, flash(false), timeout(Long), hang_timeout_secs(10))]
 #[cfg_attr(
     not(target_os = "android"),
     case::silvercomet_mp3_symphonia(

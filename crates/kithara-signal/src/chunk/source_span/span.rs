@@ -884,20 +884,20 @@ mod tests {
             .expect("distance")
         };
         for probe in probes {
-            for from in 0..frames {
+            let mut nearest = frames;
+            for from in (0..frames).rev() {
+                if distance(probe, at(from)).compare(distance(probe, at(nearest)))
+                    != Ordering::Greater
+                {
+                    nearest = from;
+                }
                 let reach = at(from + 1)
                     .sub(at(from))
                     .expect("step")
                     .mul(half)
                     .expect("half step");
                 let before = probe.add(reach).expect("reach").compare(at(from)) == Ordering::Less;
-                let expected = (!before).then(|| {
-                    (from..=frames)
-                        .min_by(|&first, &second| {
-                            distance(probe, at(first)).compare(distance(probe, at(second)))
-                        })
-                        .expect("nonempty range")
-                });
+                let expected = (!before).then_some(nearest);
                 assert_eq!(
                     span.output_nearest_since(from, origin, SourceElapsed(probe)),
                     Some(expected),

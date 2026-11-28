@@ -151,7 +151,6 @@ impl Node {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use kithara_test_utils::kithara;
 
@@ -171,7 +170,7 @@ mod tests {
     /// the registry empty. The integration `recreate_cancelled_in_loop_*` test
     /// drives `Cancelled::drop` but cannot read `slots.len()`; this pins the
     /// actual count so a no-op `unregister` is caught.
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn register_unregister_churn_leaves_no_slots() {
         let node = Node::root();
         for _ in 0..1000 {
@@ -190,7 +189,7 @@ mod tests {
     /// Children bound (plan Task 3.2 Step 5): per-fetch/epoch churn derives and
     /// drops many children; dead `Weak`s must be swept so the parent's vec stays
     /// bounded. Observable only here (the field is module-private).
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test]
     fn child_churn_sweeps_dead_weaks() {
         let root = Node::root();
         for _ in 0..1000 {

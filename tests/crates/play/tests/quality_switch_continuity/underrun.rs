@@ -699,7 +699,7 @@ fn cochlea_silent_buckets(samples: &[f32]) -> usize {
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(8)),
+    timeout(Long),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,render_refill=trace"
@@ -786,22 +786,36 @@ async fn target_rebuild_keeps_player_output_continuous(
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Long),
     hang_timeout_secs(3),
     tracing(
         "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_play=debug,kithara_audio::pipeline::decode::transition=trace,kithara_audio::pipeline::source::variant=trace"
     )
 )]
-#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
-#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[case::apple(platform = apple, DecoderBackend::Apple)]
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_pair_0(DecoderBackend::Symphonia, 0..2),
+    case::symphonia_pair_1(DecoderBackend::Symphonia, 2..4),
+    case::symphonia_pair_2(DecoderBackend::Symphonia, 4..6)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::android_pair_0(DecoderBackend::default(), 0..2),
+    case::android_pair_1(DecoderBackend::default(), 2..4),
+    case::android_pair_2(DecoderBackend::default(), 4..6)
+)]
+#[case::apple_pair_0(platform = apple, DecoderBackend::Apple, 0..2)]
+#[case::apple_pair_1(platform = apple, DecoderBackend::Apple, 2..4)]
+#[case::apple_pair_2(platform = apple, DecoderBackend::Apple, 4..6)]
 async fn cold_target_variant_switch_keeps_playback_uninterrupted(
     #[case] backend: DecoderBackend,
+    #[case] transitions: Range<usize>,
     #[future(awt)] cold_sources: Vec<(TestServerHelper, CreatedHls)>,
 ) {
     let _refill_scope = kithara_test_utils::test::usdt::scope();
-    let sources: Vec<(Transition, url::Url)> = TRANSITIONS
-        .into_iter()
+    let sources: Vec<(Transition, url::Url)> = TRANSITIONS[transitions]
+        .iter()
+        .copied()
         .zip(&cold_sources)
         .map(|(transition, (_server, created))| (transition, created.master_url()))
         .collect();
@@ -888,7 +902,7 @@ async fn cold_target_variant_switch_keeps_playback_uninterrupted(
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Long),
     hang_timeout_secs(3)
 )]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
@@ -1030,7 +1044,7 @@ fn cold_switch_failures(
     failures
 }
 
-#[kithara::test(tokio, multi_thread, native, serial)]
+#[kithara::test(tokio, multi_thread, native, serial, timeout(Long))]
 async fn device_capture_exposes_a_starved_producer_as_missing_pcm() {
     let trace = kithara_test_utils::test::usdt::scope();
     let server = TestServerHelper::new().await;

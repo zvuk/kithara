@@ -110,16 +110,13 @@ fn final_flush(weak: &Weak<FlushHub>) {
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use kithara_platform::{
-        sync::{Mutex, mpsc},
-        time::Duration,
-    };
+    use kithara_platform::sync::{Mutex, mpsc};
     use kithara_test_utils::kithara;
 
     use super::{super::cell::PublicationState, *};
     use crate::{error::AssetsResult, index::persistence::flush::Flushable};
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn final_hub_destruction_prevents_worker_source_operations() {
         struct Source {
             publication_state: PublicationState,
@@ -159,7 +156,7 @@ mod tests {
         assert!(source.publication_state.dirty.load(Ordering::Acquire));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test]
     fn worker_can_destroy_the_hub_after_releasing_its_last_external_owner() {
         struct Source {
             publication_state: PublicationState,

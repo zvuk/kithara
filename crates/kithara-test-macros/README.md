@@ -27,7 +27,7 @@ Test-utils forwards this opt-in through its own `test` feature.
 ## Usage
 
 ```rust
-#[kithara::test(tokio, browser, timeout(std::time::Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Long))]
 async fn plays_hls_in_browser() {
     // test body
 }
@@ -61,7 +61,7 @@ Derive macros:
 ### `#[kithara::test]` flags
 
 A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
-(e.g. `#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]`). Flags
+(e.g. `#[kithara::test(native, tokio, timeout(Long))]`). Flags
 include `tokio`, `wasm`, `native`, `browser`, `timeout(...)`,
 `hang_timeout_secs(N)`,
 `tracing(...)`, `soft_fail(...)`, `serial`, `multi_thread`, `selenium`, and
@@ -74,6 +74,10 @@ is unchanged. `#[future]` injects an unpolled async fixture;
 `#[future(awt)]` awaits the fixture before the test body and retains its value
 until test teardown. See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for per-flag semantics and the
 Flash/Loom debugging rules.
+
+`timeout(...)` accepts only `Quick`, `Long`, `Heavy`, or `Network`. Duration
+expressions are rejected. The tier names the real-clock allowance; under Flash
+every tier is one second.
 
 ### `#[kithara::probe(...)]` arguments
 
@@ -93,7 +97,11 @@ Mock expansion requires test-utils `mock` and direct `unimock` (`0.6`, feature
 those wrappers does not establish browser execution.
 
 Hang helpers become no-ops when test-utils `hang` is disabled. The explicit
-`timeout(...)` flag works separately from watchdog progress checks;
+`timeout(...)` accepts only a `TestBudget` tier name: `Quick`, `Long`, `Heavy`
+or `Network`. Duration expressions, aliases and qualified paths are
+compile errors. `Network` is only for tests against a live network or run by
+hand. Tests default to `Quick`. The body timeout
+works separately from watchdog progress checks;
 `hang_timeout_secs(N)` sets the budget of watchdogs entered inside a test. USDT
 disabled builds require no DTrace tools. Test-utils' empty `client-*` and `tls-*`
 compatibility features do not forward HTTP backends or introduce `kithara-events`.
@@ -102,3 +110,9 @@ See the [runtime consumer requirements](../kithara-test-utils/README.md#independ
 for the dependency declarations and independent fixture.
 
 See [crate contracts](https://github.com/zvuk/kithara/wiki/kithara-test-macros) for detailed contracts, invariants, and internals.
+
+Native async tests own their runtime through shutdown. Already-started blocking
+work finishes before the outcome returns, including panic and timeout paths.
+The external hard watchdog remains armed while shutdown joins that work; a
+blocked shutdown aborts the test process. Shutdown time remains inside the
+resolved deadline, so a delayed join cannot turn a missed budget into a pass.

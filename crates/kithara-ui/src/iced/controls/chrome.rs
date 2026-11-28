@@ -15,15 +15,20 @@ use iced::{
     mouse::{Cursor, Interaction},
     widget::canvas::{self, Action, Canvas, Frame, Geometry},
 };
+use kithara_platform::sync::Arc;
 
 use crate::{
     atoms::chrome::{ChromeChevron, ChromeLabel, footer_role},
     backends::{finish, replay_ordered},
     draw::{DrawListBuilder, Rect},
-    iced::{controls::snapped, paint::text::Text, tree::activate},
+    iced::{
+        controls::{Marks, painted::shaped_with_resources, snapped},
+        paint::text::Text,
+        tree::activate,
+    },
     interact::{CursorShape, Hover, iced as iced_interact, recognizers::click},
     render::{InputOwner, Published, Skin},
-    shaping::TextContext,
+    shaping::{TextContext, TextResources},
 };
 
 /// The footer carries the one word a module resolves for itself, so it owns it
@@ -48,7 +53,8 @@ struct LeafPaint<'data, 'skin> {
 
 #[derive(Default)]
 struct LeafState {
-    text: RefCell<Option<TextContext>>,
+    marks: Marks<()>,
+    text: RefCell<Option<(Arc<TextResources>, TextContext)>>,
 }
 
 impl LeafPaint<'_, '_> {
@@ -112,10 +118,8 @@ impl IcedWidget<Published, Theme, Renderer> for LeafPaint<'_, '_> {
         }
         let bounds = snapped(bounds);
         let state = tree.state.downcast_ref::<LeafState>();
-        let mut text = state.text.borrow_mut();
-        let text = text.get_or_insert_with(|| self.skin.text_resources.as_ref().into());
-        renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
-            let mut frame = Frame::new(renderer, bounds.size());
+        let resources = &self.skin.text_resources;
+        let list = shaped_with_resources(&state.text, resources, |text| {
             let mut builder = DrawListBuilder::default();
             self.paint(
                 &mut builder,
@@ -127,21 +131,26 @@ impl IcedWidget<Published, Theme, Renderer> for LeafPaint<'_, '_> {
                     y: 0.0,
                 },
             );
-            replay_ordered(
-                &builder.finish(),
-                &mut frame,
-                self.skin.text_resources.as_ref(),
-            );
-            renderer.draw_geometry(finish(frame.into_geometry()));
+            builder.finish()
+        });
+        state.marks.picture(list);
+        state.marks.drawn(|cache, list| {
+            renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| {
+                let geometry = cache.draw(renderer, bounds.size(), |frame| {
+                    replay_ordered(list, frame, resources.as_ref());
+                });
+                renderer.draw_geometry(geometry);
+            });
         });
     }
 
     fn layout(&mut self, tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> Node {
         let intrinsic = if let Some((label, content)) = self.label() {
             let state = tree.state.downcast_mut::<LeafState>();
-            let mut text = state.text.borrow_mut();
-            let text = text.get_or_insert_with(|| self.skin.text_resources.as_ref().into());
-            let (width, height) = label.intrinsic(text, content);
+            let (width, height) =
+                shaped_with_resources(&state.text, &self.skin.text_resources, |text| {
+                    label.intrinsic(text, content)
+                });
             Size::new(width, height)
         } else {
             Size::ZERO
@@ -290,8 +299,9 @@ mod tests {
     use crate::{
         builtin,
         draw::DrawCmd,
-        iced::{fonts, skin::IcedSkin},
+        iced::{controls::painted::picture_tests, fonts, skin::IcedSkin},
         render::ControlAction,
+        shaping::FontId,
         skin::FontWeight,
     };
 
@@ -482,5 +492,155 @@ mod tests {
                 event::Status::Captured,
             )
         );
+    }
+
+    fn draw_leaf(
+        leaf: &LeafPaint<'_, '_>,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        bounds: Rectangle,
+    ) -> iced_tiny_skia::Layer {
+        picture_tests::reset(renderer);
+        let node = Node::new(bounds.size()).move_to(Point::new(bounds.x, bounds.y));
+        leaf.draw(
+            tree,
+            renderer,
+            &Theme::Dark,
+            &renderer::Style {
+                text_color: iced::Color::WHITE,
+            },
+            Layout::new(&node),
+            Cursor::Unavailable,
+            &Rectangle::with_size(Size::new(640.0, 480.0)),
+        );
+        picture_tests::layer(renderer)
+    }
+
+    fn leaf_intrinsic(leaf: &mut LeafPaint<'_, '_>, tree: &mut Tree, renderer: &Renderer) -> Size {
+        leaf.layout(
+            tree,
+            renderer,
+            &Limits::new(Size::ZERO, Size::new(320.0, 80.0)),
+        )
+        .size()
+    }
+
+    #[kithara::test]
+    fn leaf_redraws_reuse_backing_and_changed_content_matches_fresh() {
+        let skin = picture_tests::skin(FontId::InterRegular);
+        let mut renderer = picture_tests::renderer();
+        let leaf = LeafPaint {
+            skin: &skin,
+            leaf: ChromeLeaf::Chip(picture_tests::WORDS),
+        };
+        let tree = Tree::new(&leaf as &dyn IcedWidget<Published, Theme, Renderer>);
+        let bounds = Rectangle {
+            x: 9.0,
+            y: 13.0,
+            width: 220.0,
+            height: 40.0,
+        };
+        let first = draw_leaf(&leaf, &tree, &mut renderer, bounds);
+        let second = draw_leaf(&leaf, &tree, &mut renderer, bounds);
+        let third = draw_leaf(&leaf, &tree, &mut renderer, bounds);
+        picture_tests::assert_reused(&first, &second);
+        picture_tests::assert_reused(&second, &third);
+        picture_tests::assert_picture(&first, &second);
+        picture_tests::assert_picture(&second, &third);
+
+        let translated = Rectangle {
+            x: 31.0,
+            y: 47.0,
+            ..bounds
+        };
+        let moved = draw_leaf(&leaf, &tree, &mut renderer, translated);
+        picture_tests::assert_reused(&third, &moved);
+        assert_eq!(
+            picture_tests::primitives(&third),
+            picture_tests::primitives(&moved)
+        );
+        for (old, new) in third.primitives.iter().zip(&moved.primitives) {
+            assert_eq!(
+                old.transformation().translation(),
+                Vector::new(bounds.x, bounds.y)
+            );
+            assert_eq!(
+                new.transformation().translation(),
+                Vector::new(translated.x, translated.y)
+            );
+            assert_eq!(old.clip_bounds(), bounds);
+            assert_eq!(new.clip_bounds(), translated);
+            assert_eq!(
+                old.clip_bounds() * old.transformation().inverse(),
+                Rectangle::with_size(bounds.size()),
+            );
+            assert_eq!(
+                new.clip_bounds() * new.transformation().inverse(),
+                Rectangle::with_size(translated.size()),
+            );
+        }
+        let fresh_moved = draw_leaf(
+            &leaf,
+            &Tree::new(&leaf as &dyn IcedWidget<Published, Theme, Renderer>),
+            &mut renderer,
+            translated,
+        );
+        picture_tests::assert_picture(&moved, &fresh_moved);
+
+        let changed = LeafPaint {
+            skin: &skin,
+            leaf: ChromeLeaf::Chip("Changed visible word"),
+        };
+        let redrawn = draw_leaf(&changed, &tree, &mut renderer, translated);
+        let fresh = draw_leaf(
+            &changed,
+            &Tree::new(&changed as &dyn IcedWidget<Published, Theme, Renderer>),
+            &mut renderer,
+            translated,
+        );
+        picture_tests::assert_changed(&moved, &redrawn);
+        picture_tests::assert_picture(&redrawn, &fresh);
+    }
+
+    #[kithara::test]
+    fn leaf_font_owner_replacement_matches_fresh_measurement_and_paint() {
+        let a = picture_tests::skin(FontId::InterRegular);
+        let b = picture_tests::skin(FontId::JetBrainsMonoRegular);
+        assert_ne!(
+            FontId::InterRegular.bytes(),
+            FontId::JetBrainsMonoRegular.bytes()
+        );
+        assert_eq!(a.chrome, b.chrome);
+        picture_tests::assert_font(&a, a.chrome.chip_text, FontId::InterRegular);
+        picture_tests::assert_font(&b, b.chrome.chip_text, FontId::JetBrainsMonoRegular);
+        let mut renderer = picture_tests::renderer();
+        let mut first = LeafPaint {
+            skin: &a,
+            leaf: ChromeLeaf::Chip(picture_tests::WORDS),
+        };
+        let mut retained = Tree::new(&first as &dyn IcedWidget<Published, Theme, Renderer>);
+        let size_a = leaf_intrinsic(&mut first, &mut retained, &renderer);
+        let bounds = Rectangle::with_size(Size::new(220.0, 40.0));
+        let drawn_a = draw_leaf(&first, &retained, &mut renderer, bounds);
+
+        let mut changed = LeafPaint {
+            skin: &b,
+            leaf: ChromeLeaf::Chip(picture_tests::WORDS),
+        };
+        let retained_size = leaf_intrinsic(&mut changed, &mut retained, &renderer);
+        let mut fresh_tree = Tree::new(&changed as &dyn IcedWidget<Published, Theme, Renderer>);
+        let fresh_size = leaf_intrinsic(&mut changed, &mut fresh_tree, &renderer);
+        assert_ne!(
+            size_a, fresh_size,
+            "the fixture must exercise different font metrics"
+        );
+        assert_eq!(retained_size, fresh_size);
+        let retained_b = draw_leaf(&changed, &retained, &mut renderer, bounds);
+        let fresh_b = draw_leaf(&changed, &fresh_tree, &mut renderer, bounds);
+        picture_tests::assert_changed(&drawn_a, &retained_b);
+        picture_tests::assert_picture(&retained_b, &fresh_b);
+        let again = draw_leaf(&changed, &retained, &mut renderer, bounds);
+        picture_tests::assert_reused(&retained_b, &again);
+        picture_tests::assert_picture(&again, &fresh_b);
     }
 }

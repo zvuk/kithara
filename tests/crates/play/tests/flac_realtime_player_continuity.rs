@@ -251,7 +251,7 @@ async fn run_case(
 /// `DelayRule` that drains the buffer at a known point) rather than an
 /// ambient-load race. Unignore once the underrun is forced deterministically.
 /// Run with `--run-ignored`.
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 #[ignore = "load-dependent flake, not yet deterministic — paced offline render starves decode under host load and trips the player underrun path; needs a forced-underrun trigger to become a reliable RED for the production forward-skip"]
 #[cfg_attr(not(target_os = "android"), case::sustained_flac_symphonia(Scenario::SustainedFlac, DecoderBackend::Symphonia, flac_source().await, 44_100))]
 #[cfg_attr(target_os = "android", case::sustained_flac_android(Scenario::SustainedFlac, DecoderBackend::default(), flac_source().await, 44_100))]

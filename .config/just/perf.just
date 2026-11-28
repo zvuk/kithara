@@ -56,6 +56,6 @@ memory:
     cargo test -p kithara-audio-tests --test audio_heavy alloc_free_hotpath -- --test-threads=1
     @echo ""
     @echo "=== Tier 4: RSS budget (HLS playback) ==="
-    cargo test -p kithara-integration-tests --features perf --test memory_rss -- --test-threads=1
+    cargo test -p kithara-integration-tests --features perf --test memory_rss -- --test-threads=1 --nocapture
     @echo ""
     @echo "All memory checks passed."

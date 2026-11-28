@@ -705,7 +705,11 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
         SIZE,
         1.0,
     );
-    let capture = scenario_capture_dir();
+    let mut capture = scenario_capture_dir().map(|dir| {
+        let offscreen = Offscreen::new(SIZE.0, SIZE.1)
+            .unwrap_or_else(|error| panic!("create scenario rasteriser: {error}"));
+        (dir, offscreen)
+    });
 
     let mark = scenario.published().len();
     scenario.press("demo/fire");
@@ -716,7 +720,7 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
             value: WriteValue::Trigger,
         }]
     );
-    photograph_scenario(&mut scenario, capture.as_deref(), "01-press", SIZE);
+    photograph_scenario(&mut scenario, capture.as_mut(), "01-press", SIZE);
     let mark = scenario.published().len();
     scenario.release("demo/fire");
     assert_eq!(scenario.published().len(), mark);
@@ -744,7 +748,7 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
         values.windows(2).all(|pair| pair[1] > pair[0]),
         "the named upward drag published {values:?}"
     );
-    photograph_scenario(&mut scenario, capture.as_deref(), "02-drag", SIZE);
+    photograph_scenario(&mut scenario, capture.as_mut(), "02-drag", SIZE);
 
     let before = scenario.app().value;
     let mark = scenario.published().len();
@@ -761,7 +765,7 @@ fn named_press_drag_and_wheel_publish_events_and_leave_a_picture() {
     assert_eq!(key, "fixture.dial");
     assert_ne!(*value, before, "the named wheel must move the dial");
     assert_eq!(scenario.app().value, *value);
-    photograph_scenario(&mut scenario, capture.as_deref(), "03-wheel", SIZE);
+    photograph_scenario(&mut scenario, capture.as_mut(), "03-wheel", SIZE);
 }
 
 /// The page behind a document is the skin's, and a host clears its target to it
@@ -1091,18 +1095,18 @@ fn scenario_capture_dir() -> Option<PathBuf> {
 
 fn photograph_scenario(
     scenario: &mut Scenario<'_, InteractionBoard>,
-    dir: Option<&Path>,
+    capture: Option<&mut (PathBuf, Offscreen)>,
     name: &str,
     size: (u32, u32),
 ) {
-    let Some(dir) = dir else {
+    let Some((dir, offscreen)) = capture else {
         return;
     };
     let background = paint_color(scenario.background());
     let frame = scenario.frame();
     let mut rgba = Vec::new();
-    Offscreen::new(size.0, size.1)
-        .and_then(|mut offscreen| offscreen.rasterise(&frame, 1.0, background, &mut rgba))
+    offscreen
+        .rasterise(&frame, 1.0, background, &mut rgba)
         .unwrap_or_else(|error| panic!("rasterise scenario {name}: {error}"));
     let path = dir.join(format!("{name}.png"));
     write_png(&path, &rgba, size).unwrap_or_else(|error| panic!("write scenario {name}: {error}"));

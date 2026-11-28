@@ -46,37 +46,41 @@ struct DecodeSummary {
     non_empty_chunks: usize,
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(300)))]
+#[kithara::test(wasm, timeout(Network))]
 async fn mp3_parity() {
     let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
 
-    thread::spawn_named("webcodecs-mp3-parity", move || {
-        let webcodecs = decode_file(
+    let webcodecs = thread::spawn_named("webcodecs-mp3-parity-webcodecs", move || {
+        decode_file(
             signal_mp3_track_sine440_187s,
             "mp3",
             DecoderBackend::WebCodecs,
-        );
-        let symphonia = decode_file(
+        )
+    })
+    .join_async();
+    let symphonia = thread::spawn_named("webcodecs-mp3-parity-symphonia", move || {
+        decode_file(
             signal_mp3_track_sine440_187s,
             "mp3",
             DecoderBackend::Symphonia,
-        );
-
-        assert_common_parity("mp3", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
-        tracing::info!(
-            webcodecs_frames = webcodecs.frames,
-            symphonia_frames = symphonia.frames,
-            frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
-            "WebCodecs MP3 priming/tail frame-count probe"
-        );
+        )
     })
-    .join_async()
-    .await
-    .expect("WebCodecs scenario worker failed");
+    .join_async();
+    let (webcodecs, symphonia) = kithara_platform::tokio::join!(webcodecs, symphonia);
+    let webcodecs = webcodecs.expect("WebCodecs decoder worker failed");
+    let symphonia = symphonia.expect("Symphonia decoder worker failed");
+
+    assert_common_parity("mp3", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
+    tracing::info!(
+        webcodecs_frames = webcodecs.frames,
+        symphonia_frames = symphonia.frames,
+        frame_delta = webcodecs.frames.abs_diff(symphonia.frames),
+        "WebCodecs MP3 priming/tail frame-count probe"
+    );
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+#[kithara::test(wasm, timeout(Network))]
 async fn flac_parity_direction() {
     let flac_unknown_length_saw_6s = fetch_signal("flac_unknown_length_saw_6s.flac").await;
     prepare_webcodecs("flac", flac_unknown_length_saw_6s).await;
@@ -112,7 +116,7 @@ async fn flac_parity_direction() {
     .expect("WebCodecs scenario worker failed");
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+#[kithara::test(wasm, timeout(Network))]
 async fn seek_generation() {
     let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
@@ -178,7 +182,7 @@ async fn seek_generation() {
     .expect("WebCodecs scenario worker failed");
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(300)))]
+#[kithara::test(wasm, timeout(Network))]
 async fn seek_trim_no_preroll_leak() {
     let signal_mp3_track_sine440_187s = fetch_signal("signal_mp3_track_sine440_187s.mp3").await;
     prepare_webcodecs("mp3", signal_mp3_track_sine440_187s).await;
@@ -241,7 +245,7 @@ async fn seek_trim_no_preroll_leak() {
     .expect("WebCodecs scenario worker failed");
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+#[kithara::test(wasm, timeout(Network))]
 async fn aac_parity() {
     const AAC_FRAME_TOLERANCE: usize = 2 * 1_024;
 
@@ -266,7 +270,7 @@ async fn aac_parity() {
     .expect("WebCodecs scenario worker failed");
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+#[kithara::test(wasm, timeout(Network))]
 async fn he_aac_v1_decode() {
     let he_aac_v1 = fetch_signal("he_aac_v1.mp4").await;
     prepare_webcodecs("mp4a.40.5", he_aac_v1).await;
@@ -298,7 +302,7 @@ async fn he_aac_v1_decode() {
     .expect("WebCodecs scenario worker failed");
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+#[kithara::test(wasm, timeout(Network))]
 async fn he_aac_v2_decode() {
     let he_aac_v2 = fetch_signal("he_aac_v2.mp4").await;
     prepare_webcodecs("mp4a.40.29", he_aac_v2).await;
@@ -330,7 +334,7 @@ async fn he_aac_v2_decode() {
     .expect("WebCodecs scenario worker failed");
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(120)))]
+#[kithara::test(wasm, timeout(Network))]
 async fn implicit_sbr_trim_follows_configured_output_across_seek() {
     let declared = fetch_signal("he_aac_implicit_declared.mp4").await;
     let undeclared = fetch_signal("he_aac_implicit_undeclared.mp4").await;

@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 use kithara::{
     analysis::{AnalysisDemand, BeatAnalysisConfig, Bucket},
     assets::StorageBackend,
-    platform::{CancelToken, time::Duration},
+    platform::CancelToken,
     play::{ResourceConfig, ResourceSrc},
 };
 use kithara_app::{
@@ -62,7 +62,7 @@ async fn run_analysis(
     last.map(Into::into)
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
+#[kithara::test(tokio, hang_timeout_secs(2), timeout(Quick))]
 async fn runner_silent_wav_yields_all_zero_envelope(
     #[future(awt)] served_silence: (TestServerHelper, Url),
 ) {
@@ -94,7 +94,7 @@ async fn runner_silent_wav_yields_all_zero_envelope(
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
+#[kithara::test(tokio, hang_timeout_secs(2), timeout(Quick))]
 async fn runner_returns_nothing_when_cancelled_upfront(
     #[future(awt)] served_silence: (TestServerHelper, Url),
 ) {

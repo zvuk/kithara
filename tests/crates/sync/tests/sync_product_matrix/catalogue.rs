@@ -1,6 +1,6 @@
 use kithara::{
     link::{GridAnswer, LinkedHostCommand, SyncStatus},
-    platform::{sync::Arc, time::Duration},
+    platform::sync::Arc,
     play::{ArtifactSource, ResourceConfig, ResourceSrc},
     queue::QueueEvent,
 };
@@ -27,7 +27,7 @@ enum HostTempo {
     Ramp(f64),
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::constant_sync(ONE_DECK, HostTempo::Track)]
 #[case::off_the_track_tempo_resampled(ONE_DECK_RESAMPLED, HostTempo::Held(126.0))]
 #[case::during_a_tempo_ramp(ONE_DECK, HostTempo::Ramp(124.0))]

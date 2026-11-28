@@ -16,7 +16,7 @@ use kithara_test_utils::TestHttpServer;
 use super::Engine;
 use crate::input::{Args, Batch, Track};
 
-#[kithara::test(tokio, native, flash(false))]
+#[kithara::test(tokio, native, flash(false), timeout(Long))]
 async fn full_selection_settles_at_the_decoded_native_rate() {
     let path = assets::rhythm_wav_deck_a_120bpm_48k()
         .path()
@@ -90,7 +90,7 @@ async fn missing_source_does_not_stop_the_batch() {
     task.await.expect("join").expect("batch");
 }
 
-#[kithara::test(tokio, multi_thread, native, flash(false))]
+#[kithara::test(tokio, multi_thread, native, flash(false), timeout(Long))]
 async fn four_jobs_admit_four_sources_and_match_one_job() {
     let (entered, mut requests) = mpsc::channel(8);
     let (gate, handler_gate) = watch::channel(false);

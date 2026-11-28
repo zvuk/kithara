@@ -2,7 +2,7 @@ use kithara::{audio::DecoderBackend as EventDecoderBackend, decode::DecoderBacke
 
 use super::{cases::*, harness::*, imports::*, providers::*};
 
-#[kithara::test(native, tokio, multi_thread, serial)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::synthetic(synthetic_sources().await, CUE)]
 #[case::mp3_distinct(source_mp3_distinct().await, CUE)]
 #[case::hls_plain(source_hls_same_plain().await, CUE)]
@@ -155,7 +155,7 @@ async fn provider_tempo_controls_measure_without_sync(
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
 async fn run(case: SyncCase, prepared: PreparedSources, start: Start) {
-    run_with_decoder(case, prepared, start, None).await;
+    run_with_decoder(case, prepared, start, None, 0..case.decks).await;
 }
 
 #[kithara_test_utils::kithara::hang_watchdog(timeout = Duration::from_secs(5), ctx = String)]
@@ -164,6 +164,7 @@ async fn run_with_decoder(
     prepared: PreparedSources,
     start: Start,
     decoder: Option<(DecoderBackend, EventDecoderBackend)>,
+    audible_decks: std::ops::Range<usize>,
 ) {
     let provider = prepared.provider();
     let expected_frames: usize = (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0)
@@ -172,7 +173,7 @@ async fn run_with_decoder(
     let expected_samples = expected_frames * usize::from(CHANNELS);
     let mut tracks = Vec::with_capacity(case.decks);
     let mut request_failures = Vec::new();
-    for audible_deck in 0..case.decks {
+    for audible_deck in audible_decks {
         let wrong_source = kithara_integration_tests::pcm_oracle::prepared(
             &provider.wrong_control_reference(audible_deck),
         )
@@ -266,7 +267,7 @@ async fn run_with_decoder(
     );
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::mp3(source_mp3_same().await)]
 #[case::drm(source_hls_same_drm().await)]
 async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: PreparedSources) {
@@ -289,7 +290,7 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
     drop(harness);
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Heavy))]
 #[case::play_sync_seek(PLAY_SYNC_SEEK, source_synthetic().await)]
 #[case::play_seek_sync(PLAY_SEEK_SYNC, source_synthetic().await)]
 #[case::seek_play_sync(SEEK_PLAY_SYNC, source_synthetic().await)]
@@ -298,13 +299,11 @@ async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] prepared: Prepar
 #[case::sync_seek_play(SYNC_SEEK_PLAY, source_synthetic().await)]
 #[case::sequential_sync(SEQUENTIAL_SYNC, source_synthetic().await)]
 #[case::paused_sync_then_play(PAUSED_SYNC, source_synthetic().await)]
-#[case::four_deck_sequential_sync(FOUR_DECK_SYNC, source_synthetic().await)]
 #[case::tempo_up_120hz(TEMPO_UP_120, source_synthetic().await)]
 #[case::tempo_down_30hz(TEMPO_DOWN_30, source_synthetic().await)]
 #[case::ambient_trip_hop(AMBIENT_TRIP_HOP_SYNC, source_ambient_trip_hop_provider().await)]
 #[case::downtempo_house(DOWNTEMPO_HOUSE_SYNC, source_downtempo_house_provider().await)]
 #[case::techno_breakbeat(TECHNO_BREAKBEAT_SYNC, source_techno_breakbeat_provider().await)]
-#[case::cross_style_four_deck(CROSS_STYLE_SYNC, source_cross_style_provider().await)]
 async fn wav_product_rows_reach_the_pcm_oracle(
     #[case] case: SyncCase,
     #[case] provider: PreparedSources,
@@ -312,17 +311,7 @@ async fn wav_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(if cfg!(target_os = "android") {
-        Duration::from_secs(600)
-    } else {
-        Duration::from_secs(60)
-    })
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::hls_mp3_sync_seek_play(source_hls_mp3_plain().await, SYNC_SEEK_PLAY)]
 #[case::hls_mp3_tempo_down_30hz(source_hls_mp3_plain().await, TEMPO_DOWN_30)]
 #[case::drm_mp3_sync_seek_play(source_hls_mp3_drm().await, SYNC_SEEK_PLAY)]
@@ -334,7 +323,7 @@ async fn supplied_grid_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::hls_same_play_sync_seek(source_hls_same_plain().await, PLAY_SYNC_SEEK)]
 #[case::hls_same_play_seek_sync(source_hls_same_plain().await, PLAY_SEEK_SYNC)]
 #[case::hls_same_seek_play_sync(source_hls_same_plain().await, SEEK_PLAY_SYNC)]
@@ -343,7 +332,6 @@ async fn supplied_grid_product_rows_reach_the_pcm_oracle(
 #[case::hls_same_sync_seek_play(source_hls_same_plain().await, SYNC_SEEK_PLAY)]
 #[case::hls_same_sequential_sync(source_hls_same_plain().await, SEQUENTIAL_SYNC)]
 #[case::hls_same_paused_sync_then_play(source_hls_same_plain().await, PAUSED_SYNC)]
-#[case::hls_same_four_deck_sequential_sync(source_hls_same_plain().await, FOUR_DECK_SYNC)]
 #[case::hls_same_tempo_up_120hz(source_hls_same_plain().await, TEMPO_UP_120)]
 #[case::hls_same_tempo_down_30hz(source_hls_same_plain().await, TEMPO_DOWN_30)]
 #[case::drm_same_play_sync_seek(source_hls_same_drm().await, PLAY_SYNC_SEEK)]
@@ -354,7 +342,6 @@ async fn supplied_grid_product_rows_reach_the_pcm_oracle(
 #[case::drm_same_sync_seek_play(source_hls_same_drm().await, SYNC_SEEK_PLAY)]
 #[case::drm_same_sequential_sync(source_hls_same_drm().await, SEQUENTIAL_SYNC)]
 #[case::drm_same_paused_sync_then_play(source_hls_same_drm().await, PAUSED_SYNC)]
-#[case::drm_same_four_deck_sequential_sync(source_hls_same_drm().await, FOUR_DECK_SYNC)]
 #[case::drm_same_tempo_up_120hz(source_hls_same_drm().await, TEMPO_UP_120)]
 #[case::drm_same_tempo_down_30hz(source_hls_same_drm().await, TEMPO_DOWN_30)]
 #[case::mp3_same_play_sync_seek(source_mp3_same().await, PLAY_SYNC_SEEK)]
@@ -365,7 +352,6 @@ async fn supplied_grid_product_rows_reach_the_pcm_oracle(
 #[case::mp3_same_sync_seek_play(source_mp3_same().await, SYNC_SEEK_PLAY)]
 #[case::mp3_same_sequential_sync(source_mp3_same().await, SEQUENTIAL_SYNC)]
 #[case::mp3_same_paused_sync_then_play(source_mp3_same().await, PAUSED_SYNC)]
-#[case::mp3_same_four_deck_sequential_sync(source_mp3_same().await, FOUR_DECK_SYNC)]
 #[case::mp3_same_tempo_up_120hz(source_mp3_same().await, TEMPO_UP_120)]
 #[case::mp3_same_tempo_down_30hz(source_mp3_same().await, TEMPO_DOWN_30)]
 #[case::mp3_distinct_play_sync_seek(source_mp3_distinct().await, PLAY_SYNC_SEEK)]
@@ -376,7 +362,6 @@ async fn supplied_grid_product_rows_reach_the_pcm_oracle(
 #[case::mp3_distinct_sync_seek_play(source_mp3_distinct().await, SYNC_SEEK_PLAY)]
 #[case::mp3_distinct_sequential_sync(source_mp3_distinct().await, SEQUENTIAL_SYNC)]
 #[case::mp3_distinct_paused_sync_then_play(source_mp3_distinct().await, PAUSED_SYNC)]
-#[case::mp3_distinct_four_deck_sequential_sync(source_mp3_distinct().await, FOUR_DECK_SYNC)]
 #[case::mp3_distinct_tempo_up_120hz(source_mp3_distinct().await, TEMPO_UP_120)]
 #[case::mp3_distinct_tempo_down_30hz(source_mp3_distinct().await, TEMPO_DOWN_30)]
 #[case::hls_mp3_play_sync_seek(source_hls_mp3_plain().await, PLAY_SYNC_SEEK)]
@@ -386,7 +371,6 @@ async fn supplied_grid_product_rows_reach_the_pcm_oracle(
 #[case::hls_mp3_sync_play_seek(source_hls_mp3_plain().await, SYNC_PLAY_SEEK)]
 #[case::hls_mp3_sequential_sync(source_hls_mp3_plain().await, SEQUENTIAL_SYNC)]
 #[case::hls_mp3_paused_sync_then_play(source_hls_mp3_plain().await, PAUSED_SYNC)]
-#[case::hls_mp3_four_deck_sequential_sync(source_hls_mp3_plain().await, FOUR_DECK_SYNC)]
 #[case::hls_mp3_tempo_up_120hz(source_hls_mp3_plain().await, TEMPO_UP_120)]
 #[case::drm_mp3_play_sync_seek(source_hls_mp3_drm().await, PLAY_SYNC_SEEK)]
 #[case::drm_mp3_play_seek_sync(source_hls_mp3_drm().await, PLAY_SEEK_SYNC)]
@@ -395,7 +379,6 @@ async fn supplied_grid_product_rows_reach_the_pcm_oracle(
 #[case::drm_mp3_sync_play_seek(source_hls_mp3_drm().await, SYNC_PLAY_SEEK)]
 #[case::drm_mp3_sequential_sync(source_hls_mp3_drm().await, SEQUENTIAL_SYNC)]
 #[case::drm_mp3_paused_sync_then_play(source_hls_mp3_drm().await, PAUSED_SYNC)]
-#[case::drm_mp3_four_deck_sequential_sync(source_hls_mp3_drm().await, FOUR_DECK_SYNC)]
 #[case::drm_mp3_tempo_up_120hz(source_hls_mp3_drm().await, TEMPO_UP_120)]
 async fn real_media_product_rows_reach_the_pcm_oracle(
     #[case] provider: PreparedSources,
@@ -404,7 +387,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     run(case, provider, CUE).await;
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(600)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 #[case::tunnel_play_sync_seek(tunnel_sources().await, TUNNEL_CUE, PLAY_SYNC_SEEK.gridded())]
 #[case::tunnel_play_seek_sync(tunnel_sources().await, TUNNEL_CUE, PLAY_SEEK_SYNC.gridded())]
 #[case::tunnel_seek_play_sync(tunnel_sources().await, TUNNEL_CUE, SEEK_PLAY_SYNC.gridded())]
@@ -413,7 +396,6 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
 #[case::tunnel_sync_seek_play(tunnel_sources().await, TUNNEL_CUE, SYNC_SEEK_PLAY.gridded())]
 #[case::tunnel_sequential_sync(tunnel_sources().await, TUNNEL_CUE, SEQUENTIAL_SYNC.gridded())]
 #[case::tunnel_paused_sync_then_play(tunnel_sources().await, TUNNEL_CUE, PAUSED_SYNC.gridded())]
-#[case::tunnel_four_deck_sequential_sync(tunnel_sources().await, TUNNEL_CUE, FOUR_DECK_SYNC.gridded())]
 #[case::tunnel_tempo_up_120hz(tunnel_sources().await, TUNNEL_CUE, TEMPO_UP_120.gridded())]
 #[case::tunnel_tempo_down_30hz(tunnel_sources().await, TUNNEL_CUE, TEMPO_DOWN_30.gridded())]
 #[case::newtechno_play_sync_seek(newtechno_sources().await, NEWTECHNO_PHRASE, PLAY_SYNC_SEEK.gridded())]
@@ -424,7 +406,6 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
 #[case::newtechno_sync_seek_play(newtechno_sources().await, NEWTECHNO_PHRASE, SYNC_SEEK_PLAY.gridded())]
 #[case::newtechno_sequential_sync(newtechno_sources().await, NEWTECHNO_PHRASE, SEQUENTIAL_SYNC.gridded())]
 #[case::newtechno_paused_sync_then_play(newtechno_sources().await, NEWTECHNO_PHRASE, PAUSED_SYNC.gridded())]
-#[case::newtechno_four_deck_sequential_sync(newtechno_sources().await, NEWTECHNO_PHRASE, FOUR_DECK_SYNC.gridded())]
 #[case::newtechno_tempo_up_120hz(newtechno_sources().await, NEWTECHNO_PHRASE, TEMPO_UP_120.gridded())]
 #[case::newtechno_tempo_down_30hz(newtechno_sources().await, NEWTECHNO_PHRASE, TEMPO_DOWN_30.gridded())]
 async fn real_track_product_rows_reach_the_pcm_oracle(
@@ -433,6 +414,56 @@ async fn real_track_product_rows_reach_the_pcm_oracle(
     #[case] case: SyncCase,
 ) {
     run(case, provider, start).await;
+}
+
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
+#[case::hls_mp3_deck_0(source_hls_mp3_plain().await, CUE, FOUR_DECK_SYNC, 0)]
+#[case::hls_mp3_deck_1(source_hls_mp3_plain().await, CUE, FOUR_DECK_SYNC, 1)]
+#[case::hls_mp3_deck_2(source_hls_mp3_plain().await, CUE, FOUR_DECK_SYNC, 2)]
+#[case::hls_mp3_deck_3(source_hls_mp3_plain().await, CUE, FOUR_DECK_SYNC, 3)]
+#[case::mp3_same_deck_0(source_mp3_same().await, CUE, FOUR_DECK_SYNC, 0)]
+#[case::mp3_same_deck_1(source_mp3_same().await, CUE, FOUR_DECK_SYNC, 1)]
+#[case::mp3_same_deck_2(source_mp3_same().await, CUE, FOUR_DECK_SYNC, 2)]
+#[case::mp3_same_deck_3(source_mp3_same().await, CUE, FOUR_DECK_SYNC, 3)]
+#[case::tunnel_deck_0(tunnel_sources().await, TUNNEL_CUE, FOUR_DECK_SYNC.gridded(), 0)]
+#[case::tunnel_deck_1(tunnel_sources().await, TUNNEL_CUE, FOUR_DECK_SYNC.gridded(), 1)]
+#[case::tunnel_deck_2(tunnel_sources().await, TUNNEL_CUE, FOUR_DECK_SYNC.gridded(), 2)]
+#[case::tunnel_deck_3(tunnel_sources().await, TUNNEL_CUE, FOUR_DECK_SYNC.gridded(), 3)]
+#[case::newtechno_deck_0(newtechno_sources().await, NEWTECHNO_PHRASE, FOUR_DECK_SYNC.gridded(), 0)]
+#[case::newtechno_deck_1(newtechno_sources().await, NEWTECHNO_PHRASE, FOUR_DECK_SYNC.gridded(), 1)]
+#[case::newtechno_deck_2(newtechno_sources().await, NEWTECHNO_PHRASE, FOUR_DECK_SYNC.gridded(), 2)]
+#[case::newtechno_deck_3(newtechno_sources().await, NEWTECHNO_PHRASE, FOUR_DECK_SYNC.gridded(), 3)]
+#[case::synthetic_deck_0(source_synthetic().await, CUE, FOUR_DECK_SYNC, 0)]
+#[case::synthetic_deck_1(source_synthetic().await, CUE, FOUR_DECK_SYNC, 1)]
+#[case::synthetic_deck_2(source_synthetic().await, CUE, FOUR_DECK_SYNC, 2)]
+#[case::synthetic_deck_3(source_synthetic().await, CUE, FOUR_DECK_SYNC, 3)]
+#[case::cross_style_deck_0(source_cross_style_provider().await, CUE, CROSS_STYLE_SYNC, 0)]
+#[case::cross_style_deck_1(source_cross_style_provider().await, CUE, CROSS_STYLE_SYNC, 1)]
+#[case::cross_style_deck_2(source_cross_style_provider().await, CUE, CROSS_STYLE_SYNC, 2)]
+#[case::cross_style_deck_3(source_cross_style_provider().await, CUE, CROSS_STYLE_SYNC, 3)]
+#[case::hls_same_deck_0(source_hls_same_plain().await, CUE, FOUR_DECK_SYNC, 0)]
+#[case::hls_same_deck_1(source_hls_same_plain().await, CUE, FOUR_DECK_SYNC, 1)]
+#[case::hls_same_deck_2(source_hls_same_plain().await, CUE, FOUR_DECK_SYNC, 2)]
+#[case::hls_same_deck_3(source_hls_same_plain().await, CUE, FOUR_DECK_SYNC, 3)]
+#[case::drm_same_deck_0(source_hls_same_drm().await, CUE, FOUR_DECK_SYNC, 0)]
+#[case::drm_same_deck_1(source_hls_same_drm().await, CUE, FOUR_DECK_SYNC, 1)]
+#[case::drm_same_deck_2(source_hls_same_drm().await, CUE, FOUR_DECK_SYNC, 2)]
+#[case::drm_same_deck_3(source_hls_same_drm().await, CUE, FOUR_DECK_SYNC, 3)]
+#[case::mp3_distinct_deck_0(source_mp3_distinct().await, CUE, FOUR_DECK_SYNC, 0)]
+#[case::mp3_distinct_deck_1(source_mp3_distinct().await, CUE, FOUR_DECK_SYNC, 1)]
+#[case::mp3_distinct_deck_2(source_mp3_distinct().await, CUE, FOUR_DECK_SYNC, 2)]
+#[case::mp3_distinct_deck_3(source_mp3_distinct().await, CUE, FOUR_DECK_SYNC, 3)]
+#[case::drm_mp3_deck_0(source_hls_mp3_drm().await, CUE, FOUR_DECK_SYNC, 0)]
+#[case::drm_mp3_deck_1(source_hls_mp3_drm().await, CUE, FOUR_DECK_SYNC, 1)]
+#[case::drm_mp3_deck_2(source_hls_mp3_drm().await, CUE, FOUR_DECK_SYNC, 2)]
+#[case::drm_mp3_deck_3(source_hls_mp3_drm().await, CUE, FOUR_DECK_SYNC, 3)]
+async fn independent_four_deck_product_rows_reach_the_pcm_oracle(
+    #[case] provider: PreparedSources,
+    #[case] start: Start,
+    #[case] case: SyncCase,
+    #[case] audible_deck: usize,
+) {
+    run_with_decoder(case, provider, start, None, audible_deck..audible_deck + 1).await;
 }
 
 #[kithara::fixture]
@@ -514,14 +545,7 @@ pub(crate) async fn newtechno_sources() -> PreparedSources {
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(
-    native,
-    tokio,
-    multi_thread,
-    serial,
-    timeout(Duration::from_secs(60)),
-    tracing("info")
-)]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long), tracing("info"))]
 #[case::paused_sync_then_play(PAUSED_SYNC)]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]
 async fn mixed_mp3_and_hls_keep_the_pcm_contract_on_symphonia(#[case] case: SyncCase) {
@@ -531,6 +555,7 @@ async fn mixed_mp3_and_hls_keep_the_pcm_contract_on_symphonia(#[case] case: Sync
         prepared,
         CUE,
         Some((DecoderBackend::Symphonia, EventDecoderBackend::Symphonia)),
+        0..case.decks,
     )
     .await;
 }

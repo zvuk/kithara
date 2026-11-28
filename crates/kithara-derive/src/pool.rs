@@ -485,7 +485,7 @@ pub struct ProbePools {
         }
     }
 
-    #[kithara::test(native)]
+    #[kithara::test(native, timeout(Heavy))]
     fn pool_owner_manifests_fail_to_compile() {
         assert_compile_failures(&[
             (

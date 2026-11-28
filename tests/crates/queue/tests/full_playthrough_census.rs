@@ -1101,12 +1101,7 @@ async fn run_census(prepared: PreparedTracks, seam: Seam, temp_dir: &TestTempDir
 /// else. The queues cover segmented streams, whole local files, whole bodies
 /// on a server, and neighbours that never share a reader; only the transport
 /// differs, so every assertion applies unchanged.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(20))]
 #[case::gapless_hls(HLS_QUEUE, Seam::Gapless)]
 #[case::crossfaded_hls(HLS_QUEUE, Seam::Crossfade)]
 #[case::gapless_local(LOCAL_QUEUE, Seam::Gapless)]
@@ -1128,12 +1123,7 @@ async fn a_queue_plays_every_track_end_to_end(
 /// container carries neither a readable ramp direction nor a peak the fade
 /// oracle can read, so each track must serve the length it was built to, and
 /// the seam must overlap by exactly what the queue announced.
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(20))]
 #[case::gapless(MPEG_QUEUE, Seam::Gapless)]
 #[case::crossfaded(MPEG_QUEUE, Seam::Crossfade)]
 #[case::profile_flac_flac_192000_2ch_16bit_gapless([Origin::RemoteSignal(SignalAsset::PROFILE_FLAC_FLAC_192000_2CH_16BIT); 3], Seam::Gapless)]
@@ -1247,12 +1237,7 @@ async fn prepare_tracks(origins: [Origin; 3]) -> PreparedTracks {
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(20))]
 #[case::profile_mp3_libmp3lame_44100_1ch_gapless(SignalAsset::PROFILE_MP3_LIBMP3LAME_44100_1CH)]
 #[case::profile_mp3_libmp3lame_11025_1ch_gapless(SignalAsset::PROFILE_MP3_LIBMP3LAME_11025_1CH)]
 async fn symphonia_mpeg_uses_the_same_full_playthrough_oracles(
@@ -1265,12 +1250,7 @@ async fn symphonia_mpeg_uses_the_same_full_playthrough_oracles(
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(
-    native,
-    tokio,
-    timeout(Duration::from_secs(180)),
-    hang_timeout_secs(20)
-)]
+#[kithara::test(native, tokio, timeout(Long), hang_timeout_secs(20))]
 #[case::gapless(Seam::Gapless)]
 #[case::crossfade(Seam::Crossfade)]
 async fn symphonia_aac_uses_the_same_full_playthrough_oracles(

@@ -508,7 +508,7 @@ fn physical_source() -> (Vec<f32>, Vec<f64>) {
     (source, source_onsets)
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Quick))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)
@@ -644,7 +644,7 @@ fn render_gesture(
     })
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Long))]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

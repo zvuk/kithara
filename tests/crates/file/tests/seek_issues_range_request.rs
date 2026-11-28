@@ -110,12 +110,7 @@ async fn serve(State(state): State<RangeState>, headers: HeaderMap) -> Response 
         .expect("ranged response")
 }
 
-#[kithara::test(
-    tokio,
-    multi_thread,
-    timeout(Duration::from_secs(20)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, multi_thread, hang_timeout_secs(5))]
 async fn a_forward_seek_is_served_by_a_range_request() {
     let first_range_start = Arc::new(AtomicU64::new(u64::MAX));
     let app = Router::new()

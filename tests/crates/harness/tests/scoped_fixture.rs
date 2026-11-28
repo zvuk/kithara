@@ -2,7 +2,6 @@ use std::{cell::Cell, future, panic::catch_unwind};
 
 use kithara::platform::{
     no_block::{forbid_bridged, force_panic_mode},
-    time::Duration,
     tokio::{runtime::Handle, task},
 };
 use kithara_integration_tests::kithara;
@@ -59,7 +58,7 @@ async fn borrowed_fixture_drops_outside_a_panicking_poll(#[by_ref] scoped_owner:
     panic!("scoped body panic");
 }
 
-#[kithara::test(native, tokio, flash(false), timeout(Duration::from_millis(25)))]
+#[kithara::test(native, tokio, flash(false), timeout(Quick))]
 #[should_panic(expected = "timed out")]
 async fn borrowed_fixture_drops_before_timeout_runtime_shutdown(
     #[by_ref] scoped_owner: &ScopedOwner,

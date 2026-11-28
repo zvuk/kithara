@@ -1684,7 +1684,7 @@ fn segment_end(state: &SpliceState, segment: u32) -> Duration {
 }
 
 /// splice-continuity contract: RED = audible click on variant switch
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
     slq_layout: VariantLayout,
@@ -1763,7 +1763,7 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric(
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Quick))]
 #[kithara::hang_watchdog(timeout = Duration::from_secs(1))]
 async fn hls_aac_lc_same_variant_recreate_continuity_metric(slq_layout: VariantLayout) {
     let SpliceFixture { mut source, state } = splice_source(vec![slq_layout]).await;

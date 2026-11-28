@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(collect(body).await.unwrap(), b"done");
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn withheld_body_exhausts_bounded() {
         let refetch: Refetch = Box::new(|_off| Box::pin(async { Ok(resumed(withheld(), 0)) }));
         let started = Instant::now();
@@ -459,7 +459,7 @@ mod tests {
 
     /// Slow-but-live body (chunks arrive within the stall window) → all bytes,
     /// no retry, no error.
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn live_body_passes_through() {
         let refetch: Refetch =
             Box::new(|_off| Box::pin(async { Ok(resumed(byte_stream(vec![]), 0)) }));
@@ -484,7 +484,7 @@ mod tests {
     /// First attempt yields one chunk then stalls; resume (from the consumed
     /// offset) yields the rest → full body, and `refetch` is called with the
     /// correct resume offset.
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn resumes_from_consumed_offset() {
         let resume_off = Arc::new(AtomicU64::new(u64::MAX));
         let seen = Arc::clone(&resume_off);
@@ -529,7 +529,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn resume_rejects_conflicting_representation_total() {
         let refetch: Refetch = Box::new(|_off| {
             Box::pin(async {
@@ -567,7 +567,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn resume_rejects_unknown_total_after_known_total() {
         let refetch: Refetch = Box::new(|_off| {
             Box::pin(async {
@@ -604,7 +604,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn resume_adopts_discovered_total_and_continues_after_capped_body() {
         let refetch: Refetch = Box::new(|off| {
             Box::pin(async move {
@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(out, b"abcdef");
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn resumed_partial_unknown_total_never_proves_completion() {
         let refetch: Refetch = Box::new(|off| {
             Box::pin(async move {
@@ -683,7 +683,7 @@ mod tests {
         assert!(matches!(result, Err(NetError::RetryExhausted { .. })));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn resumed_full_body_cannot_shrink_below_consumed_prefix() {
         let refetch: Refetch = Box::new(|off| {
             Box::pin(async move {
@@ -714,7 +714,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn resumed_unknown_full_body_shorter_than_prefix_never_proves_completion() {
         let refetch: Refetch = Box::new(|off| {
             Box::pin(async move {
@@ -743,7 +743,7 @@ mod tests {
         assert!(matches!(result, Err(NetError::RetryExhausted { .. })));
     }
 
-    #[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(1)))]
+    #[kithara::test(tokio, multi_thread, flash(false))]
     async fn cancellation_interrupts_an_inflight_refetch() {
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
         let entered = Arc::new(Mutex::new(Some(entered_tx)));
@@ -778,7 +778,7 @@ mod tests {
         assert!(matches!(result, Err(NetError::Cancelled)));
     }
 
-    #[kithara::test(tokio, multi_thread, flash(false), timeout(Duration::from_secs(1)))]
+    #[kithara::test(tokio, multi_thread, flash(false))]
     async fn cancellation_interrupts_retry_backoff() {
         // `delay_for_attempt(0)` is ZERO — the first retry is immediate, so a
         // cancel aimed at it races a sleep of no length and proves nothing about
@@ -829,7 +829,7 @@ mod tests {
         assert!(matches!(result, Err(NetError::Cancelled)));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn resumed_partial_is_capped_to_original_response_span() {
         let refetch: Refetch = Box::new(|_off| {
             Box::pin(async {
@@ -869,7 +869,7 @@ mod tests {
         assert_eq!(out, b"abcdef");
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn ignored_resume_is_capped_to_original_response_length() {
         let refetch: Refetch = Box::new(|off| {
             Box::pin(async move {
@@ -905,7 +905,7 @@ mod tests {
     /// A clean EOF before the promised content-length is a broken transfer, not
     /// a complete body. Treat it like a transient body failure and resume from
     /// the consumed offset.
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn early_eof_before_content_length_resumes() {
         let resume_off = Arc::new(AtomicU64::new(u64::MAX));
         let seen = Arc::clone(&resume_off);
@@ -942,7 +942,7 @@ mod tests {
     /// Non-range server: the resume re-fetch returns the FULL body from zero
     /// (`200`, `skip = consumed`). The already-consumed prefix is dropped, so
     /// the consumer sees one continuous, non-duplicated stream.
-    #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+    #[kithara::test(tokio)]
     async fn non_range_server_skips_prefix_no_duplication() {
         // Resume yields the WHOLE body "abcdef" again, with skip = 3 (consumed).
         let refetch: Refetch = Box::new(|off| {

@@ -156,7 +156,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+    #[kithara::test(tokio)]
     async fn same_key_operations_are_serialized_and_released() {
         let index = ResourceTransactionIndex::default();
         let key = ResourceKey::relative("asset", "master.m3u8");
@@ -172,7 +172,7 @@ mod tests {
         assert!(index.inner.cells.is_empty());
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+    #[kithara::test(tokio)]
     async fn different_keys_remain_parallel() {
         let index = ResourceTransactionIndex::default();
         let first = ResourceKey::relative("asset", "master.m3u8");
@@ -189,7 +189,7 @@ mod tests {
         assert!(index.inner.cells.is_empty());
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(1)))]
+    #[kithara::test(tokio)]
     async fn cancelled_notified_waiter_hands_off_and_cleans_up() {
         let index = ResourceTransactionIndex::default();
         let key = ResourceKey::relative("asset", "master.m3u8");

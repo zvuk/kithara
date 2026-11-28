@@ -566,7 +566,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio, timeout(Quick))]
     async fn get_bytes_aborts_when_body_stalls() {
         let server = server_stalling_body().await;
         let url = server.url("/stall");
@@ -582,7 +582,7 @@ mod tests {
         assert_timeout_class(&err);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn post_bytes_aborts_when_body_stalls() {
         let server = server_stalling_body().await;
         let url = server.url("/stall");
@@ -598,7 +598,7 @@ mod tests {
         assert_timeout_class(&err);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn native_content_coding_policy_is_authoritative_per_request() {
         const PLAYLIST: &[u8] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\na.m3u8\n";
         const BROTLI_PLAYLIST: &[u8] = &[
@@ -698,7 +698,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn native_rejects_an_undecoded_content_encoding() {
         let app = Router::new().route(
             "/encoded",
@@ -723,7 +723,7 @@ mod tests {
         assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-encoding")));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn native_range_rejects_partial_without_content_range() {
         let app = Router::new().route(
             "/range",
@@ -753,7 +753,7 @@ mod tests {
         assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-range")));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn native_range_rejects_partial_without_content_length() {
         let app = Router::new().route(
             "/range",
@@ -785,7 +785,7 @@ mod tests {
         assert!(matches!(error, NetError::Decode(detail) if detail.contains("content-length")));
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn native_resume_rejects_a_different_content_range() {
         let requests = Arc::new(AtomicU32::new(0));
         let seen = Arc::clone(&requests);
@@ -836,7 +836,7 @@ mod tests {
         assert_eq!(requests.load(Ordering::SeqCst), 2);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn native_resume_rejects_a_conflicting_representation_total() {
         let requests = Arc::new(AtomicU32::new(0));
         let seen = Arc::clone(&requests);
@@ -885,7 +885,7 @@ mod tests {
         assert_eq!(requests.load(Ordering::SeqCst), 2);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn native_ignored_range_resume_continues_after_discovering_total() {
         let requests = Arc::new(AtomicU32::new(0));
         let seen = Arc::clone(&requests);
@@ -940,7 +940,7 @@ mod tests {
         assert_eq!(requests.load(Ordering::SeqCst), 3);
     }
 
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio)]
     async fn http_client_no_retry_propagates_5xx() {
         let (server, counter) = server_failing_first_n(2).await;
         let url = server.url("/probe");
@@ -966,7 +966,7 @@ mod tests {
 
     /// A handle derived with its own retry policy retries by that policy, and
     /// the original keeps retrying by its own.
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[kithara::test(tokio, timeout(Quick))]
     async fn a_retry_policy_handle_leaves_the_original_policy() {
         let (server, counter) = server_post_echo_failing_first_n(u32::MAX).await;
         let client = HttpClient::new(

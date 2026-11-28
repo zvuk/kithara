@@ -73,7 +73,7 @@ async fn wait_for_playing_settled_duration(
     })
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, multi_thread)]
 async fn progressive_download_fills_the_buffer_bar(tone_mp3: &'static [u8], temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {

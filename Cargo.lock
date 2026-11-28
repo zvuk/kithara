@@ -6590,6 +6590,7 @@ name = "kithara-test-macros"
 version = "0.0.1-alpha5"
 dependencies = [
  "kithara-test-args",
+ "kithara-test-utils",
  "proc-macro2",
  "quote",
  "syn 3.0.6",
@@ -6607,6 +6608,7 @@ dependencies = [
  "kithara-platform",
  "kithara-test-macros",
  "kithara-test-utils",
+ "libc",
  "num-traits",
  "pin-project-lite",
  "rtsan-standalone",
@@ -13708,6 +13710,7 @@ dependencies = [
  "hex",
  "kithara-devtools",
  "kithara-test-args",
+ "kithara-test-utils",
  "nix 0.31.3",
  "plist",
  "proc-macro2",

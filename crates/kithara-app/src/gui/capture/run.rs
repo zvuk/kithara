@@ -21,7 +21,7 @@ use super::{
 };
 use crate::gui::ui::cache::DeckLayout;
 
-#[kithara::test]
+#[kithara::test(flash(false), timeout(Long))]
 fn studio_capture_writes_both_hosts() {
     let Some(dir) = env::var_os("KITHARA_STUDIO_CAPTURE").map(PathBuf::from) else {
         return;
@@ -33,13 +33,13 @@ fn capture(dir: &Path) -> Result<(), String> {
     let geometry = studio();
     let film = Film::stills(vec![Page(DeckLayout::Single), Page(DeckLayout::Dual)]);
 
-    let mut immediate = Immediate::new(geometry)?;
+    let package = fixture::package()?;
+    let mut immediate = Immediate::new(Rc::clone(&package), geometry)?;
     let iced_dir = dir.join("iced");
     shoot_set(&mut immediate, &film, &iced_dir)?;
     write(iced_dir.join("draw-pools.txt"), &immediate.pools)
         .map_err(|error| format!("write iced draw-pools.txt: {error}"))?;
 
-    let package = fixture::package()?;
     let config = Config::builder()
         .endpoints(package.registry())
         .resolver(package.resolver())

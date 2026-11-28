@@ -231,7 +231,7 @@ async fn the_session_renders_the_source_tone() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, flash(false), timeout(Long))]
 async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
     const ROOMY_RING: usize = MAX_BLOCKS * BLOCK_FRAMES * 2;
     const TONE_RENDER_FRAMES: usize = 110_250;
@@ -270,7 +270,7 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
     harness.close().await;
 }
 
-#[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, flash(false), timeout(Long))]
 async fn an_intake_gap_breaks_the_served_playlist() {
     const ROOMY_RING: usize = MAX_BLOCKS * BLOCK_FRAMES * 2;
     const GAP_AFTER_WRITES: usize = 100;

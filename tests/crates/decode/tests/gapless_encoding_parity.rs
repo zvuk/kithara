@@ -158,7 +158,7 @@ fn encoded_clock_domain_track(
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, timeout(Quick), hang_timeout_secs(1))]
 async fn implicit_sbr_geometry_reaches_the_audio_trimmer_before_first_pcm() {
     use std::io::Write;
 
@@ -340,7 +340,7 @@ async fn remaining_implicit_pcm(
 }
 
 #[cfg(not(target_os = "android"))]
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, timeout(Quick), hang_timeout_secs(1))]
 #[case::zero(0)]
 #[case::content(150)]
 #[case::past_end(1_000)]
@@ -444,7 +444,7 @@ async fn an_implicit_sbr_seek_before_first_output_matches_the_prepared_seek(
     );
 }
 
-#[kithara::test(native, tokio, timeout(Duration::from_secs(30)), hang_timeout_secs(1))]
+#[kithara::test(native, tokio, timeout(Quick), hang_timeout_secs(1))]
 async fn gapless_encoding_variants_yield_matching_decoder_metadata(
     #[future(awt)] metadata_sources: (TestServerHelper, [Vec<u8>; 4]),
 ) {

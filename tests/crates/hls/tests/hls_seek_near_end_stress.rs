@@ -480,30 +480,44 @@ async fn wait_for_post_seek_advance(
     }
 }
 
-#[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(60)))]
-#[cfg_attr(not(target_os = "android"), case::symphonia_no_sidx(DecoderBackend::Symphonia, plain_hls().await))]
-#[cfg_attr(not(target_os = "android"), case::symphonia_with_sidx(DecoderBackend::Symphonia, sidx_hls().await))]
-#[case::apple_no_sidx(platform = apple, DecoderBackend::Apple, plain_hls().await)]
-#[case::apple_with_sidx(platform = apple, DecoderBackend::Apple, sidx_hls().await)]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 #[cfg_attr(
-    target_os = "android",
-    case::android_no_sidx(DecoderBackend::Android, plain_hls().await)
+    not(target_os = "android"),
+    case::symphonia_no_sidx_00_09(DecoderBackend::Symphonia, plain_hls().await, 0..10),
+    case::symphonia_no_sidx_10_19(DecoderBackend::Symphonia, plain_hls().await, 10..20),
+    case::symphonia_no_sidx_20_29(DecoderBackend::Symphonia, plain_hls().await, 20..30),
+    case::symphonia_with_sidx_00_09(DecoderBackend::Symphonia, sidx_hls().await, 0..10),
+    case::symphonia_with_sidx_10_19(DecoderBackend::Symphonia, sidx_hls().await, 10..20),
+    case::symphonia_with_sidx_20_29(DecoderBackend::Symphonia, sidx_hls().await, 20..30)
 )]
+#[case::apple_no_sidx_00_09(platform = apple, DecoderBackend::Apple, plain_hls().await, 0..10)]
+#[case::apple_no_sidx_10_19(platform = apple, DecoderBackend::Apple, plain_hls().await, 10..20)]
+#[case::apple_no_sidx_20_29(platform = apple, DecoderBackend::Apple, plain_hls().await, 20..30)]
+#[case::apple_with_sidx_00_09(platform = apple, DecoderBackend::Apple, sidx_hls().await, 0..10)]
+#[case::apple_with_sidx_10_19(platform = apple, DecoderBackend::Apple, sidx_hls().await, 10..20)]
+#[case::apple_with_sidx_20_29(platform = apple, DecoderBackend::Apple, sidx_hls().await, 20..30)]
 #[cfg_attr(
     target_os = "android",
-    case::android_with_sidx(DecoderBackend::Android, sidx_hls().await)
+    case::android_no_sidx_00_09(DecoderBackend::Android, plain_hls().await, 0..10),
+    case::android_no_sidx_10_19(DecoderBackend::Android, plain_hls().await, 10..20),
+    case::android_no_sidx_20_29(DecoderBackend::Android, plain_hls().await, 20..30),
+    case::android_with_sidx_00_09(DecoderBackend::Android, sidx_hls().await, 0..10),
+    case::android_with_sidx_10_19(DecoderBackend::Android, sidx_hls().await, 10..20),
+    case::android_with_sidx_20_29(DecoderBackend::Android, sidx_hls().await, 20..30)
 )]
 async fn hls_seek_near_end_fresh_player_stress(
     #[case] backend: DecoderBackend,
     #[case] source: (TestServerHelper, Url),
+    #[case] iterations: std::ops::Range<u32>,
 ) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let (_helper, url) = source;
 
-    let mut outcomes: Vec<IterOutcome> = Vec::with_capacity(consts::FRESH_ITERATIONS as usize);
-    for iter in 0..consts::FRESH_ITERATIONS {
+    let expected_iterations = iterations.len();
+    let mut outcomes: Vec<IterOutcome> = Vec::with_capacity(expected_iterations);
+    for iter in iterations {
         let offset = consts::NEAR_END_OFFSETS_S[(iter as usize) % consts::NEAR_END_OFFSETS_S.len()];
         let phase = Cell::new(AttemptPhase::Setup);
         let outcome = timeout(
@@ -550,10 +564,11 @@ async fn hls_seek_near_end_fresh_player_stress(
     if !hangs.is_empty() || !errors.is_empty() {
         panic!(
             "hls_seek_near_end_fresh_player_stress: {n_hung} hang(s), {n_err} error(s) over \
-             {n} fresh-player iterations:\nHangs:\n{hangs}\nErrors:\n{errors}",
+             {n} fresh-player iterations (full scenario={total}):\nHangs:\n{hangs}\nErrors:\n{errors}",
             n_hung = hangs.len(),
             n_err = errors.len(),
-            n = consts::FRESH_ITERATIONS,
+            n = expected_iterations,
+            total = consts::FRESH_ITERATIONS,
             hangs = hangs.join("\n"),
             errors = errors.join("\n"),
         );

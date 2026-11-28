@@ -288,7 +288,7 @@ fn measure_cochlea(samples: &[f32]) -> (CochleaMetric, Vec<f64>) {
     (metric, onsets.times_ms)
 }
 
-#[kithara::test(native, flash(false))]
+#[kithara::test(native, flash(false), timeout(Quick))]
 fn focused_measurements_match_full_cochlea(quality_control_a: Vec<f32>) {
     let audio = ProbeAudio {
         samples: quality_control_a.clone(),
@@ -568,13 +568,28 @@ fn the_two_baseline_oracle_still_rejects_a_click_at_the_join(
     multi_thread,
     native,
     serial,
-    timeout(Duration::from_secs(25)),
+    timeout(Long),
     hang_timeout_secs(3)
 )]
-#[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
-#[cfg_attr(target_os = "android", case::android(DecoderBackend::default()))]
-#[case::apple(platform = apple, DecoderBackend::Apple)]
-async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backend: DecoderBackend) {
+#[cfg_attr(
+    not(target_os = "android"),
+    case::symphonia_pair_0(DecoderBackend::Symphonia, 0..2),
+    case::symphonia_pair_1(DecoderBackend::Symphonia, 2..4),
+    case::symphonia_pair_2(DecoderBackend::Symphonia, 4..6)
+)]
+#[cfg_attr(
+    target_os = "android",
+    case::android_pair_0(DecoderBackend::default(), 0..2),
+    case::android_pair_1(DecoderBackend::default(), 2..4),
+    case::android_pair_2(DecoderBackend::default(), 4..6)
+)]
+#[case::apple_pair_0(platform = apple, DecoderBackend::Apple, 0..2)]
+#[case::apple_pair_1(platform = apple, DecoderBackend::Apple, 2..4)]
+#[case::apple_pair_2(platform = apple, DecoderBackend::Apple, 4..6)]
+async fn manual_quality_switches_match_time_aligned_no_switch_pcm(
+    #[case] backend: DecoderBackend,
+    #[case] transitions: std::ops::Range<usize>,
+) {
     let server = TestServerHelper::new().await;
     let created = server
         .create_hls(fixture())
@@ -620,7 +635,7 @@ async fn manual_quality_switches_match_time_aligned_no_switch_pcm(#[case] backen
         });
     }
 
-    for &[first, second] in TRANSITIONS.as_chunks::<2>().0 {
+    for &[first, second] in TRANSITIONS[transitions].as_chunks::<2>().0 {
         let (first_switched, second_switched) = join!(
             render_switch(&master_url, first, backend),
             render_switch(&master_url, second, backend),

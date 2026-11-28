@@ -86,7 +86,7 @@ async fn render_tempo_control(
     captured
 }
 
-#[kithara::test(tokio, multi_thread)]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 #[case::correct_48k(48_000, 127.0, true)]
 #[case::correct_44k(44_100, 127.0, true)]
 #[case::fast_48k(48_000, 128.0, false)]
@@ -127,7 +127,7 @@ async fn tempo_oracle_distinguishes_the_rendered_rate(
     }
 }
 
-#[kithara::test(tokio, multi_thread)]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 #[case::correct_48k(48_000, 127.0, true)]
 #[case::correct_44k(44_100, 127.0, true)]
 #[case::fast_48k(48_000, 128.0, false)]
@@ -189,7 +189,7 @@ async fn tempo_oracle_distinguishes_a_decorated_capture(
     }
 }
 
-#[kithara::test(tokio, multi_thread)]
+#[kithara::test(tokio, multi_thread, timeout(Long))]
 #[case::cd_rate(44_100)]
 #[case::render_rate(48_000)]
 async fn tempo_oracle_preserves_the_live_rate_boundary(#[case] sample_rate: u32) {
@@ -297,7 +297,7 @@ fn cochlea_silent_segments(samples: &[f32], start_frame: usize, end_frame: usize
         .count()
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, timeout(Long))]
 async fn cochlea_oracle_rejects_click_and_pause_in_rendered_no_switch_control() {
     let control = render_no_switch_control().await;
     let pause_end = SEAM_FRAME + PAUSE_FRAMES;

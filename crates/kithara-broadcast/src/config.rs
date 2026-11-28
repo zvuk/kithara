@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(measured.bit_rate, configured.bit_rate);
     }
 
-    #[kithara::test(native, flash(false))]
+    #[kithara::test(native, flash(false), timeout(Quick))]
     fn a_patch_writes_the_bit_rate_and_keeps_the_seeded_channel_count() {
         let settings: BroadcastConfigPatch =
             serde_yaml_ng::from_str("bit_rate: 256000\n").expect("the document types");

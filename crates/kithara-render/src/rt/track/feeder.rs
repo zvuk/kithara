@@ -506,6 +506,14 @@ fn copy_samples(
             source_start = source.start(),
             source_end = source.end()
         );
+        kithara::probe_event!(
+            pcm_consumed_packet,
+            segment = chunk.meta.segment.get(),
+            lane_frame = chunk.meta.lane_frame,
+            offset = offset,
+            frames = output.len(),
+            source_revision = chunk.meta.source_revision
+        );
     }
 }
 

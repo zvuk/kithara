@@ -23,7 +23,7 @@ use super::sync_product_matrix::{
     SyncCase, synthetic_sources,
 };
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 async fn progressive_analysis_preserves_consumed_audio_and_explicit_seek_lands_at_once(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
@@ -133,7 +133,7 @@ async fn progressive_analysis_preserves_consumed_audio_and_explicit_seek_lands_a
     assert_explicit_seek_lands(&mut rig, case, placements, item).await;
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Heavy))]
 async fn progressive_grid_refinement_preserves_audible_phase(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {
@@ -329,7 +329,7 @@ async fn assert_explicit_seek_lands(
     assert!(rig.failures.is_empty(), "{:?}", rig.failures);
 }
 
-#[kithara::test(native, tokio, multi_thread, serial, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, multi_thread, serial, timeout(Long))]
 async fn a_manual_seek_replaces_an_applied_source_programme_with_the_same_tail_speed(
     #[future(awt)] synthetic_sources: PreparedSources,
 ) {

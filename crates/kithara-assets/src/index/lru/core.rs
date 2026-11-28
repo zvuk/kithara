@@ -139,7 +139,7 @@ mod tests {
 
     use super::*;
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn update_bytes_does_not_change_eviction_order() {
         let lru = LruIndex::ephemeral();
         lru.touch("A", Some(100)).unwrap();
@@ -158,7 +158,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(flash(false), timeout(Duration::from_secs(5)))]
+    #[kithara::test(flash(false), timeout(Long))]
     fn update_bytes_leaves_the_write_to_the_flush_hub() {
         use std::{fs, num::NonZeroUsize};
 
@@ -203,7 +203,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn update_bytes_unknown_root_is_noop() {
         let lru = LruIndex::ephemeral();
         let changed = lru.update_bytes("ghost", 4096);
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(lru.total_bytes_best_effort(), 0);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test]
     fn update_bytes_idempotent_when_value_matches() {
         let lru = LruIndex::ephemeral();
         lru.touch("A", Some(100)).unwrap();

@@ -6,7 +6,7 @@ use kithara_test_fixtures::Mp3Shape;
 
 use super::*;
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
+#[kithara::test(tokio, browser, timeout(Quick), hang_timeout_secs(5))]
 #[cfg_attr(not(target_os = "android"), case::symphonia(DecoderBackend::Symphonia))]
 #[case::apple(platform = apple, DecoderBackend::Apple)]
 #[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
@@ -57,7 +57,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     );
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
+#[kithara::test(tokio, browser, hang_timeout_secs(5))]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia(false, DecoderBackend::Symphonia, Mp3Shape::Tagged)
@@ -118,13 +118,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     );
 }
 
-#[kithara::test(
-    tokio,
-    browser,
-    flash(false),
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, browser, flash(false), timeout(Quick), hang_timeout_secs(5))]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia(false, DecoderBackend::Symphonia)
@@ -219,7 +213,7 @@ enum WarmupTeardown {
 
 /// Sequential HLS warmups from two isolated sessions must not poison each
 /// other. Covers three teardown modes for the first session.
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
+#[kithara::test(tokio, browser, hang_timeout_secs(5))]
 #[cfg_attr(
     not(target_os = "android"),
     case::shutdown_symphonia(WarmupTeardown::Shutdown, DecoderBackend::Symphonia)
@@ -322,13 +316,7 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     drop(worker_b);
 }
 
-#[kithara::test(
-    tokio,
-    multi_thread,
-    browser,
-    timeout(Duration::from_secs(10)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(tokio, multi_thread, browser, hang_timeout_secs(5))]
 async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
     #[future(awt)] audio_hls_pair: (CreatedHls, CreatedHls),
 ) {
@@ -349,7 +337,7 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session(
     assert!(second_read > 0, "second HLS stream session must read bytes");
 }
 
-#[kithara::test(tokio, native, timeout(Duration::from_secs(25)), hang_timeout_secs(3))]
+#[kithara::test(tokio, native, timeout(Long), hang_timeout_secs(3))]
 #[cfg_attr(not(target_os = "android"), case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia, aac_source().await))]
 #[case::aac_apple(platform = apple, AudioCodec::AacLc, DecoderBackend::Apple, aac_source().await)]
 #[cfg_attr(
@@ -485,7 +473,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     hang_reset!();
 }
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)), hang_timeout_secs(5))]
+#[kithara::test(tokio, browser, hang_timeout_secs(5))]
 #[cfg_attr(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     case::disk_symphonia(false, DecoderBackend::Symphonia)

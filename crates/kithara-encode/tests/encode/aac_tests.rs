@@ -101,7 +101,7 @@ fn encode_packaged_reports_the_encoder_codec_delay(
     assert_eq!(encoded.codec_delay, codec_delay);
 }
 
-#[kithara::test]
+#[kithara::test(timeout(Quick))]
 #[case::he(AudioCodec::AacHe, 64_000, encoder_saw_he())]
 #[case::lc(AudioCodec::AacLc, 128_000, encoder_saw_aac())]
 fn encode_packaged_aac_reuses_injected_pools(

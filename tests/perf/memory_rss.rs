@@ -163,23 +163,22 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
 }
 
 /// Multi-run RSS measurement: peak RSS delta must stay within budget.
-#[kithara::test(
-    native,
-    tokio,
-    serial,
-    timeout(Duration::from_secs(90)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, serial, timeout(Long), hang_timeout_secs(5))]
+#[case::run_0(0..1)]
+#[case::run_1(1..2)]
+#[case::run_2(2..3)]
 async fn test_hls_playback_rss_within_budget(
     temp_dir: TestTempDir,
     #[future(awt)] rss_source: (TestServerHelper, Url),
+    #[case] runs: std::ops::Range<usize>,
 ) {
     let _guard = HotpathGuardBuilder::new("rss_budget").build();
     let mut run_deltas = Vec::with_capacity(consts::BUDGET_RUNS);
     let (_server, url) = rss_source;
 
-    for run in 0..consts::BUDGET_RUNS {
+    for run in runs {
         let baseline_rss = physical_memory().expect("RSS measurement unsupported");
+        eprintln!("rss budget run {run}: baseline={baseline_rss}");
 
         let pools = pools();
         let store = AssetStore::builder(pools.clone())
@@ -199,12 +198,25 @@ async fn test_hls_playback_rss_within_budget(
             kithara_integration_tests::mock::load_audio(&worker, (config, TrackConfig::default()))
                 .await
                 .expect("audio creation");
+        eprintln!("rss budget run {run}: audio ready");
 
-        let drain = spawn_blocking(move || drain_sampling_rss(&mut audio))
-            .await
-            .expect("spawn_blocking");
+        let drain = spawn_blocking(move || {
+            let drain = drain_sampling_rss(&mut audio);
+            eprintln!(
+                "rss budget run {run}: drain returned reads={} elapsed={:?}",
+                drain.samples.len(),
+                drain.elapsed
+            );
+            drop(audio);
+            eprintln!("rss budget run {run}: audio dropped");
+            drain
+        })
+        .await
+        .expect("spawn_blocking");
+        eprintln!("rss budget run {run}: drain joined");
 
         let samples = drain.complete_samples();
+        eprintln!("rss budget run {run}: samples complete");
         let peak_rss = samples
             .iter()
             .copied()
@@ -235,6 +247,8 @@ async fn test_hls_playback_rss_within_budget(
         consts::RSS_BUDGET_MB
     );
 
+    eprintln!("rss budget scoring complete: max_delta={max_delta}");
+
     assert!(
         max_delta < consts::RSS_BUDGET_MB * consts::MB,
         "RSS exceeded budget: max delta {:.1}MB > {}MB",
@@ -244,13 +258,7 @@ async fn test_hls_playback_rss_within_budget(
 }
 
 /// RSS should stabilize after warmup — no sustained growth.
-#[kithara::test(
-    native,
-    tokio,
-    serial,
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(5)
-)]
+#[kithara::test(native, tokio, serial, timeout(Long), hang_timeout_secs(5))]
 async fn test_hls_playback_no_rss_leak(
     temp_dir: TestTempDir,
     #[future(awt)] rss_source: (TestServerHelper, Url),

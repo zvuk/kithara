@@ -1,131 +1,33 @@
 use kithara_test_args::{TestArgs, TestFlags};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{Attribute, Ident};
+use syn::{Attribute, Ident, ReturnType};
 
 use super::{
     fixture_args::Preamble,
     shared::{
-        finalize_body, make_ambient_stmt, make_clock_measurement_stmt,
+        finalize_body, make_ambient_stmt, make_binary_resident_stmt, make_clock_measurement_stmt,
         make_dedicated_worker_config, make_hang_budget, make_hard_timeout_watchdog,
-        make_prekill_guard, make_runtime_builder, make_selenium_attrs, make_serial_attr,
-        make_test_setup, make_wasm_serial_guard, wrap_with_model, wrap_with_soft_fail,
+        make_runtime_builder, make_selenium_attrs, make_serial_attr, make_test_setup,
+        make_wasm_serial_guard, sync_test_body, wrap_with_model, wrap_with_soft_fail,
         wrap_with_timeout,
     },
 };
 
-/// Emit a native async test with a **manual tokio runtime** (no timeout).
+/// Emit a native async test with a deadline and joined runtime shutdown.
 ///
-/// Generates a sync `#[test]` fn that creates a `current_thread` runtime via
-/// `kithara_platform::tokio::runtime::Builder` and calls `block_on`.
-///
-/// This avoids depending on `#[tokio::test]` so consumer crates do not need
-/// `tokio` as a direct dependency.
-pub(crate) fn emit_async_runtime_test(
-    fn_name: &Ident,
-    vis: &syn::Visibility,
-    ret_type: &syn::ReturnType,
-    remaining_attrs: &[&Attribute],
-    body: &Preamble,
-    args: &TestArgs,
-    serial_attr: &TokenStream2,
-) -> TokenStream2 {
-    let hang_budget = make_hang_budget(args.hang_timeout_secs());
-    let prekill_guard = make_prekill_guard(fn_name);
-    let selenium_attr = make_selenium_attrs(args);
-    let runtime_builder = make_runtime_builder(args);
-    let flash = args.flash().unwrap_or(true);
-    let fn_name_str = fn_name.to_string();
-    let scoped = body.scoped(true);
-    let body = &body.body;
-    let inner_body = if !args.soft_fail_patterns().is_empty() {
-        wrap_with_soft_fail(
-            &quote! { { #body } },
-            fn_name,
-            true,
-            args.soft_fail_patterns(),
-        )
-    } else {
-        quote! { { #body } }
-    };
-
-    // Installing the subscriber parses filter directives and allocates. The
-    // real-time sanitizer checks every poll of the test future, and the first
-    // test to reach this — whichever it happens to be — was reported as an
-    // unsafe `malloc` in a real-time context. Process-wide setup belongs
-    // before the future exists.
-    let test_setup = make_test_setup(args, remaining_attrs);
-    let clock_measurement = make_clock_measurement_stmt(args, fn_name);
-    let runtime_body = quote! {
-        {
-            #test_setup
-            let __rt = #runtime_builder;
-            #scoped
-            __rt.block_on(
-                ::kithara_test_utils::kithara_platform::flash::participate(
-                    ::kithara_test_utils::kithara_platform::flash::with_ambient(
-                        #flash,
-                        ::kithara_test_utils::kithara_platform::flash::dynamic(
-                            #flash,
-                            ::kithara_test_utils::no_block::watch_root(
-                                #fn_name_str,
-                                async {
-                                    #inner_body
-                                },
-                            ),
-                        ),
-                    ),
-                    ::core::panic::Location::caller(),
-                ),
-            )
-        }
-    };
-    let runtime_body = wrap_with_model(&runtime_body, args, fn_name);
-
-    quote! {
-        #(#remaining_attrs)*
-        #serial_attr
-        #selenium_attr
-        #[cfg(not(target_arch = "wasm32"))]
-        #[test]
-        #vis fn #fn_name() #ret_type {
-            #hang_budget
-            #prekill_guard
-            #clock_measurement
-            #runtime_body
-        }
-    }
-}
-
-/// Emit a native async test with a timeout using a **manual tokio runtime**.
-///
-/// Why: `#[tokio::test]` creates a runtime whose `Drop` waits indefinitely for
-/// `spawn_blocking` tasks.  If the test body spawns a blocking thread that
-/// outlives the timeout, the runtime shutdown hangs forever — even though
-/// `tokio::time::timeout` already fired and panicked.
-///
-/// This function generates a **sync** `#[test]` fn that:
-/// 1. Spawns a watchdog thread **outside** the tokio runtime.
-/// 2. Creates the runtime manually.
-/// 3. Runs the async body inside `block_on` with `tokio::time::timeout`.
-/// 4. Catches panics via `catch_unwind` so we can call `shutdown_timeout`
-///    before re-raising.
-/// 5. Calls `runtime.shutdown_timeout(100ms)` — never blocks on zombies.
-/// 6. The watchdog Drop guard fires **after** `shutdown_timeout`, so it only
-///    aborts if even the forced shutdown is stuck.
+/// Started blocking work stays owned until it finishes. The external watchdog
+/// bounds shutdown when that work cannot finish.
 pub(crate) fn emit_async_timeout_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
-    ret_type: &syn::ReturnType,
+    ret_type: &ReturnType,
     remaining_attrs: &[&Attribute],
     body: &Preamble,
     args: &TestArgs,
     serial_attr: &TokenStream2,
 ) -> TokenStream2 {
-    let dur = args
-        .timeout()
-        .as_ref()
-        .expect("BUG: caller checks `args.timeout().is_some()` before this fn");
+    let dur = super::timeout::resolve(args);
     let fn_name_str = fn_name.to_string();
     let scoped = body.scoped(true);
     let body = &body.body;
@@ -182,14 +84,19 @@ pub(crate) fn emit_async_timeout_test(
     // before the future exists.
     let test_setup = make_test_setup(args, remaining_attrs);
     let clock_measurement = make_clock_measurement_stmt(args, fn_name);
+    let resident = make_binary_resident_stmt();
     let runtime_body = quote! {
         {
+            #resident
             #test_setup
-            let __rt = #runtime_builder;
+            let __runtime = #runtime_builder;
             let __result = ::std::panic::catch_unwind(
-                ::std::panic::AssertUnwindSafe(|| {
-                    #scoped
-                    __rt.block_on(
+                ::std::panic::AssertUnwindSafe(move || {
+                    let __rt = __runtime;
+                    let __started = ::kithara_test_utils::kithara_platform::time::WallInstant::now();
+                    let __value = {
+                        #scoped
+                        __rt.block_on(
                         ::kithara_test_utils::kithara_platform::flash::participate(
                             async {
                                     ::kithara_test_utils::kithara_platform::time::timeout(
@@ -222,11 +129,20 @@ pub(crate) fn emit_async_timeout_test(
                             },
                             ::core::panic::Location::caller(),
                         ),
-                    )
+                        )
+                    };
+                    ::core::mem::drop(__rt);
+                    if __started.elapsed() > __timeout_dur {
+                        let __diagnostic = ::std::format!(
+                            "test `{}` timed out after {:?}",
+                            #fn_name_str, __timeout_dur,
+                        );
+                        ::kithara_test_utils::hang::record_test_hang("wall-timeout", &__diagnostic);
+                        ::core::panic!("{}", __diagnostic);
+                    }
+                    __value
                 })
             );
-
-            __rt.shutdown_timeout(::std::time::Duration::from_millis(100));
 
             match __result {
                 Ok(__v) => __v,
@@ -274,7 +190,7 @@ pub(crate) fn emit_async_timeout_test(
 pub(crate) fn emit_browser_test(
     fn_name: &Ident,
     vis: &syn::Visibility,
-    ret_type: &syn::ReturnType,
+    ret_type: &ReturnType,
     remaining_attrs: &[&Attribute],
     is_async: bool,
     preamble: &Preamble,
@@ -301,7 +217,7 @@ pub(crate) fn emit_browser_test(
         #ambient
         #(#body_stmts)*
     };
-    let wasm_with_timeout = wrap_with_timeout(&wasm_body, args.timeout(), true, fn_name);
+    let wasm_with_timeout = wrap_with_timeout(&wasm_body, args, true, fn_name, ret_type);
     let wasm_wrapped = finalize_body(&wasm_with_timeout, args, fn_name, true);
     let wasm_serial_guard = make_wasm_serial_guard(args);
     output.extend(quote! {
@@ -321,18 +237,8 @@ pub(crate) fn emit_browser_test(
         // Tracing is not set up here — see `emit_async_runtime_test`.
         let native_body = preamble.with_body(body_stmts);
 
-        if native_is_async && args.timeout().is_some() {
+        if native_is_async {
             output.extend(emit_async_timeout_test(
-                fn_name,
-                vis,
-                ret_type,
-                remaining_attrs,
-                &native_body,
-                args,
-                &serial_attr,
-            ));
-        } else if native_is_async {
-            output.extend(emit_async_runtime_test(
                 fn_name,
                 vis,
                 ret_type,
@@ -345,15 +251,14 @@ pub(crate) fn emit_browser_test(
             let sync_body =
                 super::shared::wrap_with_sync_participation(&quote! { #(#body_stmts)* }, args);
             let native_body_held = quote! { #test_setup #scoped #bindings #ambient #sync_body };
-            let native_with_timeout =
-                wrap_with_timeout(&native_body_held, args.timeout(), false, fn_name);
-            let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, false);
+            let native_wrapped =
+                sync_test_body(&native_body_held, args, fn_name, ret_type, remaining_attrs);
             output.extend(quote! {
                 #(#remaining_attrs)*
                 #serial_attr
                 #[cfg(not(target_arch = "wasm32"))]
                 #[test]
-                #vis fn #fn_name() #ret_type #native_wrapped
+                #vis fn #fn_name() #native_wrapped
             });
         }
     }
@@ -371,8 +276,11 @@ mod tests {
 
     #[test]
     fn native_timeout_emitter_records_wall_and_hard_hangs() -> syn::Result<()> {
-        let args =
-            syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")?;
+        assert!(
+            syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")
+                .is_err()
+        );
+        let args = syn::parse_str::<TestArgs>("tokio, timeout(Long)")?;
         let name: Ident = parse_quote!(stress_case);
         let visibility = Visibility::Inherited;
         let return_type = ReturnType::Default;
@@ -391,10 +299,50 @@ mod tests {
         )
         .to_string();
 
+        assert!(!expanded.contains("shutdown_timeout"));
+        let owned = expanded
+            .find("let __rt = __runtime")
+            .expect("owned runtime");
+        let joined = expanded.find("drop (__rt)").expect("joined shutdown");
+        let checked = expanded
+            .find("__started . elapsed () > __timeout_dur")
+            .expect("full lifetime deadline");
+        let reported = expanded.find("match __result").expect("result report");
+        assert!(owned < joined && joined < checked && checked < reported);
         assert!(!expanded.contains("PreKillGuard"));
         assert!(expanded.contains("record_test_hang"));
         assert!(expanded.contains("wall-timeout"));
         assert!(expanded.contains("hard-timeout"));
+        Ok(())
+    }
+
+    #[test]
+    fn native_async_code_is_resident_before_the_deadline_is_armed() -> syn::Result<()> {
+        assert!(
+            syn::parse_str::<TestArgs>("tokio, timeout(::std::time::Duration::from_secs(5))")
+                .is_err()
+        );
+        let args = syn::parse_str::<TestArgs>("tokio, timeout(Long)")?;
+        let name: Ident = parse_quote!(cold_binary);
+        let expanded = emit_async_timeout_test(
+            &name,
+            &Visibility::Inherited,
+            &ReturnType::Default,
+            &[],
+            &make_preamble(&[], None),
+            &args,
+            &TokenStream2::new(),
+        )
+        .to_string();
+
+        let resident = expanded.find("make_binary_resident");
+        let armed = expanded.find("time :: timeout");
+        assert!(
+            resident
+                .zip(armed)
+                .is_some_and(|(resident, armed)| resident < armed),
+            "{expanded}"
+        );
         Ok(())
     }
 }

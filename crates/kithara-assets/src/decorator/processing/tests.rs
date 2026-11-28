@@ -182,7 +182,7 @@ fn encrypted_writer_reader_is_not_readable_before_commit() {
     assert!(matches!(err, StorageError::NotReadable));
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn reader_view_blocks_until_writer_commits() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let process_fn = xor_chunk_processor(0x55, Arc::clone(&call_count));
@@ -229,7 +229,7 @@ fn reader_view_blocks_until_writer_commits() {
     }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 fn wait_range_aborts_on_cancellation() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
@@ -271,7 +271,7 @@ fn wait_range_aborts_on_cancellation() {
     drop(writer);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(native)]
 fn external_cancel_interrupts_processing_wait_without_cancelling_resource() {
     let pools = crate::test_pools::pools();
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -422,7 +422,7 @@ fn reactivate_then_commit_reruns_processor_mem() {
     assert_eq!(&out[..], b"second payload");
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test]
 #[case::drop(false)]
 #[case::abandon(true)]
 fn ending_a_writer_without_commit_interrupts_its_readers(#[case] abandon: bool) {
