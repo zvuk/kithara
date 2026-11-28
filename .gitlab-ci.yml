@@ -6,18 +6,11 @@ workflow:
     on_new_commit: interruptible
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    # The default branch is the only push that starts a pipeline. A pull
+    # request is verified by the pipeline the bridge creates on its quarantine
+    # ref, and a merge request by its own event; a push of either ref, or of
+    # any other branch, would only take the one Apple host a second time.
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    # The bridge creates the quarantine pipeline itself and watches that one by
-    # id. The push that places the commit adds a second pipeline nobody reads,
-    # and the two then compete for the single Apple host.
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^quarantine\//
-      when: never
-    # A branch with an open merge request is already covered by the
-    # merge-request pipeline. A second pipeline on the same commit would take
-    # the one Apple host twice to report the same thing.
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
-      when: never
-    - if: $CI_PIPELINE_SOURCE == "push"
     - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $KITHARA_RELEASE_VERSION =~ /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_QUARANTINE_SHA
@@ -79,7 +72,6 @@ dispatch:branch:
     - if: $CI_PIPELINE_SOURCE == "api" && $KITHARA_QUARANTINE_SHA && $KITHARA_QUARANTINE_DRAFT == "1"
       variables:
         KITHARA_CACHE_TRUST: quarantine
-    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
 
 # Started by hand to name platforms a push cannot. Its own kind admits the
 # verify and integration sets so the requested platform lanes exist, while the

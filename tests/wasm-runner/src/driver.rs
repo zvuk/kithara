@@ -168,19 +168,29 @@ impl Session {
     }
 
     /// The text of element `id` past `offset`, and the offset after it.
-    pub(crate) async fn text_since(&self, id: &str, offset: usize) -> Result<(String, usize)> {
+    pub(crate) async fn text_since(
+        &self,
+        id: &str,
+        offset: usize,
+        deadline: Instant,
+    ) -> Result<(String, usize)> {
         let script = "const el = document.getElementById(arguments[0]); \
                       const text = el ? el.textContent : ''; \
                       const start = Math.min(arguments[1], text.length); \
                       return { chunk: text.slice(start), next: text.length };";
         let path = format!("/session/{}/execute/sync", self.id);
-        let reply = self
-            .call(
+        let reply = timeout(
+            deadline.saturating_duration_since(Instant::now()),
+            self.call(
                 reqwest::Method::POST,
                 &path,
                 Some(json!({ "script": script, "args": [id, offset] })),
-            )
-            .await?;
+            ),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("reading #{id} through WebDriver {path} exceeded the report deadline")
+        })??;
         let chunk = reply
             .pointer("/value/chunk")
             .and_then(Value::as_str)
@@ -292,9 +302,12 @@ fn new_session(browser: Browser, mut capabilities: Map<String, Value>) -> Value 
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::kithara;
+    use std::process::{Command, Stdio};
 
-    use super::driver_arguments;
+    use axum::{Router, routing::post};
+    use kithara_test_utils::{TestHttpServer, kithara};
+
+    use super::*;
 
     #[kithara::test(native)]
     fn driver_arguments_split_as_a_shell_splits() {
@@ -307,5 +320,35 @@ mod tests {
         );
         assert_eq!(driver_arguments(""), Some(Vec::new()));
         assert_eq!(driver_arguments("--log-path='unclosed"), None);
+    }
+
+    #[kithara::test(native, tokio, timeout(Duration::from_secs(1)))]
+    async fn report_deadline_bounds_a_stalled_script_call() {
+        let server = TestHttpServer::new(Router::new().route(
+            "/session/test/execute/sync",
+            post(|| async { std::future::pending::<String>().await }),
+        ))
+        .await;
+        let driver = Command::new(env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let session = Session {
+            http: reqwest::Client::new(),
+            base: server.base_url().as_str().trim_end_matches('/').to_owned(),
+            id: "test".into(),
+            driver,
+        };
+
+        let error = crate::report(&session, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "reading #output through WebDriver /session/test/execute/sync exceeded the report deadline"
+            ),
+            "{error:#}"
+        );
     }
 }

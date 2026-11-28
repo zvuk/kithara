@@ -75,6 +75,25 @@
     - if: $KITHARA_LINUX_POOL == "off" || $KITHARA_CI_PROFILE == "github-only"
       when: never
 
+# A ready verification that follows its draft's passed run of the same merge
+# tree carries `KITHARA_QUARANTINE_REUSED`. A job whose draft run was this very
+# plan - both kinds, the same arguments, no suite the draft scope narrows, no
+# artifacts a kept job reads - already answered on that tree, so it is not
+# created again. A job with such a suite runs it less the draft's scope.
+.reused-from-draft:
+  rules:
+    - if: $KITHARA_QUARANTINE_REUSED == "1"
+      when: never
+
+# A rejected verification the default branch moved under, reaching every job
+# that failed, is repeated on the new base with `KITHARA_QUARANTINE_JOBS`, a
+# pattern naming those jobs. No other job is created, except one whose
+# artifacts a named job reads: it cannot run without them.
+.repeated-jobs:
+  rules:
+    - if: $KITHARA_QUARANTINE_JOBS && $CI_JOB_NAME !~ $KITHARA_QUARANTINE_JOBS
+      when: never
+
 # Mac lanes run on the Mac host, the Linux lanes whose `kinds_gitlab` place
 # them on GitLab run on the Linux pool, and the Linux lanes GitHub keeps run on
 # its own fleet. Android and Windows are opted into through KITHARA_PLATFORMS.
@@ -103,6 +122,12 @@
 # registered cannot hold the rest of the pipeline hostage.
 .rules-verify:
   interruptible: true
+  rules:
+    - !reference [.repeated-jobs, rules]
+    - !reference [.verify-kinds, rules]
+
+# The kinds that verify, for a job a repeat keeps whatever it names.
+.verify-kinds:
   rules:
     - if: $KITHARA_PIPELINE_KIND == "merge-request"
     - if: $KITHARA_PIPELINE_KIND == "quarantine"
