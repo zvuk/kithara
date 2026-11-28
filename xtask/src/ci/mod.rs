@@ -10,6 +10,7 @@ mod host;
 mod image;
 mod kache;
 mod lane;
+mod partial;
 #[cfg(test)]
 pub(crate) mod previous_layout;
 pub(crate) mod process;
@@ -25,3 +26,4 @@ pub(crate) use build_dir::fixture;
 pub(crate) use build_dir::{Claim, claim_sources, collect_garbage};
 pub(crate) use command::{CiArgs, is_standalone, run, run_standalone};
 pub(crate) use environment::ci_in;
+pub(crate) use run::PipelineKind;

@@ -1487,7 +1487,17 @@ mod tests {
             .split_once("\n.")
             .map_or(after_verify, |(rules, _)| rules);
         assert!(
-            verify.contains("$KITHARA_PIPELINE_KIND == \"quarantine\""),
+            verify.contains("- !reference [.verify-kinds, rules]\n"),
+            "the rule set the iOS suite takes does not carry the verifying kinds"
+        );
+        let (_, after_kinds) = common
+            .split_once(".verify-kinds:")
+            .expect("the verifying kinds exist");
+        let kinds = after_kinds
+            .split_once("\n.")
+            .map_or(after_kinds, |(rules, _)| rules);
+        assert!(
+            kinds.contains("$KITHARA_PIPELINE_KIND == \"quarantine\""),
             "the rule set the iOS suite takes does not carry the quarantine kind"
         );
     }

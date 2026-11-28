@@ -7,6 +7,7 @@ use std::{
 use serde_yaml_ng::{Mapping, Value};
 
 mod deps_deny;
+mod throughput;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("Cargo test package directory"))
@@ -285,6 +286,13 @@ impl GitlabConfig {
                     let condition = rule
                         .get("if")
                         .unwrap_or_else(|| panic!("`{rules_owner}` has an unconditional rule"));
+                    // A refusal guarded on another variable - the pool switch,
+                    // a reused draft - decides no kind; it only takes a job out.
+                    if rule.get("when").and_then(Value::as_str) == Some("never")
+                        && condition.as_str().and_then(declared_kind).is_none()
+                    {
+                        continue;
+                    }
                     let matches = pipeline_kind(condition, rules_owner) == kind;
                     if matches {
                         return Some(RuleDecision {
@@ -501,33 +509,27 @@ fn merge_request_dispatch_is_admitted_without_duplicate_push_pipelines() {
         .get("rules")
         .and_then(Value::as_sequence)
         .expect("dispatch workflow rules are a sequence");
-    assert!(workflow_rules.len() >= 5);
     assert_exact_rule(
         mapping(&workflow_rules[0], "the merge-request admission rule"),
         "$CI_PIPELINE_SOURCE == \"merge_request_event\"",
         None,
     );
+    // A pull request's quarantine ref, a merge request's branch and every
+    // other branch are verified by the pipeline made for them; a push of the
+    // same commit would start a second one.
+    let pushes: Vec<_> = workflow_rules
+        .iter()
+        .map(|rule| mapping(rule, "a workflow rule"))
+        .filter(|rule| {
+            rule.get("if")
+                .and_then(Value::as_str)
+                .is_some_and(|condition| condition.contains("\"push\""))
+        })
+        .collect();
+    assert_eq!(pushes.len(), 1, "{pushes:?}");
     assert_exact_rule(
-        mapping(&workflow_rules[1], "the default-branch push rule"),
+        pushes[0],
         "$CI_PIPELINE_SOURCE == \"push\" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH",
-        None,
-    );
-    assert_exact_rule(
-        mapping(&workflow_rules[2], "the quarantine-push suppression rule"),
-        "$CI_PIPELINE_SOURCE == \"push\" && $CI_COMMIT_BRANCH =~ /^quarantine\\//",
-        Some("never"),
-    );
-    assert_exact_rule(
-        mapping(
-            &workflow_rules[3],
-            "the open-merge-request suppression rule",
-        ),
-        "$CI_PIPELINE_SOURCE == \"push\" && $CI_OPEN_MERGE_REQUESTS",
-        Some("never"),
-    );
-    assert_exact_rule(
-        mapping(&workflow_rules[4], "the branch push rule"),
-        "$CI_PIPELINE_SOURCE == \"push\"",
         None,
     );
 
@@ -1033,10 +1035,12 @@ fn an_open_merge_request_runs_the_complete_apple_review_matrix() {
     assert_eq!(actual_jobs, expected_jobs);
 
     for (job, owner, judged) in [
-        ("apple:lint", ".rules-verify-and-branch", false),
+        ("apple:lint", "apple:lint", false),
         ("apple:net-units", ".rules-verify-and-branch", true),
         ("apple:test", ".rules-verify-and-branch", true),
-        ("apple:xcframework", ".rules-verify-and-branch", false),
+        // The jobs that read the framework need it in a repeat of failed
+        // jobs too, so it keeps the kinds without the repeat's refusal.
+        ("apple:xcframework", "apple:xcframework", false),
         ("apple:ios", ".rules-verify", false),
         // The simulator suite blocks rather than reports: no other host can
         // answer for the iOS surface. A draft is a branch and leaves it to the
@@ -1072,7 +1076,11 @@ fn apple_network_units_upload_their_own_verdict_evidence() {
             ".ci-artifacts/hang/",
         ])
     );
-    assert_eq!(leaf["needs"][0].as_str(), Some("apple:lint"));
+    assert_eq!(
+        leaf["needs"],
+        serde_yaml_ng::from_str::<Value>("[{job: apple:pr-tests, optional: true}]").unwrap(),
+        "the suite waits only for the draft's test block check"
+    );
 }
 
 #[test]
@@ -1469,17 +1477,31 @@ fn superseded_review_checks_are_cancelable_in_the_child_pipeline() {
     assert_eq!(rules[1]["when"].as_str(), Some("always"));
     let config = GitlabConfig::load(&root);
     // A rule inherits the block's `interruptible` unless it overrides it, and
-    // the kinds a review ref runs under are spread over the two blocks that
+    // the kinds a review ref runs under are spread over the blocks that
     // declare them: a branch on `.rules-verify-and-branch`, a merge request on
-    // the `.rules-verify` rules it references.
-    for (owner, kind) in [
-        (".rules-verify-and-branch", "branch"),
-        (".rules-verify", "merge-request"),
-        (".rules-review-or-nightly", "branch"),
-        (".rules-review-or-nightly", "merge-request"),
+    // the `.verify-kinds` rules that `.rules-verify` references.
+    for (holder, owner, kind) in [
+        (
+            ".rules-verify-and-branch",
+            ".rules-verify-and-branch",
+            "branch",
+        ),
+        (".verify-kinds", ".rules-verify", "merge-request"),
+        (
+            ".rules-review-or-nightly",
+            ".rules-review-or-nightly",
+            "branch",
+        ),
+        (
+            ".rules-review-or-nightly",
+            ".rules-review-or-nightly",
+            "merge-request",
+        ),
     ] {
         let block = config.definition(owner);
-        let rules = block["rules"].as_sequence().expect("job rules");
+        let rules = config.definition(holder)["rules"]
+            .as_sequence()
+            .expect("job rules");
         let condition = format!("$KITHARA_PIPELINE_KIND == \"{kind}\"");
         let rule = rules
             .iter()
@@ -1507,12 +1529,12 @@ fn superseded_review_checks_are_cancelable_in_the_child_pipeline() {
     }
     // `.rules-verify-and-branch` spells the same policy the other way round:
     // the set is cancelable, and the kinds that guard a landed commit opt out
-    // rule by rule inside `.rules-verify`.
+    // rule by rule inside the `.verify-kinds` that `.rules-verify` references.
     assert_eq!(
         config.definition(".rules-verify-and-branch")["interruptible"].as_bool(),
         Some(true)
     );
-    let verify = config.definition(".rules-verify")["rules"]
+    let verify = config.definition(".verify-kinds")["rules"]
         .as_sequence()
         .expect("job rules");
     for kind in ["main", "nightly", "release"] {

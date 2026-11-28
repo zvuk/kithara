@@ -13,6 +13,10 @@
 linux:lint:
   extends: .linux-lane
   timeout: 60 minutes
+  rules:
+    - !reference [.linux-pool, rules]
+    - !reference [.reused-from-draft, rules]
+    - !reference [.rules-verify-and-branch, rules]
   script:
     - just ci lane linux-lint --kind "$KITHARA_PIPELINE_KIND"
 
@@ -41,6 +45,7 @@ linux:tooling:
 .gitlab-only-branch-main-merge-request:
   rules:
     - !reference [.linux-pool, rules]
+    - !reference [.repeated-jobs, rules]
     - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(branch|merge-request|quarantine)$/
     - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(main|platforms)$/
       interruptible: false
@@ -54,6 +59,7 @@ linux:tooling:
 .gitlab-only-branch-main-merge-request-nightly:
   rules:
     - !reference [.linux-pool, rules]
+    - !reference [.repeated-jobs, rules]
     - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(branch|merge-request|quarantine)$/
     - if: $KITHARA_CI_PROFILE == "gitlab-only" && $KITHARA_PIPELINE_KIND =~ /^(main|nightly|platforms)$/
       interruptible: false

@@ -5,11 +5,140 @@
   stage: apple
   timeout: 60 minutes
 
+# A draft's test block is checked before any suite runs it: a block the runner
+# would refuse fails the pipeline here, not inside a lane minutes in.
+apple:pr-tests:
+  extends: .macos-job
+  stage: apple
+  timeout: 10 minutes
+  interruptible: true
+  needs: []
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch" && $KITHARA_PR_TESTS
+  script:
+    - just ci pr-tests
+
+# A separate job preserves both suites' JUnit reports.
+apple:net-units:
+  extends:
+    - .apple-job
+    - .judged
+    - .measured
+    - .rules-verify-and-branch
+  needs:
+    - job: apple:pr-tests
+      optional: true
+  script:
+    - just ci run apple-net-units
+  artifacts:
+    when: always
+    expire_in: 30 days
+    reports:
+      junit: .ci-artifacts/junit/apple-net-units.xml
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - .ci-artifacts/junit/apple-net-units.xml
+      - .ci-artifacts/junit/apple-net-units.selection.json
+      - .ci-artifacts/junit/apple-net-units.failed
+      - .ci-artifacts/hang/
+
+# The framework heads the longest chain on the host: the simulator suite and
+# the device build wait for it. A runner takes the oldest pending job it may
+# run, and job ids follow this file, so the framework and the longest suite are
+# defined first and take both slots the moment a pipeline arrives.
+apple:xcframework:
+  extends:
+    - .apple-job
+    - .rules-verify-and-branch
+  needs: []
+  # A repeat of failed jobs builds it whatever failed: the jobs that read it
+  # cannot run without it.
+  rules:
+    - if: $KITHARA_PIPELINE_KIND == "branch"
+    - !reference [.verify-kinds, rules]
+  script:
+    - just ci run apple-xcframework
+  # The simulator suite consumes this rather than building its own. The guest
+  # that runs it may be a different one, and a job cleans the checkout of
+  # everything the commit does not carry, so the framework has to travel.
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - apple/KitharaFFIInternal.xcframework
+      - apple/Sources/KitharaFFI/KitharaFFI.swift
+
+# The suite plays audio and asserts on what came back, so it takes the measured
+# group: a simulator sharing the host with a full build reports on the load
+# rather than on the commit.
+#
+# It blocks rather than reports, and it runs wherever a change is judged in
+# full, quarantine included; a branch or a draft pull request is not. The
+# simulator runs on one Mac mini and nowhere else, so no other lane and no
+# other host can answer for the iOS surface: a red here that only reached the
+# verdict as a report let a change reach the default branch with the surface
+# it breaks never having run green.
+apple:ios-test:
+  extends:
+    - .apple-device-job
+    - .rules-verify
+    - .measured
+  stage: apple
+  timeout: 60 minutes
+  needs:
+    - job: apple:xcframework
+      artifacts: true
+  script:
+    - just ci run apple-ios-test
+  artifacts:
+    when: always
+    reports:
+      junit: .ci-artifacts/junit/apple-ios-test.xml
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - .ci-artifacts/junit/
+
+apple:ios:
+  extends:
+    - .apple-job
+    - .apple-device-job
+  needs:
+    - job: apple:xcframework
+      artifacts: true
+  script:
+    - just ci run apple-ios
+
+apple:test:
+  extends:
+    - .apple-job
+    - .judged
+    - .measured
+    - .rules-verify-and-branch
+  needs:
+    - job: apple:pr-tests
+      optional: true
+  script:
+    - just ci run apple-test
+  artifacts:
+    when: always
+    expire_in: 30 days
+    reports:
+      junit: .ci-artifacts/junit/apple-test.xml
+    paths:
+      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
+      - .ci-artifacts/junit/
+      - .ci-artifacts/hang/
+      - "tests/crates/sync/.ci-artifacts/audio/"
+
 apple:lint:
   extends:
     - .apple-job
     - .rules-verify-and-branch
   needs: []
+  rules:
+    - !reference [.reused-from-draft, rules]
+    - !reference [.rules-verify-and-branch, rules]
   script:
     - just ci run apple-lint
   artifacts:
@@ -45,67 +174,6 @@ apple:test-utils:
   script:
     - just ci run apple-test-utils
 
-# A draft's test block is checked before any suite runs it: a block the runner
-# would refuse fails the pipeline here, not inside a lane minutes in.
-apple:pr-tests:
-  extends: .macos-job
-  stage: apple
-  timeout: 10 minutes
-  interruptible: true
-  needs: []
-  rules:
-    - if: $KITHARA_PIPELINE_KIND == "branch" && $KITHARA_PR_TESTS
-  script:
-    - just ci pr-tests
-
-apple:test:
-  extends:
-    - .apple-job
-    - .judged
-    - .measured
-    - .rules-verify-and-branch
-  needs:
-    - apple:lint
-    - job: apple:pr-tests
-      optional: true
-  script:
-    - just ci run apple-test
-  artifacts:
-    when: always
-    expire_in: 30 days
-    reports:
-      junit: .ci-artifacts/junit/apple-test.xml
-    paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
-      - .ci-artifacts/junit/
-      - .ci-artifacts/hang/
-      - "tests/crates/sync/.ci-artifacts/audio/"
-
-# A separate job preserves both suites' JUnit reports.
-apple:net-units:
-  extends:
-    - .apple-job
-    - .judged
-    - .measured
-    - .rules-verify-and-branch
-  needs:
-    - apple:lint
-    - job: apple:pr-tests
-      optional: true
-  script:
-    - just ci run apple-net-units
-  artifacts:
-    when: always
-    expire_in: 30 days
-    reports:
-      junit: .ci-artifacts/junit/apple-net-units.xml
-    paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
-      - .ci-artifacts/junit/apple-net-units.xml
-      - .ci-artifacts/junit/apple-net-units.selection.json
-      - .ci-artifacts/junit/apple-net-units.failed
-      - .ci-artifacts/hang/
-
 # The same suite with the clock left real. It owns a second target directory,
 # so it is another whole build of the workspace, and what it guards is the
 # flash accounting rather than the change under review. The default branch and
@@ -118,8 +186,7 @@ apple:test-flash-off:
     - .measured
   stage: apple
   timeout: 60 minutes
-  needs:
-    - apple:lint
+  needs: []
   script:
     - just ci run apple-test-flash-off
   artifacts:
@@ -133,25 +200,6 @@ apple:test-flash-off:
       - .ci-artifacts/hang/
       - "tests/crates/sync/.ci-artifacts/audio/"
 
-apple:xcframework:
-  extends:
-    - .apple-job
-    - .rules-verify-and-branch
-  needs:
-    - apple:lint
-  script:
-    - just ci run apple-xcframework
-  # The simulator suite consumes this rather than building its own. The guest
-  # that runs it may be a different one, and a job cleans the checkout of
-  # everything the commit does not carry, so the framework has to travel.
-  artifacts:
-    when: always
-    expire_in: 1 day
-    paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
-      - apple/KitharaFFIInternal.xcframework
-      - apple/Sources/KitharaFFI/KitharaFFI.swift
-
 # The Swift package's own tests, which rebuild the framework in order to run.
 # What a review needs from this layer is the simulator suite on
 # `apple:ios-test`, and that one takes the framework from the job that already
@@ -164,7 +212,8 @@ apple:swift-test:
   stage: apple
   timeout: 60 minutes
   needs:
-    - apple:xcframework
+    - job: apple:xcframework
+      artifacts: true
   script:
     - just ci run apple-swift-test
   artifacts:
@@ -175,52 +224,12 @@ apple:swift-test:
       - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
       - .ci-artifacts/junit/
 
-apple:ios:
-  extends:
-    - .apple-job
-    - .apple-device-job
-  needs:
-    - apple:xcframework
-  script:
-    - just ci run apple-ios
-
-# The suite plays audio and asserts on what came back, so it takes the measured
-# group: a simulator sharing the host with a full build reports on the load
-# rather than on the commit.
-#
-# It blocks rather than reports, and it runs wherever a change is judged in
-# full, quarantine included; a branch or a draft pull request is not. The
-# simulator runs on one Mac mini and nowhere else, so no other lane and no
-# other host can answer for the iOS surface: a red here that only reached the
-# verdict as a report let a change reach the default branch with the surface
-# it breaks never having run green.
-apple:ios-test:
-  extends:
-    - .apple-device-job
-    - .rules-verify
-    - .measured
-  stage: apple
-  timeout: 60 minutes
-  needs:
-    - job: apple:xcframework
-      artifacts: true
-  script:
-    - just ci run apple-ios-test
-  artifacts:
-    when: always
-    reports:
-      junit: .ci-artifacts/junit/apple-ios-test.xml
-    paths:
-      - .ci-artifacts/cache/gitlab-$CI_JOB_ID-*.json
-      - .ci-artifacts/junit/
-
 apple:safari:
   extends:
     - .macos-job
     - .rules-nightly
   stage: apple
   timeout: 60 minutes
-  needs:
-    - apple:lint
+  needs: []
   script:
     - just ci run apple-safari

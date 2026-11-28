@@ -31,6 +31,7 @@ pub struct TestArgs {
     /// `--load=true|false|on|off`, `--net-backend=<configured-name>`, `--narrow=<filterset>`,
     /// `--draft` (the lane's share of the required packages and the pull request's
     /// `KITHARA_PR_TESTS` block; admitted Cargo suites keep their native selection),
+    /// `--rest-of-draft` (what a passed `--draft` run of the same block left of the lane),
     /// `--selection-output=<path>` (JSON lane names), and `--expected-tests=<path>`
     /// (UTF-8 TSV: binary ID, tab, full test name per line).
     #[arg(value_name = "ARGS", allow_hyphen_values = true)]
@@ -56,6 +57,11 @@ pub(crate) fn run(args: &TestArgs, ctx: &Ctx) -> Result<()> {
             Ok(())
         }
         Plan::Draft { lane, scope } => run_draft(test, root, lane, &scope, &request),
+        Plan::Rest { lane, scope } => {
+            let mut command =
+                rest_command(requested_lane(test, lane, &request)?, &scope, &request)?;
+            execute(test, root, lane, &mut command)
+        }
     }
 }
 
@@ -88,7 +94,7 @@ pub fn selects_any_lane(
     let request = TestRequest::parse(args)?;
     Ok(match plan(&project.test, root, &request, pr_tests)? {
         Plan::NotRequired(_) => false,
-        Plan::Lane(_) | Plan::Draft { .. } => true,
+        Plan::Lane(_) | Plan::Draft { .. } | Plan::Rest { .. } => true,
     })
 }
 
@@ -98,7 +104,9 @@ enum Plan<'a> {
     Lane(&'a str),
     /// One lane's share of the draft scope.
     Draft { lane: &'a str, scope: DraftScope },
-    /// A draft lane that holds none of the draft scope.
+    /// What the lane's share of the draft scope left of it.
+    Rest { lane: &'a str, scope: DraftScope },
+    /// A lane with nothing for this request to run.
     NotRequired(&'a str),
 }
 
@@ -111,7 +119,7 @@ impl Plan<'_> {
     ) -> Result<Self> {
         let lane = match &self {
             Self::NotRequired(_) => return Ok(self),
-            Self::Lane(lane) | Self::Draft { lane, .. } => *lane,
+            Self::Lane(lane) | Self::Draft { lane, .. } | Self::Rest { lane, .. } => *lane,
         };
         let Some(prefix) = request
             .selection_output
@@ -127,18 +135,25 @@ impl Plan<'_> {
         if !has_required_case(list(&resolved)?) {
             bail!("test lane `{lane}` has no compiled test cases starting with `{prefix}`");
         }
-        if let Self::Draft { scope, .. } = &self
-            && scope.needs_inventory(request.narrow.as_deref())
-            && !has_required_case(list(&resolved.filtered(scope.filterset())?)?)
-        {
-            return Ok(Self::NotRequired(lane));
-        }
-        Ok(self)
+        let draft_runs_nothing = match &self {
+            Self::Draft { scope, .. } | Self::Rest { scope, .. } => {
+                scope.needs_inventory(request.narrow.as_deref())
+                    && !has_required_case(list(&resolved.filtered(scope.filterset())?)?)
+            }
+            Self::Lane(_) | Self::NotRequired(_) => false,
+        };
+        // A draft that holds none of the required cases runs nothing, so its
+        // rest is the whole lane.
+        Ok(match self {
+            Self::Draft { .. } if draft_runs_nothing => Self::NotRequired(lane),
+            Self::Rest { .. } if draft_runs_nothing => Self::Lane(lane),
+            plan => plan,
+        })
     }
 
     fn write_selection(&self, path: &Path) -> Result<()> {
         let lanes: Vec<&str> = match self {
-            Self::Lane(lane) | Self::Draft { lane, .. } => vec![lane],
+            Self::Lane(lane) | Self::Draft { lane, .. } | Self::Rest { lane, .. } => vec![lane],
             Self::NotRequired(_) => Vec::new(),
         };
         if let Some(parent) = path.parent() {
@@ -157,20 +172,21 @@ fn plan<'a>(
 ) -> Result<Plan<'a>> {
     validate_config(test)?;
     let lane = select_lane(test, request)?;
-    let scope = if request.draft {
-        let scope = DraftScope::load(test, root, pr_tests)?;
-        let config = &test.lanes[lane];
-        if !scope.holds(&config.cargo)
-            || (matches!(&config.runner, TestRunner::Nextest(_))
-                && !scope.holds_narrow(request.narrow.as_deref()))
-        {
-            return Ok(Plan::NotRequired(lane));
-        }
-        Some(scope)
-    } else {
-        None
-    };
-    Ok(scope.map_or(Plan::Lane(lane), |scope| Plan::Draft { lane, scope }))
+    if !request.draft && !request.rest_of_draft {
+        return Ok(Plan::Lane(lane));
+    }
+    let scope = DraftScope::load(test, root, pr_tests)?;
+    let config = &test.lanes[lane];
+    let nextest = matches!(&config.runner, TestRunner::Nextest(_));
+    let held =
+        scope.holds(&config.cargo) && (!nextest || scope.holds_narrow(request.narrow.as_deref()));
+    // A draft runs a Cargo suite it holds whole, so nothing of it is left.
+    Ok(match (request.draft, held, nextest) {
+        (true, true, _) => Plan::Draft { lane, scope },
+        (true, false, _) | (false, true, false) => Plan::NotRequired(lane),
+        (false, false, _) => Plan::Lane(lane),
+        (false, true, true) => Plan::Rest { lane, scope },
+    })
 }
 
 /// Returns the receipt path and configured test lane for a test invocation.
@@ -248,6 +264,15 @@ fn draft_command(lane: ResolvedLane, scope: &DraftScope, request: &TestRequest) 
     let mut extra = request.passthrough.clone();
     extra.push("--no-tests=pass".to_owned());
     lane.filtered(scope.filterset())?
+        .command(NextestAction::Run, &extra)
+}
+
+/// A lane's command less what its draft ran: the lane's own selection with
+/// the draft scope taken out, and an empty selection allowed.
+fn rest_command(lane: ResolvedLane, scope: &DraftScope, request: &TestRequest) -> Result<Command> {
+    let mut extra = request.passthrough.clone();
+    extra.push("--no-tests=pass".to_owned());
+    lane.filtered(format!("not ({})", scope.filterset()))?
         .command(NextestAction::Run, &extra)
 }
 
@@ -453,6 +478,101 @@ mod selection_tests {
         }
     }
 
+    /// What a passed draft leaves of a lane is the lane's own command with
+    /// the draft scope taken out: a lane the draft held loses that share, one
+    /// it held none of runs whole, and a Cargo suite it held ran whole already.
+    #[test]
+    fn the_rest_of_a_draft_is_the_lane_without_the_draft_scope() {
+        let mut test = drafted();
+        let root = crate::test::repository_tests::root();
+        let main = request(&["--lane=tooling", "--profile", "ci"]);
+        let rest = request(&["--lane=tooling", "--rest-of-draft", "--profile", "ci"]);
+
+        let Plan::Rest { lane, scope } = plan(&test, &root, &rest, None).unwrap() else {
+            panic!("a lane the draft held keeps what the draft left");
+        };
+        let rest_args = args_of(
+            &rest_command(requested_lane(&test, lane, &rest).unwrap(), &scope, &rest).unwrap(),
+        );
+        let main_args = args_of(
+            &requested_lane(&test, "tooling", &main)
+                .unwrap()
+                .command(NextestAction::Run, &main.passthrough)
+                .unwrap(),
+        );
+        let filter = rest_args.iter().position(|arg| arg == "-E").unwrap();
+        assert_eq!(rest_args[filter + 1], "not (package(xtask))");
+        assert_eq!(
+            rest_args.last().map(String::as_str),
+            Some("--no-tests=pass")
+        );
+        let mut same = rest_args.clone();
+        same.pop();
+        same.drain(filter..=filter + 1);
+        assert_eq!(same, main_args);
+
+        assert!(matches!(
+            plan(
+                &test,
+                &root,
+                &request(&["--lane=harness", "--rest-of-draft"]),
+                None
+            )
+            .unwrap(),
+            Plan::Lane("harness")
+        ));
+        test.lanes.get_mut("tooling").unwrap().runner =
+            TestRunner::Cargo(TestCargoRunner::default());
+        assert!(matches!(
+            plan(&test, &root, &rest, None).unwrap(),
+            Plan::NotRequired("tooling")
+        ));
+        assert!(TestRequest::parse(&["--draft".to_owned(), "--rest-of-draft".to_owned()]).is_err());
+    }
+
+    /// A draft whose share of a lane held none of its required cases ran
+    /// nothing there, so the rest of it is the whole lane.
+    #[test]
+    fn the_rest_of_a_draft_that_ran_none_of_a_required_namespace_is_the_whole_lane() {
+        let mut test = drafted();
+        let root = crate::test::repository_tests::root();
+        let workspace = &mut test.lanes.get_mut("harness").unwrap().cargo;
+        workspace.workspace = true;
+        workspace.packages.clear();
+        test.required_case_prefixes
+            .insert("selection.json".to_owned(), "backend::apple::".to_owned());
+        let rest = request(&[
+            "--lane=harness",
+            "--narrow=package(=kithara-net)",
+            "--selection-output=selection.json",
+            "--rest-of-draft",
+        ]);
+        for (block, whole) in [
+            ("filter = 'test(=non_apple)'", true),
+            ("filter = 'test(=backend::apple::case)'", false),
+        ] {
+            let admitted = plan(&test, &root, &rest, Some(block))
+                .unwrap()
+                .admit(&test, &rest, |lane| {
+                    let TestRunner::Nextest(config) = &lane.runner else {
+                        panic!("case prefixes are selected through nextest");
+                    };
+                    let case = if config.filter.as_deref().unwrap().contains("non_apple") {
+                        "non_apple"
+                    } else {
+                        "backend::apple::case"
+                    };
+                    Ok(BTreeSet::from([(
+                        "kithara-net".to_owned(),
+                        case.to_owned(),
+                    )]))
+                })
+                .unwrap();
+            assert_eq!(matches!(admitted, Plan::Lane("harness")), whole, "{block}");
+            assert_eq!(matches!(admitted, Plan::Rest { .. }), !whole, "{block}");
+        }
+    }
+
     #[test]
     fn a_draft_cargo_lane_keeps_its_native_command() {
         let root = crate::test::repository_tests::root();
@@ -552,7 +672,7 @@ mod selection_tests {
                     &scope,
                     &draft,
                 ),
-                Plan::NotRequired(_) => panic!("the scope admits this suite"),
+                Plan::Rest { .. } | Plan::NotRequired(_) => panic!("the scope admits this suite"),
             }
             .expect("an admitted cargo suite runs its configured command");
             assert_eq!(command.get_program(), "cargo");
